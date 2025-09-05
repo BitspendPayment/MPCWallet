@@ -374,3 +374,297 @@ func PKPFromCommitment(ids []Identifier, commit VerifiableSecretSharingCommitmen
 	}
 	return PublicKeyPackage{vmap, vk}, nil
 }
+
+// -----------------------------------------------------------------------------
+// Refresh DKG - Part 1
+// -----------------------------------------------------------------------------
+
+// DKGRefreshPart1 generates a zero-secret "refreshing" polynomial, removes the
+// identity commitment from the public package, and produces the Round 1 outputs.
+func DKGRefreshPart1(
+	identifier Identifier,
+	maxSigners, minSigners uint16,
+	r io.Reader,
+) (Round1SecretPackage, Round1Package, error) {
+
+	if err := validateNumOfSigners(minSigners, maxSigners); err != nil {
+		return Round1SecretPackage{}, Round1Package{}, err
+	}
+
+	// refreshing_key with scalar = 0
+	refreshingKey := modNZero()
+	// t-1 random coeffs (a_{i1},...,a_{i,t-1})
+	coeffOnly, err := generateCoefficients(int(minSigners) - 1)
+	if err != nil {
+		return Round1SecretPackage{}, Round1Package{}, err
+	}
+
+	// Build polynomial with c0 = 0 and commitments φ_k = g^{a_{ik}}
+	coeffs, commitment, err := generateSecretPolynomial(&refreshingKey, maxSigners, minSigners, coeffOnly)
+	if err != nil {
+		return Round1SecretPackage{}, Round1Package{}, err
+	}
+
+	// Remove identity commitment (g^0) from the package commitment vector
+	if len(commitment.Coeffs) == 0 {
+		return Round1SecretPackage{}, Round1Package{}, ErrInvalidCommitVector
+	}
+	trimmed := make([]CoefficientCommitment, len(commitment.Coeffs)-1)
+	copy(trimmed, commitment.Coeffs[1:])
+	trimCommit := newVSSCommitment(trimmed)
+
+	// Proof of knowledge over the trimmed commitment (we don't verify it later)
+	sig, err := computeProofOfKnowledge(identifier, coeffs, &trimCommit, r)
+	if err != nil {
+		return Round1SecretPackage{}, Round1Package{}, err
+	}
+
+	sec := Round1SecretPackage{
+		Identifier:   identifier,
+		Coefficients: coeffs,     // includes c0 = 0
+		Commitment:   trimCommit, // identity removed publicly
+		MinSigners:   minSigners,
+		MaxSigners:   maxSigners,
+	}
+	pub := Round1Package{
+		Commitment:       trimCommit,
+		ProofOfKnowledge: sig,
+	}
+	return sec, pub, nil
+}
+
+// -----------------------------------------------------------------------------
+// Refresh DKG - Part 2
+// -----------------------------------------------------------------------------
+
+// DKGRefreshPart2 adds the identity commitment back to the local secret package,
+// prepares Round 2 packages (shares) for peers, and returns the Round 2 secret.
+func DKGRefreshPart2(
+	secretPkg Round1SecretPackage,
+	round1Pkgs map[Identifier]Round1Package,
+) (Round2SecretPackage, map[Identifier]Round2Package, error) {
+
+	if len(round1Pkgs) != int(secretPkg.MaxSigners-1) {
+		return Round2SecretPackage{}, nil, ErrIncorrectNumberOfPackages
+	}
+
+	// Rebuild my commitment with the identity element re-inserted at the front.
+	// identity = g^0 (point at infinity)
+	elemIdentity := secp.JacobianPoint{}
+
+	identity := newCoefficientCommitment(elemIdentity)
+	myCoeffs := make([]CoefficientCommitment, 0, 1+len(secretPkg.Commitment.Coeffs))
+	myCoeffs = append(myCoeffs, identity)
+	myCoeffs = append(myCoeffs, secretPkg.Commitment.Coeffs...)
+	secretPkg.Commitment = newVSSCommitment(myCoeffs)
+
+	out := make(map[Identifier]Round2Package, len(round1Pkgs))
+
+	for senderID, r1 := range round1Pkgs {
+		// For each peer's Round1 package, also add identity back
+		peerCoeffs := make([]CoefficientCommitment, 0, 1+len(r1.Commitment.Coeffs))
+		peerCoeffs = append(peerCoeffs, identity)
+		peerCoeffs = append(peerCoeffs, r1.Commitment.Coeffs...)
+
+		if len(peerCoeffs) != int(secretPkg.MinSigners) {
+			return Round2SecretPackage{}, nil, ErrIncorrectNumberOfCommitments
+		}
+
+		// Compute my share intended for `senderID`: f_i(senderID)
+		share := secretShareFromCoefficients(secretPkg.Coefficients, senderID)
+
+		out[senderID] = Round2Package{
+			SecretShare: share,
+		}
+	}
+
+	// Keep f_i(i)
+	fii := evaluatePolynomial(secretPkg.Identifier, secretPkg.Coefficients)
+
+	return Round2SecretPackage{
+		Identifier:  secretPkg.Identifier,
+		Commitment:  secretPkg.Commitment,
+		SecretShare: fii,
+		MinSigners:  secretPkg.MinSigners,
+		MaxSigners:  secretPkg.MaxSigners,
+	}, out, nil
+}
+
+// DKGRefreshShares verifies incoming Round2 shares against Round1 commitments
+// (with identity re-added), adds them all up with f_i(i), then *adds* the old
+// long-lived share, producing refreshed KeyPackage and PublicKeyPackage.
+//
+// The joint public key stays the same; verifying shares are updated by adding
+// the “zero-shares” public contributions to the old ones.
+func DKGRefreshPart3(
+	r2Secret *Round2SecretPackage,
+	round1Pkgs map[Identifier]Round1Package,
+	round2Pkgs map[Identifier]Round2Package,
+	oldPKP PublicKeyPackage,
+	oldKP KeyPackage,
+) (KeyPackage, PublicKeyPackage, error) {
+
+	// Rebuild Round1 packages with identity commitment added back in.
+	newR1 := make(map[Identifier]Round1Package, len(round1Pkgs))
+
+	elemIdentity := secp.JacobianPoint{}
+	identity := newCoefficientCommitment(elemIdentity)
+
+	for senderID, r1 := range round1Pkgs {
+		coeffs := make([]CoefficientCommitment, 0, 1+len(r1.Commitment.Coeffs))
+		coeffs = append(coeffs, identity)
+		coeffs = append(coeffs, r1.Commitment.Coeffs...)
+
+		newR1[senderID] = Round1Package{
+			Commitment:       newVSSCommitment(coeffs),
+			ProofOfKnowledge: r1.ProofOfKnowledge,
+		}
+	}
+
+	if len(newR1) != int(r2Secret.MaxSigners-1) {
+		return KeyPackage{}, PublicKeyPackage{}, ErrIncorrectNumberOfPackages
+	}
+	if len(newR1) != len(round2Pkgs) {
+		return KeyPackage{}, PublicKeyPackage{}, ErrIncorrectNumberOfPackages
+	}
+	for id := range newR1 {
+		if _, ok := round2Pkgs[id]; !ok {
+			return KeyPackage{}, PublicKeyPackage{}, ErrIncorrectPackage
+		}
+	}
+
+	// s_i = sum_{ℓ} f_ℓ(i) + f_i(i) + old_s_i
+	si := modNZero()
+
+	for senderID, r2 := range round2Pkgs {
+		// Verify g^{f_ℓ(i)} ?= Σ φ_{ℓk} i^k using the rebuilt Round1 commitment.
+		r1 := newR1[senderID]
+		temp := ThresholdShare{
+			Identifier: r2Secret.Identifier,
+			SecretSh:   r2.SecretShare,
+			Commitment: r1.Commitment,
+		}
+		if _, _, err := temp.Verify(); err != nil {
+			return KeyPackage{}, PublicKeyPackage{}, err
+		}
+		si = modNAdd(&si, &r2.SecretShare.s)
+	}
+
+	// Add my f_i(i)
+	si = modNAdd(&si, &r2Secret.SecretShare)
+
+	// Add previous long-lived share
+	oldShare := oldKP.SecretShare.ToScalar()
+	si = modNAdd(&si, &oldShare)
+
+	newSecretShare := newSecretShare(si)
+	newVerifying := verifyingShareFromSigning(newSecretShare)
+
+	// Build zero-shares PublicKeyPackage from rebuilt commitments (peers + mine)
+	commitMap := make(map[Identifier]*VerifiableSecretSharingCommitment, len(newR1)+1)
+	for id, p := range newR1 {
+		c := p.Commitment
+		commitMap[id] = &c
+	}
+	commitMap[r2Secret.Identifier] = &r2Secret.Commitment
+
+	zeroPKP, err := PKPFromDKGCommitments(commitMap)
+	if err != nil {
+		return KeyPackage{}, PublicKeyPackage{}, err
+	}
+
+	// New verifying shares = zeroPKP share + oldPKP share (group key unchanged)
+	newVS := make(map[Identifier]VerifyingShare, len(zeroPKP.VerifyingShares))
+	for id, vsNew := range zeroPKP.VerifyingShares {
+		vsOld, ok := oldPKP.VerifyingShares[id]
+		if !ok {
+			return KeyPackage{}, PublicKeyPackage{}, ErrUnknownIdentifier
+		}
+		sum := elemAdd(vsNew.E, vsOld.E)
+		newVS[id] = newVerifyingShare(sum)
+	}
+
+	pub := PublicKeyPackage{
+		VerifyingShares: newVS,
+		VerifyingKey:    oldPKP.VerifyingKey, // unchanged
+	}
+
+	kp := KeyPackage{
+		r2Secret.Identifier,
+		newSecretShare,
+		newVerifying,
+		pub.VerifyingKey,
+		r2Secret.MinSigners,
+	}
+
+	return kp, pub, nil
+}
+
+func generateCoefficients(size int) ([]secp.ModNScalar, error) {
+	out := make([]secp.ModNScalar, size)
+	for i := 0; i < size; i++ {
+		s, err := modNRandom()
+		if err != nil {
+			return nil, err
+		}
+		out[i] = s
+	}
+	return out, nil
+}
+
+func validateNumOfSigners(minSigners, maxSigners uint16) error {
+	if minSigners < 2 {
+		return ErrInvalidMinSigners
+	}
+	if maxSigners < 2 {
+		return ErrInvalidMaxSigners
+	}
+	if minSigners > maxSigners {
+		return ErrInvalidMinSigners
+	}
+	return nil
+}
+
+func NewSecretKey(r io.Reader) (*SecretKey, error) {
+	var s secp.ModNScalar
+	for {
+		var b [32]byte
+		if _, err := r.Read(b[:]); err != nil {
+			return nil, err
+		}
+		_ = s.SetByteSlice(b[:])
+		if !s.IsZero() {
+			break
+		}
+	}
+	return &SecretKey{Scalar: s}, nil
+}
+
+// Generate polynomial (+commitments) with secret as c0
+func generateSecretPolynomial(
+	secret *secp.ModNScalar,
+	maxSigners, minSigners uint16,
+	coeffOnly []secp.ModNScalar,
+) ([]secp.ModNScalar, VerifiableSecretSharingCommitment, error) {
+
+	if err := validateNumOfSigners(minSigners, maxSigners); err != nil {
+		return nil, VerifiableSecretSharingCommitment{}, err
+	}
+	if len(coeffOnly) != int(minSigners)-1 {
+		return nil, VerifiableSecretSharingCommitment{}, ErrInvalidCoefficients
+	}
+
+	coeffs := make([]secp.ModNScalar, 0, len(coeffOnly)+1)
+	coeffs = append(coeffs, *secret) // c0 = secret
+	coeffs = append(coeffs, coeffOnly...)
+
+	commit := make([]CoefficientCommitment, len(coeffs))
+	for i := range coeffs {
+		commit[i] = newCoefficientCommitment(elemBaseMul(&coeffs[i]))
+	}
+	return coeffs, newVSSCommitment(commit), nil
+}
+
+type SecretKey struct {
+	Scalar secp.ModNScalar
+}

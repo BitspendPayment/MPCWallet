@@ -18,4 +18,5 @@ var (
 	ErrIncorrectNumberOfCommitments = errors.New("incorrect number of commitments")
 	ErrIncorrectPackage             = errors.New("incorrect package mapping")
 	ErrDKGNotSupported              = errors.New("DKG challenge not supported")
+	ErrUnknownIdentifier            = errors.New("unknown identifier")
 )

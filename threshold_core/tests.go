@@ -77,3 +77,15 @@ func DealerDKG(n, t uint16) ([]KeyPackage, PublicKeyPackage, error) {
 	})
 	return keys, pkp, nil
 }
+
+func defaultIdentifiers(maxSigners uint16) ([]Identifier, error) {
+	out := make([]Identifier, 0, maxSigners)
+	for i := uint16(1); i <= maxSigners; i++ {
+		id, err := FromUint16(i)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
