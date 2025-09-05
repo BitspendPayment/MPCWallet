@@ -2,6 +2,7 @@ package thresholdcore
 
 import (
 	"crypto/rand"
+	"io"
 	"math/big"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -153,4 +154,30 @@ func evaluateVSS(id Identifier, commit *VerifiableSecretSharingCommitment) secp.
 		itok = modNMul(&itok, &x)
 	}
 	return sum
+}
+
+// Map hash -> ModNScalar allowing zero (unlike modNFromBytesBE which rejects zero).
+func modNFromBytesAllowZero(b []byte) secp.ModNScalar {
+	var s secp.ModNScalar
+	_ = s.SetByteSlice(b) // reduces mod n
+	return s
+}
+
+// generator^k with fresh random non-zero k.
+func generateNonce(r io.Reader) (secp.ModNScalar, secp.JacobianPoint, error) {
+	// k
+	var k secp.ModNScalar
+	for {
+		var b [32]byte
+		if _, err := r.Read(b[:]); err != nil {
+			return modNZero(), secp.JacobianPoint{}, err
+		}
+		_ = k.SetByteSlice(b[:])
+		if !k.IsZero() {
+			break
+		}
+	}
+	// R = g^k
+	R := elemBaseMul(&k)
+	return k, R, nil
 }

@@ -24,7 +24,7 @@ type SecretShare struct {
 	s secp.ModNScalar
 }
 
-func newSigningShare(s secp.ModNScalar) SecretShare {
+func newSecretShare(s secp.ModNScalar) SecretShare {
 	return SecretShare{s: s}
 }
 func (ss SecretShare) ToScalar() secp.ModNScalar { return ss.s }
@@ -39,8 +39,8 @@ func (vs VerifyingShare) Serialize() ([]byte, error) {
 	return elemSerializeCompressed(vs.E)
 }
 
-func verifyingShareFromSigning(ss ThresholdShare) VerifyingShare {
-	e := elemBaseMul(&ss.SecretSh.s)
+func verifyingShareFromSigning(ss SecretShare) VerifyingShare {
+	e := elemBaseMul(&ss.s)
 	return newVerifyingShare(e)
 }
 

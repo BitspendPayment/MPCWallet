@@ -26,6 +26,11 @@ type VerifiableSecretSharingCommitment struct {
 func newVSSCommitment(coeffs []CoefficientCommitment) VerifiableSecretSharingCommitment {
 	return VerifiableSecretSharingCommitment{Coeffs: coeffs}
 }
+
+func VerifyingShareFromCommitment(id Identifier, commit *VerifiableSecretSharingCommitment) VerifyingShare {
+	return newVerifyingShare(evaluateVSS(id, commit))
+}
+
 func (v VerifiableSecretSharingCommitment) Serialize() ([][]byte, error) {
 	out := make([][]byte, len(v.Coeffs))
 	for i := range v.Coeffs {
