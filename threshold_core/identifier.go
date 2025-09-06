@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
-	"math/bits"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
@@ -117,24 +116,3 @@ func (id Identifier) Compare(other Identifier) int {
 
 // Less is handy for sort.Interface.
 func (id Identifier) Less(other Identifier) bool { return id.Compare(other) < 0 }
-
-// FromUint16 creates an Identifier from a non-zero u16 using left-to-right
-// double-and-add in the scalar field (mirrors the Rust bit-walk).
-func FromUint16(n uint16) (Identifier, error) {
-	if n == 0 {
-		return Identifier{}, ErrInvalidZeroScalar
-	}
-	one := modNOne()
-	sum := modNOne()
-
-	totalBits := uint(16)
-	lz := uint(bits.LeadingZeros16(n))
-	for i := int(totalBits - lz - 1); i >= 0; i-- {
-		tmp := modNDouble(&sum) // sum = sum + sum
-		sum = tmp
-		if (n & (1 << uint(i))) != 0 {
-			sum = modNAdd(&sum, &one) // sum += 1
-		}
-	}
-	return NewIdentifier(sum)
-}

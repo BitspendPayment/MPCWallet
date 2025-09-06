@@ -141,6 +141,18 @@ func evaluatePolynomial(id Identifier, coeffs []secp.ModNScalar) secp.ModNScalar
 	return val
 }
 
+func generateCoefficients(size int) ([]secp.ModNScalar, error) {
+	out := make([]secp.ModNScalar, size)
+	for i := 0; i < size; i++ {
+		s, err := modNRandom()
+		if err != nil {
+			return nil, err
+		}
+		out[i] = s
+	}
+	return out, nil
+}
+
 // RHS of VSS verification: sum_k φ_k * (i^k)
 func evaluateVSS(id Identifier, commit *VerifiableSecretSharingCommitment) secp.JacobianPoint {
 	x := id.ToScalar()

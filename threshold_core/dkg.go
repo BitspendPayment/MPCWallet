@@ -47,6 +47,7 @@ func DKGPart1(
 	identifier Identifier,
 	maxSigners, minSigners uint16,
 	secretKey SecretKey,
+	coffiecients []secp.ModNScalar,
 	r io.Reader,
 ) (Round1SecretPackage, Round1Package, error) {
 
@@ -598,18 +599,6 @@ func DKGRefreshPart3(
 	}
 
 	return kp, pub, nil
-}
-
-func generateCoefficients(size int) ([]secp.ModNScalar, error) {
-	out := make([]secp.ModNScalar, size)
-	for i := 0; i < size; i++ {
-		s, err := modNRandom()
-		if err != nil {
-			return nil, err
-		}
-		out[i] = s
-	}
-	return out, nil
 }
 
 func validateNumOfSigners(minSigners, maxSigners uint16) error {
