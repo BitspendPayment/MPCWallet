@@ -31,7 +31,7 @@ type Challenge struct {
 // Compute a SigningShare from polynomial coefficients for a specific peer ID.
 func secretShareFromCoefficients(coeffs []secp.ModNScalar, peer Identifier) SecretShare {
 	s := evaluatePolynomial(peer, coeffs)
-	return newSecretShare(s)
+	return SecretShare(s)
 }
 
 // Round1SecretPackage must be kept locally by the participant after part1.
@@ -55,20 +55,20 @@ func DKGPart1(
 		return Round1SecretPackage{}, Round1Package{}, err
 	}
 
-	// t-1 random coeffs
-	coeffOnly, err := generateCoefficients(int(minSigners) - 1)
+	// coeffs = [a_{i0}=key.Scalar, coeffOnly...], plus commitments φ_{ij} = g^{a_{ij}}
+	coeffs, commitment, err := generateSecretPolynomial(&secretKey.Scalar, maxSigners, minSigners, coffiecients)
 	if err != nil {
 		return Round1SecretPackage{}, Round1Package{}, err
 	}
 
-	// coeffs = [a_{i0}=key.Scalar, coeffOnly...], plus commitments φ_{ij} = g^{a_{ij}}
-	coeffs, commitment, err := generateSecretPolynomial(&secretKey.Scalar, maxSigners, minSigners, coeffOnly)
+	verifyingCommit := VerifiableSecretSharingCommitment{commitment}
+	verifyingKey, err := verifyingCommit.ToVerifyingKey()
 	if err != nil {
 		return Round1SecretPackage{}, Round1Package{}, err
 	}
 
 	// σ_i = PoK for a_{i0}
-	sig, err := computeProofOfKnowledge(identifier, coeffs, &commitment, r)
+	sig, err := computeProofOfKnowledge(identifier, coeffs, verifyingKey, r)
 	if err != nil {
 		return Round1SecretPackage{}, Round1Package{}, err
 	}
@@ -76,99 +76,15 @@ func DKGPart1(
 	secretPkg := Round1SecretPackage{
 		Identifier:   identifier,
 		Coefficients: coeffs,
-		Commitment:   commitment,
+		Commitment:   VerifiableSecretSharingCommitment{commitment},
 		MinSigners:   minSigners,
 		MaxSigners:   maxSigners,
 	}
 	pubPkg := Round1Package{
-		Commitment:       commitment,
+		Commitment:       VerifiableSecretSharingCommitment{commitment},
 		ProofOfKnowledge: sig,
 	}
 	return secretPkg, pubPkg, nil
-}
-
-// σ = (R, z) with R = g^k, z = k + a_{i0} * c, c = challenge(i, φ_{i0}, R)
-func computeProofOfKnowledge(
-	identifier Identifier,
-	coefficients []secp.ModNScalar,
-	commitment *VerifiableSecretSharingCommitment,
-	r io.Reader,
-) (Signature, error) {
-
-	// k, R = g^k
-	k, R, err := generateNonce(r)
-	if err != nil {
-		return Signature{}, err
-	}
-	// φ_{i0} is the first coefficient commitment → verifying key
-	vk, err := VerifyingKeyFromCommitment(*commitment)
-	if err != nil {
-		return Signature{}, err
-	}
-	// c = H(i, φ_{i0}, R)
-	chal, err := dkgChallenge(identifier, vk, R)
-	if err != nil {
-		return Signature{}, err
-	}
-	// a_{i0}
-	if len(coefficients) == 0 {
-		return Signature{}, ErrInvalidCoefficients
-	}
-	a0 := coefficients[0]
-
-	// z = k + a0 * c
-	zc := modNMul(&a0, &chal.C)
-	z := modNAdd(&k, &zc)
-
-	return Signature{R: R, Z: z}, nil
-}
-
-// Verify σℓ = (Rℓ, μℓ): check Rℓ ?= g^{μℓ} · φ_{ℓ0}^{-cℓ}
-func verifyProofOfKnowledge(
-	identifier Identifier, // ℓ
-	commitment *VerifiableSecretSharingCommitment,
-	sig *Signature,
-) error {
-
-	// φ_{ℓ0}
-	vk, err := VerifyingKeyFromCommitment(*commitment)
-	if err != nil {
-		return err
-	}
-
-	// cℓ = H(ℓ, φ_{ℓ0}, Rℓ)
-	chal, err := dkgChallenge(identifier, vk, sig.R)
-	if err != nil {
-		return err
-	}
-
-	// right = g^{μℓ} + (φ_{ℓ0} * (-cℓ))
-	left := sig.R
-	mu := sig.Z
-
-	gmu := elemBaseMul(&mu)
-	cneg := chal.C
-	cneg.Negate()
-
-	phiNeg := elemMul(vk.E, &cneg)
-	right := elemAdd(gmu, phiNeg)
-
-	lb, _ := elemSerializeCompressed(left)
-	rb, _ := elemSerializeCompressed(right)
-
-	eq := len(lb) == len(rb)
-	if eq {
-		for i := range lb {
-			if lb[i] != rb[i] {
-				eq = false
-				break
-			}
-		}
-	}
-	if !eq {
-		return ErrInvalidSecretShare // reusing; or define ErrInvalidProofOfKnowledge
-	}
-	return nil
 }
 
 // challenge(i, VK, R) = H(i || enc(VK) || enc(R)) reduced mod n.
@@ -235,7 +151,13 @@ func DKGPart2(
 	out := make(map[Identifier]Round2Package, len(round1Pkgs))
 	for senderID, pkg := range round1Pkgs {
 		// Verify PoK from each peer
-		if err := verifyProofOfKnowledge(senderID, &pkg.Commitment, &pkg.ProofOfKnowledge); err != nil {
+
+		verifyingKey, err := pkg.Commitment.ToVerifyingKey()
+		if err != nil {
+			return Round2SecretPackage{}, nil, err
+		}
+
+		if err := verifyProofOfKnowledge(senderID, verifyingKey, &pkg.ProofOfKnowledge); err != nil {
 			return Round2SecretPackage{}, nil, err
 		}
 
@@ -297,15 +219,15 @@ func DKGPart3(
 			// identify culprit by returning an error tied to senderID if you like
 			return KeyPackage{}, PublicKeyPackage{}, err
 		}
-		si = modNAdd(&si, &pkg2.SecretShare.s)
+		si.Add((*secp.ModNScalar)(&pkg2.SecretShare))
 	}
 
 	// Add my own f_i(i)
-	si = modNAdd(&si, &r2Secret.SecretShare)
-	secretShare := newSecretShare(si)
+	si.Add(&r2Secret.SecretShare)
+	secretShare := SecretShare(si)
 
 	// Y_i = g^{s_i}
-	verifyingShare := verifyingShareFromSigning(secretShare)
+	verifyingShare := elemBaseMul((*secp.ModNScalar)(&secretShare))
 
 	// Build public key package from all commitments (peers + mine)
 	commitMap := make(map[Identifier]*VerifiableSecretSharingCommitment, len(round1Pkgs)+1)
@@ -328,7 +250,6 @@ func DKGPart3(
 		r2Secret.MinSigners,
 	}
 
-	// If you need a post-DKG hook, call it here. Otherwise, return as-is.
 	return keyPackage, publicKeyPackage, nil
 }
 
@@ -367,9 +288,9 @@ type PublicKeyPackage struct {
 func PKPFromCommitment(ids []Identifier, commit VerifiableSecretSharingCommitment) (PublicKeyPackage, error) {
 	vmap := make(map[Identifier]VerifyingShare, len(ids))
 	for _, id := range ids {
-		vmap[id] = VerifyingShareFromCommitment(id, &commit)
+		vmap[id] = commit.GetVerifyingShare(id)
 	}
-	vk, err := VerifyingKeyFromCommitment(commit)
+	vk, err := commit.ToVerifyingKey()
 	if err != nil {
 		return PublicKeyPackage{}, err
 	}
@@ -407,15 +328,20 @@ func DKGRefreshPart1(
 	}
 
 	// Remove identity commitment (g^0) from the package commitment vector
-	if len(commitment.Coeffs) == 0 {
+	if len(commitment) == 0 {
 		return Round1SecretPackage{}, Round1Package{}, ErrInvalidCommitVector
 	}
-	trimmed := make([]CoefficientCommitment, len(commitment.Coeffs)-1)
-	copy(trimmed, commitment.Coeffs[1:])
-	trimCommit := newVSSCommitment(trimmed)
+	trimmed := make([]CoefficientCommitment, len(commitment)-1)
+	copy(trimmed, commitment[1:])
+	trimCommit := VerifiableSecretSharingCommitment{trimmed}
+
+	verifyingKey, err := trimCommit.ToVerifyingKey()
+	if err != nil {
+		return Round1SecretPackage{}, Round1Package{}, err
+	}
 
 	// Proof of knowledge over the trimmed commitment (we don't verify it later)
-	sig, err := computeProofOfKnowledge(identifier, coeffs, &trimCommit, r)
+	sig, err := computeProofOfKnowledge(identifier, coeffs, verifyingKey, r)
 	if err != nil {
 		return Round1SecretPackage{}, Round1Package{}, err
 	}
@@ -453,11 +379,11 @@ func DKGRefreshPart2(
 	// identity = g^0 (point at infinity)
 	elemIdentity := secp.JacobianPoint{}
 
-	identity := newCoefficientCommitment(elemIdentity)
+	identity := CoefficientCommitment(elemIdentity)
 	myCoeffs := make([]CoefficientCommitment, 0, 1+len(secretPkg.Commitment.Coeffs))
 	myCoeffs = append(myCoeffs, identity)
 	myCoeffs = append(myCoeffs, secretPkg.Commitment.Coeffs...)
-	secretPkg.Commitment = newVSSCommitment(myCoeffs)
+	secretPkg.Commitment = VerifiableSecretSharingCommitment{myCoeffs}
 
 	out := make(map[Identifier]Round2Package, len(round1Pkgs))
 
@@ -509,7 +435,7 @@ func DKGRefreshPart3(
 	newR1 := make(map[Identifier]Round1Package, len(round1Pkgs))
 
 	elemIdentity := secp.JacobianPoint{}
-	identity := newCoefficientCommitment(elemIdentity)
+	identity := CoefficientCommitment(elemIdentity)
 
 	for senderID, r1 := range round1Pkgs {
 		coeffs := make([]CoefficientCommitment, 0, 1+len(r1.Commitment.Coeffs))
@@ -517,7 +443,7 @@ func DKGRefreshPart3(
 		coeffs = append(coeffs, r1.Commitment.Coeffs...)
 
 		newR1[senderID] = Round1Package{
-			Commitment:       newVSSCommitment(coeffs),
+			Commitment:       VerifiableSecretSharingCommitment{coeffs},
 			ProofOfKnowledge: r1.ProofOfKnowledge,
 		}
 	}
@@ -548,18 +474,18 @@ func DKGRefreshPart3(
 		if _, _, err := temp.Verify(); err != nil {
 			return KeyPackage{}, PublicKeyPackage{}, err
 		}
-		si = modNAdd(&si, &r2.SecretShare.s)
+		si.Add((*secp.ModNScalar)(&r2.SecretShare))
 	}
 
 	// Add my f_i(i)
-	si = modNAdd(&si, &r2Secret.SecretShare)
+	si.Add(&r2Secret.SecretShare)
 
 	// Add previous long-lived share
-	oldShare := oldKP.SecretShare.ToScalar()
-	si = modNAdd(&si, &oldShare)
+	oldShare := oldKP.SecretShare
+	si.Add((*secp.ModNScalar)(&oldShare))
 
-	newSecretShare := newSecretShare(si)
-	newVerifying := verifyingShareFromSigning(newSecretShare)
+	newSecretShare := SecretShare(si)
+	newVerifying := elemBaseMul((*secp.ModNScalar)(&newSecretShare))
 
 	// Build zero-shares PublicKeyPackage from rebuilt commitments (peers + mine)
 	commitMap := make(map[Identifier]*VerifiableSecretSharingCommitment, len(newR1)+1)
@@ -581,8 +507,8 @@ func DKGRefreshPart3(
 		if !ok {
 			return KeyPackage{}, PublicKeyPackage{}, ErrUnknownIdentifier
 		}
-		sum := elemAdd(vsNew.E, vsOld.E)
-		newVS[id] = newVerifyingShare(sum)
+		sum := elemAdd(vsNew, vsOld)
+		newVS[id] = VerifyingShare(sum)
 	}
 
 	pub := PublicKeyPackage{
@@ -627,31 +553,6 @@ func NewSecretKey(r io.Reader) (*SecretKey, error) {
 		}
 	}
 	return &SecretKey{Scalar: s}, nil
-}
-
-// Generate polynomial (+commitments) with secret as c0
-func generateSecretPolynomial(
-	secret *secp.ModNScalar,
-	maxSigners, minSigners uint16,
-	coeffOnly []secp.ModNScalar,
-) ([]secp.ModNScalar, VerifiableSecretSharingCommitment, error) {
-
-	if err := validateNumOfSigners(minSigners, maxSigners); err != nil {
-		return nil, VerifiableSecretSharingCommitment{}, err
-	}
-	if len(coeffOnly) != int(minSigners)-1 {
-		return nil, VerifiableSecretSharingCommitment{}, ErrInvalidCoefficients
-	}
-
-	coeffs := make([]secp.ModNScalar, 0, len(coeffOnly)+1)
-	coeffs = append(coeffs, *secret) // c0 = secret
-	coeffs = append(coeffs, coeffOnly...)
-
-	commit := make([]CoefficientCommitment, len(coeffs))
-	for i := range coeffs {
-		commit[i] = newCoefficientCommitment(elemBaseMul(&coeffs[i]))
-	}
-	return coeffs, newVSSCommitment(commit), nil
 }
 
 type SecretKey struct {

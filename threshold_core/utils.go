@@ -38,23 +38,6 @@ func modNOne() secp.ModNScalar {
 	return one
 }
 
-func modNMul(a, b *secp.ModNScalar) secp.ModNScalar {
-	var out secp.ModNScalar
-	out.Mul2(a, b)
-	return out
-}
-
-func modNAdd(a, b *secp.ModNScalar) secp.ModNScalar {
-	var out secp.ModNScalar
-	out.Add2(a, b) // out = a + b (mod N)
-	return out
-}
-
-func modNDouble(a *secp.ModNScalar) secp.ModNScalar {
-	// 2a = a + a
-	return modNAdd(a, a)
-}
-
 // Serialize compressed: Jacobian -> affine -> compressed pubkey
 func elemSerializeCompressed(e secp.JacobianPoint) ([]byte, error) {
 	var ax, ay secp.FieldVal
@@ -134,9 +117,9 @@ func evaluatePolynomial(id Identifier, coeffs []secp.ModNScalar) secp.ModNScalar
 	// value = ((...(c_{t-1} * x + c_{t-2}) * x + ... ) * x ) + c0
 	for i := len(coeffs) - 1; i >= 0; i-- {
 		if i != len(coeffs)-1 {
-			val = modNMul(&val, &x)
+			val.Mul(&x)
 		}
-		val = modNAdd(&val, &coeffs[i])
+		val.Add(&coeffs[i])
 	}
 	return val
 }
@@ -153,19 +136,33 @@ func generateCoefficients(size int) ([]secp.ModNScalar, error) {
 	return out, nil
 }
 
-// RHS of VSS verification: sum_k φ_k * (i^k)
-func evaluateVSS(id Identifier, commit *VerifiableSecretSharingCommitment) secp.JacobianPoint {
-	x := id.ToScalar()
-	// i^0 = 1
-	itok := modNOne()
-	sum := secp.JacobianPoint{}
-	for k := 0; k < len(commit.Coeffs); k++ {
-		term := elemMul(commit.Coeffs[k].E, &itok)
-		sum = elemAdd(sum, term)
-		// next power
-		itok = modNMul(&itok, &x)
+// ===========================================================
+// Lagrange reconstruction at x=0
+// ===========================================================
+
+// λ_i(0) = ∏_{j∈S, j≠i} (-j)/(i-j)  over the field (mod n)
+func lagrangeCoeffAtZero(i Identifier, set []Identifier) *secp.ModNScalar {
+	num := modNOne()
+	den := modNOne()
+
+	for _, j := range set {
+		ii := i.ToScalar()
+
+		if j.Equal(i) {
+			continue
+		}
+
+		jj := j.ToScalar()
+
+		negj := jj.Negate() // -j
+		num.Mul(negj)
+
+		//(i - j)
+		den.Mul(ii.Add(negj))
 	}
-	return sum
+
+	denInv := den.InverseNonConst()
+	return num.Mul(denInv)
 }
 
 // Map hash -> ModNScalar allowing zero (unlike modNFromBytesBE which rejects zero).
@@ -192,4 +189,94 @@ func generateNonce(r io.Reader) (secp.ModNScalar, secp.JacobianPoint, error) {
 	// R = g^k
 	R := elemBaseMul(&k)
 	return k, R, nil
+}
+
+// Generate polynomial (+commitments) with secret as c0
+func generateSecretPolynomial(
+	secret *secp.ModNScalar,
+	maxSigners, minSigners uint16,
+	coeffOnly []secp.ModNScalar,
+) ([]secp.ModNScalar, []secp.JacobianPoint, error) {
+
+	if err := validateNumOfSigners(minSigners, maxSigners); err != nil {
+		return nil, nil, err
+	}
+	if len(coeffOnly) != int(minSigners)-1 {
+		return nil, nil, ErrInvalidCoefficients
+	}
+
+	coeffs := make([]secp.ModNScalar, 0, len(coeffOnly)+1)
+	coeffs = append(coeffs, *secret) // c0 = secret
+	coeffs = append(coeffs, coeffOnly...)
+
+	commit := make([]CoefficientCommitment, len(coeffs))
+	for i := range coeffs {
+		commit[i] = elemBaseMul(&coeffs[i])
+	}
+	return coeffs, commit, nil
+}
+
+// φ_{i0} is the first coefficient commitment → verifying key
+// σ = (R, z) with R = g^k, z = k + a_{i0} * c, c = challenge(i, φ_{i0}, R)
+func computeProofOfKnowledge(
+	identifier Identifier,
+	coefficients []secp.ModNScalar,
+	verifyingKey VerifyingKey,
+	r io.Reader,
+) (Signature, error) {
+
+	// k, R = g^k
+	k, R, err := generateNonce(r)
+	if err != nil {
+		return Signature{}, err
+	}
+
+	// c = H(i, φ_{i0}, R)
+	chal, err := dkgChallenge(identifier, verifyingKey, R)
+	if err != nil {
+		return Signature{}, err
+	}
+	// a_{i0}
+	if len(coefficients) == 0 {
+		return Signature{}, ErrInvalidCoefficients
+	}
+	a0 := coefficients[0]
+
+	// z = k + a0 * c
+	zc := a0.Mul(&chal.C)
+	z := zc.Add(&k)
+
+	return Signature{R: R, Z: *z}, nil
+}
+
+// Verify σℓ = (Rℓ, μℓ): check Rℓ ?= g^{μℓ} · φ_{ℓ0}^{-cℓ}
+func verifyProofOfKnowledge(
+	identifier Identifier, // ℓ
+	verifyingKey VerifyingKey,
+	sig *Signature,
+) error {
+
+	// cℓ = H(ℓ, φ_{ℓ0}, Rℓ)
+	chal, err := dkgChallenge(identifier, verifyingKey, sig.R)
+	if err != nil {
+		return err
+	}
+
+	// right = g^{μℓ} + (φ_{ℓ0} * (-cℓ))
+	left := sig.R
+	mu := sig.Z
+
+	gmu := elemBaseMul(&mu)
+	cneg := chal.C
+	cneg.Negate()
+
+	phiNeg := elemMul(verifyingKey.E, &cneg)
+	right := elemAdd(gmu, phiNeg)
+
+	eq := left.EquivalentNonConst(&right)
+
+	if !eq {
+		return ErrInvalidSecretShare // reusing; or define ErrInvalidProofOfKnowledge
+	}
+	return nil
 }
