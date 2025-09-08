@@ -18,7 +18,7 @@ var (
 // Identifier is a FROST participant identifier over secp256k1 (mod N).
 // It must never be zero (since f(0) = secret).
 type Identifier struct {
-	s secp.ModNScalar // value type from decred; holds scalar mod curve order
+	S secp.ModNScalar // value type from decred; holds scalar mod curve order
 }
 
 // --- API ---
@@ -28,11 +28,11 @@ func NewIdentifier(s secp.ModNScalar) (Identifier, error) {
 	if s.IsZero() {
 		return Identifier{}, ErrInvalidZeroScalar
 	}
-	return Identifier{s: s}, nil
+	return Identifier{S: s}, nil
 }
 
 // ToScalar returns a copy of the inner scalar.
-func (id Identifier) ToScalar() secp.ModNScalar { return id.s }
+func (id Identifier) ToScalar() secp.ModNScalar { return id.S }
 
 // Derive hashes arbitrary bytes into a scalar identifier (rejects zero).
 // If you need a domain-separated variant, prefix or tag the input before calling.
@@ -48,12 +48,12 @@ func Derive(msg []byte) (Identifier, error) {
 
 // Serialize returns the 32-byte big-endian encoding of the scalar (Decred’s encoding).
 func (id Identifier) Serialize() []byte {
-	be := id.s.Bytes() // [32]byte big-endian
+	be := id.S.Bytes() // [32]byte big-endian
 	return be[:]
 }
 
-// Deserialize parses a 32-byte big-endian scalar and rejects zero.
-func Deserialize(b []byte) (Identifier, error) {
+// DeserializeIdentifier parses a 32-byte big-endian scalar and rejects zero.
+func DeserializeIdentifier(b []byte) (Identifier, error) {
 	s, err := modNFromBytesBE(b)
 	if err != nil {
 		return Identifier{}, err

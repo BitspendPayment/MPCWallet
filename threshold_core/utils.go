@@ -3,7 +3,6 @@ package thresholdcore
 import (
 	"crypto/rand"
 	"io"
-	"math/big"
 
 	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
@@ -18,13 +17,6 @@ func modNFromBytesBE(b []byte) (secp.ModNScalar, error) {
 	}
 	return s, nil
 }
-
-var secpN = new(big.Int).SetBytes([]byte{
-	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-	0xFF, 0xFF, 0xFF, 0xFF, 0xFE, 0xBA, 0xAE, 0xDC,
-	0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E,
-	0x8C, 0xD0, 0x36, 0x41, 0x41,
-})
 
 func modNZero() secp.ModNScalar {
 	var z secp.ModNScalar
@@ -134,6 +126,11 @@ func generateCoefficients(size int) ([]secp.ModNScalar, error) {
 		out[i] = s
 	}
 	return out, nil
+}
+
+func GenerateCoefficients(minSigners uint16) ([]secp.ModNScalar, error) {
+	size := int(minSigners) - 1
+	return generateCoefficients(size)
 }
 
 // ===========================================================

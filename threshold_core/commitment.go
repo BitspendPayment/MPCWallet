@@ -1,10 +1,61 @@
 package thresholdcore
 
-import secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+import (
+	"encoding/hex"
+	"encoding/json"
+
+	secp "github.com/decred/dcrd/dcrec/secp256k1/v4"
+)
 
 type CoefficientCommitment = secp.JacobianPoint
 type VerifiableSecretSharingCommitment struct {
-	Coeffs []CoefficientCommitment
+	Coeffs []CoefficientCommitment `json:"coeffs,omitempty"`
+}
+
+func (vss VerifiableSecretSharingCommitment) MarshalJSON() ([]byte, error) {
+	out := make([]string, len(vss.Coeffs))
+
+	for i, c := range vss.Coeffs {
+		var affinePoint secp.JacobianPoint
+		affinePoint.Set(&c)
+		affinePoint.ToAffine()
+
+		pubkey := secp.NewPublicKey(&affinePoint.X, &affinePoint.Y).SerializeCompressed()
+
+		out[i] = hex.EncodeToString(pubkey)
+	}
+	return json.Marshal(out)
+}
+
+func (vss *VerifiableSecretSharingCommitment) UnmarshalJSON(data []byte) error {
+	var hexStrings []string
+	if err := json.Unmarshal(data, &hexStrings); err != nil {
+		// Also accept {"coeffs":[...]}
+		var obj struct {
+			Coeffs []string `json:"coeffs"`
+		}
+		if err2 := json.Unmarshal(data, &obj); err2 != nil {
+			return err
+		}
+		hexStrings = obj.Coeffs
+	}
+
+	coeffs := make([]CoefficientCommitment, len(hexStrings))
+	for i, h := range hexStrings {
+		b, err := hex.DecodeString(h)
+		if err != nil {
+			return err
+		}
+		pk, err := secp.ParsePubKey(b) // accepts compressed or uncompressed
+		if err != nil {
+			return err
+		}
+		var j secp.JacobianPoint
+		pk.AsJacobian(&j)
+		coeffs[i] = CoefficientCommitment(j)
+	}
+	vss.Coeffs = coeffs
+	return nil
 }
 
 // RHS of VSS verification: sum_k φ_k * (i^k)

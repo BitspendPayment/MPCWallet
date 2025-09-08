@@ -2,6 +2,8 @@ package thresholdcore
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"sort"
 
@@ -13,14 +15,67 @@ import (
 
 // Round1Package is broadcast to all participants after part1.
 type Round1Package struct {
-	Commitment       VerifiableSecretSharingCommitment
-	ProofOfKnowledge Signature
+	Commitment       VerifiableSecretSharingCommitment `json:"commitment"`
+	ProofOfKnowledge Signature                         `json:"proofOfKnowledge"`
 }
 
 // Signature is σ = (R, z) where R = g^k and z = k + a_{i0} * c.
 type Signature struct {
 	R secp.JacobianPoint
 	Z secp.ModNScalar
+}
+
+func (s Signature) MarshalJSON() ([]byte, error) {
+	var affinePoint secp.JacobianPoint
+	affinePoint.Set(&s.R)
+	affinePoint.ToAffine()
+
+	rb := secp.NewPublicKey(&affinePoint.X, &affinePoint.Y).SerializeCompressed()
+
+	zb := s.Z.Bytes() // [32]byte big-endian
+	payload := struct {
+		R string `json:"R"` // hex(SEC1 compressed)
+		Z string `json:"Z"` // hex(32B scalar)
+	}{
+		R: hex.EncodeToString(rb),
+		Z: hex.EncodeToString(zb[:]),
+	}
+	return json.Marshal(payload)
+}
+
+func (s *Signature) UnmarshalJSON(data []byte) error {
+	var payload struct {
+		R string `json:"R"`
+		Z string `json:"Z"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+
+	// R
+	rb, err := hex.DecodeString(payload.R)
+	if err != nil {
+		return err
+	}
+	pk, err := secp.ParsePubKey(rb) // accepts compressed or uncompressed
+	if err != nil {
+		return err
+	}
+	var j secp.JacobianPoint
+	pk.AsJacobian(&j)
+
+	s.R = j
+
+	// Z
+	zb, err := hex.DecodeString(payload.Z)
+	if err != nil {
+		return err
+	}
+	var z secp.ModNScalar
+	_ = z.SetByteSlice(zb) // reduce mod n (accepts various lengths)
+	s.Z = z
+
+	return nil
 }
 
 // Challenge wrapper (scalar). Kept as a type for clarity.
@@ -120,7 +175,36 @@ func dkgChallenge(
 
 // Round2Package is sent privately to each recipient ℓ with the share f_i(ℓ).
 type Round2Package struct {
-	SecretShare SecretShare // f_i(ℓ)
+	SecretShare SecretShare `json:"-"` // f_i(ℓ)
+}
+
+// Marshal as: {"secretShare":"<hex 32B>"}
+func (p Round2Package) MarshalJSON() ([]byte, error) {
+	zb := (*secp.ModNScalar)(&p.SecretShare).Bytes() // [32]byte big-endian
+	wire := struct {
+		SecretShare string `json:"secretShare"`
+	}{
+		SecretShare: hex.EncodeToString(zb[:]),
+	}
+	return json.Marshal(wire)
+}
+
+// Unmarshal from: {"secretShare":"<hex 32B>"}
+func (p *Round2Package) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		SecretShare string `json:"secretShare"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	b, err := hex.DecodeString(wire.SecretShare)
+	if err != nil {
+		return err
+	}
+	var s secp.ModNScalar
+	_ = s.SetByteSlice(b) // reduces mod n; accepts various lengths
+	p.SecretShare = SecretShare(s)
+	return nil
 }
 
 // Round2SecretPackage is kept locally after part2 (holds f_i(i)).
