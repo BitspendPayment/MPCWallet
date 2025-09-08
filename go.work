@@ -2,5 +2,6 @@ go 1.24.6
 
 use (
 	./threshold_core
+	./threshold_nostrdkg
 	./threshold_signing
 )

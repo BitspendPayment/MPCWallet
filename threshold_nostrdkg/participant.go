@@ -5,8 +5,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log"
+	randn "math/rand"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	thres "github.com/ArkLabsHQ/thresholdmagic/thresholdcore"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
@@ -82,7 +86,14 @@ func NewDKGParticipant(secretKey []byte, relayUrl string, min, max uint16) (DKGP
 }
 
 func (p *DKGParticipant) AddDKGParticipant(nostrPubKey string) error {
-	if p.max == uint16(len(p.nostrPackage.participantPubkeys)) {
+	// Prevent duplicates
+	for _, pk := range p.nostrPackage.participantPubkeys {
+		if pk == nostrPubKey {
+			return nil // already added
+		}
+	}
+
+	if uint16(len(p.nostrPackage.participantPubkeys)) >= (p.max - 1) {
 		return ErrMaxParticipantsReached
 	}
 
@@ -115,18 +126,25 @@ func (p *DKGParticipant) IniatiateNostrDKG() error {
 	err := p.nostrPackage.relay.Publish(context.Background(), event)
 
 	if err != nil {
-		go p.handleIncomingDKGMessages(context.Background())
+		return err
 	}
+
+	err = p.startDKGSession(p.nostrPackage.relay)
+
 	return err
+}
+
+func (p *DKGParticipant) StartHandlingDKGMessages() {
+
+	go p.handleIncomingDKGMessages(context.Background())
 }
 
 func (p *DKGParticipant) handleIncomingDKGMessages(ctx context.Context) {
 	// Subscribe to DKG events
 	filters := nostr.Filters{
 		{
-			Kinds:   []int{nostr.KindTextNote},
+			Kinds:   []int{nostr.KindTextNote, nostr.KindEncryptedDirectMessage},
 			Authors: append(p.nostrPackage.participantPubkeys, p.nostrPackage.PublicKey),
-			Tags:    nostr.TagMap{"dkg": []string{"initiate", "round1", "round2", "complete"}, "p": []string{p.nostrPackage.PublicKey}},
 		},
 	}
 
@@ -138,7 +156,18 @@ func (p *DKGParticipant) handleIncomingDKGMessages(ctx context.Context) {
 
 	for event := range sub.Events {
 		// Process each incoming DKG message
-		if event.Tags.ContainsAny("dkg", []string{"round1"}) {
+		if event.Tags.ContainsAny("dkg", []string{"initiate"}) && event.Tags.ContainsAny("p", []string{p.nostrPackage.PublicKey}) {
+			if event.PubKey == p.nostrPackage.PublicKey {
+				continue
+			}
+			// Start DKG session
+			p.startDKGSession(p.nostrPackage.relay)
+
+		} else if event.Tags.ContainsAny("dkg", []string{"round1"}) {
+			if event.PubKey == p.nostrPackage.PublicKey {
+				continue
+			}
+
 			var round1Pub thres.Round1Package
 			err := json.Unmarshal([]byte(event.Content), &round1Pub)
 			if err != nil {
@@ -158,12 +187,19 @@ func (p *DKGParticipant) handleIncomingDKGMessages(ctx context.Context) {
 
 			partipcipantsLen := p.temp.Round1PubMapLen.Add(1)
 
-			if p.max == uint16(partipcipantsLen) {
+			if (p.max - 1) == uint16(partipcipantsLen) {
 				// All round 1 messages received, proceed to distribute shares
-				p.distributeDKGShares()
+				err := p.distributeDKGShares()
+				if err != nil {
+					fmt.Printf("Error distributing DKG shares: %+v", err)
+				}
 			}
 
 		} else if event.Tags.ContainsAny("dkg", []string{"round2"}) && event.Tags.ContainsAny("p", []string{p.nostrPackage.PublicKey}) {
+			if event.PubKey == p.nostrPackage.PublicKey {
+				continue
+			}
+
 			// Decrypt and process round 2 message
 			conversationKey, err := nip44.GenerateConversationKey(event.PubKey, p.nostrPackage.secretKey)
 			if err != nil {
@@ -204,7 +240,7 @@ func (p *DKGParticipant) handleIncomingDKGMessages(ctx context.Context) {
 
 			p.temp.round2Lock.Unlock()
 
-			if p.max == uint16(partipcipantsLen) {
+			if (p.max - 1) == uint16(partipcipantsLen) {
 				// All round 2 messages received, proceed to complete DKG
 				p.completeDKG()
 			}
@@ -214,7 +250,9 @@ func (p *DKGParticipant) handleIncomingDKGMessages(ctx context.Context) {
 
 }
 
-func (p *DKGParticipant) StartDKGSession(relay *nostr.Relay) error {
+func (p *DKGParticipant) startDKGSession(relay *nostr.Relay) error {
+	log.Printf("Participant %s starting DKG session", p.nostrPackage.PublicKey)
+	time.Sleep(500*time.Millisecond + time.Duration(randn.Intn(500))*time.Millisecond)
 
 	pubkeyBytes, err := hex.DecodeString(p.nostrPackage.PublicKey)
 	if err != nil {
@@ -264,10 +302,15 @@ func (p *DKGParticipant) StartDKGSession(relay *nostr.Relay) error {
 		return err
 	}
 
+	log.Printf("Participant %s published round 1 message", p.nostrPackage.PublicKey)
+
 	return nil
 }
 
 func (p *DKGParticipant) distributeDKGShares() error {
+	log.Printf("Participant %s distributing DKG shares", p.nostrPackage.PublicKey)
+	time.Sleep(500*time.Millisecond + time.Duration(randn.Intn(500))*time.Millisecond)
+
 	p.temp.round1Lock.RLock()
 	defer p.temp.round1Lock.RUnlock()
 
@@ -315,7 +358,7 @@ func (p *DKGParticipant) distributeDKGShares() error {
 			PubKey:  p.nostrPackage.PublicKey,
 			Content: encrypted,
 			Kind:    nostr.KindEncryptedDirectMessage,
-			Tags:    nostr.Tags{{"dkg", "round2", "p", receipient}},
+			Tags:    nostr.Tags{[]string{"dkg", "round2"}, []string{"p", receipient}},
 		}
 
 		if err := event.Sign(p.nostrPackage.secretKey); err != nil {
@@ -329,11 +372,16 @@ func (p *DKGParticipant) distributeDKGShares() error {
 		}
 	}
 
+	log.Printf("Participant %s distributed round 2 messages", p.nostrPackage.PublicKey)
+
 	return nil
 
 }
 
 func (p *DKGParticipant) completeDKG() error {
+	log.Printf("Participant %s completing DKG", p.nostrPackage.PublicKey)
+	time.Sleep(500*time.Millisecond + time.Duration(randn.Intn(500))*time.Millisecond)
+
 	p.temp.round1Lock.RLock()
 	defer p.temp.round1Lock.RUnlock()
 
@@ -383,7 +431,13 @@ func (p *DKGParticipant) completeDKG() error {
 
 	err = p.nostrPackage.relay.Publish(context.Background(), event)
 
-	return err
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Participant %s completed DKG", p.nostrPackage.PublicKey)
+
+	return nil
 
 }
 
