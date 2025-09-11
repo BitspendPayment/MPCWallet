@@ -23,6 +23,22 @@ type VerifyingKey struct {
 	E secp.JacobianPoint
 }
 
+func (vk VerifyingKey) Verify(message []byte, signature Signature) bool {
+
+	left := elemBaseMul(&signature.Z) // g * z
+	right := secp.JacobianPoint{}
+
+	scalerMessage := secp.ModNScalar{}
+	scalerMessage.SetByteSlice(message)
+
+	// m * E
+	temp := elemMul(vk.E, &scalerMessage)
+
+	secp.AddNonConst(&signature.R, &temp, &right) // R + m * E
+
+	return left.EquivalentNonConst(&right)
+}
+
 // Verify share against VSS; returns (verifying_share_i, group_verifying_key)
 func (s ThresholdShare) Verify() (VerifyingShare, VerifyingKey, error) {
 	left := elemBaseMul((*secp.ModNScalar)(&s.SecretSh)) // g * f(i)
@@ -58,7 +74,7 @@ func Reconstruct(minParticipants uint16, participants map[Identifier]SecretShare
 	var secret secp.ModNScalar // zero scalar by default
 
 	for i, k := range participants {
-		l := lagrangeCoeffAtZero(i, ids)      // returns ModNScalar
+		l := LagrangeCoeffAtZero(i, ids)      // returns ModNScalar
 		part := l.Mul((*secp.ModNScalar)(&k)) // convert SecretShare to *secp.ModNScalar
 		secret.Add(part)                      // secret += part
 	}

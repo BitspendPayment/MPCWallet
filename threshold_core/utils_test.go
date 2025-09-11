@@ -36,7 +36,7 @@ func TestLagrangeCoeffAtZero_ReconstructsConstantTerm(t *testing.T) {
 	// Reconstruct f(0) using λ_i(0): sum λ_i(0) * y_i
 	var recon secp.ModNScalar // starts at 0
 	for _, sh := range shares {
-		lambda := lagrangeCoeffAtZero(sh.id, S)
+		lambda := LagrangeCoeffAtZero(sh.id, S)
 		var term secp.ModNScalar
 		term.Set(&sh.y).Mul(lambda) // term = y_i * λ_i(0)
 		recon.Add(&term)            // accumulate
@@ -57,8 +57,8 @@ func TestLagrangeCoeffAtZero_PermutationInvariant(t *testing.T) {
 	S2 := []Identifier{id7, id4, id2, id1}
 
 	for _, id := range S1 {
-		l1 := lagrangeCoeffAtZero(id, S1)
-		l2 := lagrangeCoeffAtZero(id, S2)
+		l1 := LagrangeCoeffAtZero(id, S1)
+		l2 := LagrangeCoeffAtZero(id, S2)
 		if !l1.Equals(l2) {
 			t.Fatalf("λ differs by permutation for id=%d", id)
 		}

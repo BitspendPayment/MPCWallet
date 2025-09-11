@@ -138,7 +138,7 @@ func GenerateCoefficients(minSigners uint16) ([]secp.ModNScalar, error) {
 // ===========================================================
 
 // λ_i(0) = ∏_{j∈S, j≠i} (-j)/(i-j)  over the field (mod n)
-func lagrangeCoeffAtZero(i Identifier, set []Identifier) *secp.ModNScalar {
+func LagrangeCoeffAtZero(i Identifier, set []Identifier) *secp.ModNScalar {
 	num := modNOne()
 	den := modNOne()
 
