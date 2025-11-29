@@ -16,10 +16,10 @@ func (s *SigningPackage) SigningCommitment(id thres.Identifier) (SigningCommitme
 }
 
 func (s *SigningPackage) encodeGroupCommitmentList() []byte {
-	groupCommitmentList := s.Commitments
-
 	var buf []byte
-	for id, comm := range groupCommitmentList {
+
+	for _, id := range sortedCommitmentIDs(s.Commitments) {
+		comm := s.Commitments[id]
 		idSerialised := id.Serialize()
 
 		buf = append(buf, idSerialised...)
@@ -56,9 +56,10 @@ func (s *SigningPackage) bindingFactorPreimages(
 	prefix = append(prefix, h5...)
 
 	// build per-identifier preimages
-	out := make([]BindingFactorPreimage, 0, len(s.Commitments))
+	ids := sortedCommitmentIDs(s.Commitments)
+	out := make([]BindingFactorPreimage, 0, len(ids))
 
-	for id := range s.Commitments {
+	for _, id := range ids {
 		buf := make([]byte, 0, len(prefix)+len(id.Serialize()))
 		buf = append(buf, prefix...)
 		buf = append(buf, id.Serialize()...)
@@ -103,6 +104,9 @@ func Sign(
 	}
 
 	groupCommitment, err := ComputeGroupCommitment(&signingPackage, bindingFactorList)
+	if err != nil {
+		return nil, err
+	}
 
 	lambda_i := DeriveInterpolatingValue(keyPackage.Identifier, &signingPackage)
 
@@ -147,7 +151,7 @@ func Aggregate(
 	if len(signingPackage.Commitments) != len(signatureShares) {
 		return nil, ErrUnknownIdentifier
 	}
-	for id, _ := range signingPackage.Commitments {
+	for id := range signingPackage.Commitments {
 		if _, ok := signatureShares[id]; !ok {
 			return nil, ErrUnknownIdentifier
 		}
@@ -178,15 +182,28 @@ func Aggregate(
 		Z: z,
 	}
 
-	//verify final signature with the group verifying key
-	if pubkeys.VerifyingKey.Verify(signingPackage.Message, *sig) {
-
-		if err2 := DetectCheater(&groupCommitment, &pubkeys, signingPackage, signatureShares, bfl); err2 != nil {
-			return nil, err2
-		}
-		return sig, err
+	// verify final signature with the per-message challenge
+	challenge, err := ComputeChallenge(&groupCommitment.elem, pubkeys.VerifyingKey, signingPackage.Message)
+	if err != nil {
+		return nil, err
 	}
 
+	left := secp256k1.JacobianPoint{}
+	secp256k1.ScalarBaseMultNonConst(&sig.Z, &left)
+
+	eY := secp256k1.JacobianPoint{}
+	secp256k1.ScalarMultNonConst(challenge, &pubkeys.VerifyingKey.E, &eY)
+
+	right := secp256k1.JacobianPoint{}
+	secp256k1.AddNonConst(&groupCommitment.elem, &eY, &right)
+
+	if left.EquivalentNonConst(&right) {
+		return sig, nil
+	}
+
+	if err2 := DetectCheater(&groupCommitment, &pubkeys, signingPackage, signatureShares, bfl); err2 != nil {
+		return nil, err2
+	}
 	return sig, ErrorWrongSignature
 }
 

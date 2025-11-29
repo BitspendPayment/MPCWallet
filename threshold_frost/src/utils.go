@@ -1,6 +1,8 @@
 package threshold_signing
 
 import (
+	"sort"
+
 	thres "github.com/ArkLabsHQ/thresholdmagic/thresholdcore"
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 )
@@ -28,10 +30,17 @@ func SerializePointCompressed(point secp256k1.JacobianPoint) []byte {
 	return pk.SerializeCompressed()
 }
 
-func DeriveInterpolatingValue(id thres.Identifier, pkg *SigningPackage) *secp256k1.ModNScalar {
-	ids := make([]thres.Identifier, 0, len(pkg.Commitments))
-	for k := range pkg.Commitments {
-		ids = append(ids, k)
+func sortedCommitmentIDs(commitments map[thres.Identifier]SigningCommitments) []thres.Identifier {
+	ids := make([]thres.Identifier, 0, len(commitments))
+	for id := range commitments {
+		ids = append(ids, id)
 	}
-	return thres.LagrangeCoeffAtZero(id, ids)
+	sort.Slice(ids, func(i, j int) bool {
+		return ids[i].Less(ids[j])
+	})
+	return ids
+}
+
+func DeriveInterpolatingValue(id thres.Identifier, pkg *SigningPackage) *secp256k1.ModNScalar {
+	return thres.LagrangeCoeffAtZero(id, sortedCommitmentIDs(pkg.Commitments))
 }
