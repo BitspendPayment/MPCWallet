@@ -1,6 +1,6 @@
-# threshold_core
+# Threshold
 
-A Dart library for implementing threshold cryptography, specifically focusing on Distributed Key Generation (DKG) protocols based on secp256k1 elliptic curves. This library is a port of the Go `threshold_core` package.
+A Dart library for implementing threshold cryptography, specifically focusing on Distributed Key Generation (DKG) protocols based on secp256k1 elliptic curves. This library is a port of the Go `threshold` packages.
 
 ## Features
 
