@@ -1,5 +1,4 @@
 import 'dart:typed_data';
-
 import 'package:crypto/crypto.dart';
 import 'package:threshold/core/errors.dart';
 import 'package:threshold/core/utils.dart';

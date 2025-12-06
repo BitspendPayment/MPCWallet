@@ -1,9 +1,7 @@
 import 'dart:typed_data';
 import 'dart:math';
-
 import 'package:crypto/crypto.dart';
 import 'package:pointycastle/ecc/api.dart';
-
 import 'package:threshold/core/dkg.dart';
 import 'package:threshold/core/errors.dart';
 import 'package:threshold/core/identifier.dart';

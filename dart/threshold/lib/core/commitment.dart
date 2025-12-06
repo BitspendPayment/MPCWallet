@@ -5,9 +5,6 @@ import 'package:pointycastle/ecc/api.dart';
 import 'package:threshold/core/errors.dart';
 import 'package:threshold/core/identifier.dart';
 import 'package:threshold/core/utils.dart';
-
-
-
 import 'package:threshold/core/share.dart';
 
 typedef CoefficientCommitment = ECPoint;

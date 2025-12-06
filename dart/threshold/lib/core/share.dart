@@ -1,12 +1,9 @@
 import 'dart:typed_data';
-
 import 'package:pointycastle/ecc/api.dart';
 import 'package:threshold/core/commitment.dart';
 import 'package:threshold/core/errors.dart';
 import 'package:threshold/core/identifier.dart';
 import 'package:threshold/core/utils.dart';
-
-
 import 'package:threshold/core/dkg.dart';
 
 typedef SecretShare = BigInt;
