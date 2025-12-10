@@ -19,6 +19,7 @@ dependencies:
   protobuf: ^6.0.0
   http: ^1.2.0
   bitcoin_base: ^7.0.0
+  blockchain_utils: ^5.4.0
   hive: ^2.2.3
 
 dev_dependencies:

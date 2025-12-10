@@ -1,37 +1,73 @@
+name: mpctest
+
 version: '3'
 services:
   bitcoind:
-    image: ruimarinho/bitcoin-core:22
+    image: ghcr.io/getumbrel/docker-bitcoind:v29.0  # or another recent tag, includes bitcoin-cli
     container_name: mpc_bitcoind
+    restart: on-failure
+    stop_grace_period: 30s
     ports:
-      - "18443:18443" # RPC
-      - "18444:18444" # P2P
+      - 18443:18443
+      - 18444:18444
+      # ZMQ
+      - 28332:28332
+      - 28333:28333
+    volumes:
+      - bitcoin_data:/data/.bitcoin
     command:
-      -printtoconsole
-      -regtest=1
-      -rpcallowip=0.0.0.0/0
-      -rpcbind=0.0.0.0
-      -rpcuser=admin
-      -rpcpassword=admin
-      -fallbackfee=0.00001
-      -txindex=1
-      -server=1
+      - -regtest=1 # ⬅️ This is the key argument
+      - -server=1
+      - -printtoconsole
+      - -rpcbind=0.0.0.0
+      - -rpcallowip=0.0.0.0/0
+      - -rpcuser=admin1     # ⬅️ ADD THIS
+      - -rpcpassword=123    # ⬅️ ADD THIS
+      - -rpcport=18443 # ⬅️ Correct RegTest RPC port
+      - -port=18444 # ⬅️ Correct RegTest P2P port
+      - -txindex=1
+      - -fallbackfee=0.00001
+      - -zmqpubrawblock=tcp://0.0.0.0:28332
+      - -zmqpubrawtx=tcp://0.0.0.0:28333
+      - -datadir=/data/.bitcoin
+
 
   electrs:
-    image: getumbrel/electrs:v0.9.11
+    image: ghcr.io/vulpemventures/electrs:latest
     container_name: mpc_electrs
     ports:
       - "50001:50001" # TCP
+      - "50002:50002" # SSL
+      - "4224:4224"   # HTTP monitoring
     depends_on:
       - bitcoind
+    entrypoint:
+      - /build/electrs
     command:
-      -vvvv
-      --network=regtest
-      --daemon-dir=/data/.bitcoin
-      --electrum-rpc-addr=0.0.0.0:50001
-      --daemon-rpc-addr=bitcoind:18443
-      --cookie=admin:admin
+      - -vvvv
+      - --network
+      - regtest
+      - --daemon-dir
+      - /config
+      - --daemon-rpc-addr
+      - bitcoind:18443
+      - --cookie
+      - admin1:123
+      - --http-addr
+      - 0.0.0.0:30000
+      - --electrum-rpc-addr
+      - 0.0.0.0:50001
+      - --cors
+      - "*"
+      - --jsonrpc-import
     volumes:
-      - type: bind
-        source: ./bitcoin_data
-        target: /data/.bitcoin
+      - bitcoin_data:/data/.bitcoin:ro
+    restart: unless-stopped
+
+volumes:
+  bitcoin_data:
+
+
+networks:
+  default:
+    name: mpctest

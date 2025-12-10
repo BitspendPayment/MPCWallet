@@ -3,8 +3,8 @@ import 'package:http/http.dart' as http;
 
 class RegtestHelper {
   final String rpcUrl;
-  String _user = 'admin';
-  String _password = 'admin';
+  String _user = 'admin1';
+  String _password = '123';
 
   RegtestHelper({this.rpcUrl = "http://127.0.0.1:18443"});
 
@@ -44,6 +44,30 @@ class RegtestHelper {
   /// Generates a new address for the miner/admin wallet.
   Future<String> getNewAddress() async {
     return await _call('getnewaddress');
+  }
+
+  Future<double> getBalance() async {
+    return (await _call('getbalance')).toDouble();
+  }
+
+  /// Creates a new named wallet (if not exists).
+  Future<void> createWallet(String name) async {
+    try {
+      await _call('createwallet', [name]);
+    } catch (e) {
+      if (e.toString().contains('Database already exists')) {
+        try {
+          await _call('loadwallet', [name]);
+        } catch (e2) {
+          // Ignore if already loaded
+          if (!e2.toString().contains('Wallet is already loaded')) {
+            rethrow;
+          }
+        }
+      } else {
+        rethrow;
+      }
+    }
   }
 
   /// Mines [blocks] blocks to [address].

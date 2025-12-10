@@ -1,0 +1,56 @@
+00:00 [32m+0[0m: [1m[90mloading test/full_system_test.dart[0m[0m                                                                                                                                                           00:00 [32m+0[0m: (setUpAll)[0m                                                                                                                                                                                   00:00 [32m+0[0m: (setUpAll)[0m                                                                                                                                                                                   
+--- Setup ---
+Starting Docker...
+Waiting for Bitcoind & Electrs...
+Docker Regtest Operational.
+Starting MPC Server...
+[Server]: Store initialized.
+
+[Server]: Server listening on port 50051...
+
+--- Setup Complete ---
+00:21 [32m+0[0m: Full E2E Regtest Flow[0m                                                                                                                                                                        00:21 [32m+0[0m: Full E2E Regtest Flow[0m                                                                                                                                                                        
+1. MPC Setup
+00:21 [32m+0[0m: (setUpAll)[0m                                                                                                                                                                                   
+[Server]: New Session Created: user_1765389011796
+
+[Server]: [user_1765389011796] DKGStep1: Received PubPackage from 0000000000000000000000000000000000000000000000000000000000000001
+[user_1765389011796] Server: Generating DKG secrets...
+
+[Server]: [user_1765389011796] DKGStep1: Received PubPackage from 0000000000000000000000000000000000000000000000000000000000000002
+
+[Server]: [user_1765389011796] DKGStep2: Server computing shares...
+
+[Server]: [user_1765389011796] DKGStep3: Received Shares from 0000000000000000000000000000000000000000000000000000000000000001
+
+[Server]: [user_1765389011796] DKGStep3: Received Shares from 0000000000000000000000000000000000000000000000000000000000000002
+
+[Server]: [user_1765389011796] DKGStep3: Server computing KeyPackage...
+
+[Server]: [user_1765389011796] DKG Complete. PK: (12933584232170481525957956123069875321603065151457406624324946791812481659683,60106528932227339477604062951836722782656701473891710496690894631490303101637)
+
+00:21 [32m+0[0m: Full E2E Regtest Flow[0m                                                                                                                                                                        
+DKG Complete
+No saved state found. Checking client initialization...
+Client already initialized. Skipping DKG.
+Saving MPC Client state...
+Wallet Address: tb1prjvzvdwczrrs2hssf82dh7lf6tm0f0n08qwa7ru0sp55akw8kv3s8utq9y
+Wallet Address: bcrt1prjvzvdwczrrs2hssf82dh7lf6tm0f0n08qwa7ru0sp55akw8kv3s29pxs7
+2. Mining to maturity
+Miner Wallet Balance: 11849.0
+3. Funding Wallet 1
+Funded Wallet 1 with 24fe236eedbe93924fb91f04c032de7887f3f1dc55b68107b01aaaa3c7882cbd
+4. Syncing Wallet 1 via Electrum
+00:21 [32m+0[0m[31m -1[0m: Full E2E Regtest Flow [1m[31m[E][0m[0m                                                                                                                                                                 
+  SocketException: Connection refused (OS Error: Connection refused, errno = 111), address = localhost, port = 56870
+  dart:io                             Socket.connect
+  test/full_system_test.dart 220:33   RealElectrumProvider.request
+  package:client/bitcoin.dart 261:10  MpcBitcoinWallet.sync
+  test/full_system_test.dart 143:20   main.<fn>
+  
+
+[1m[36mTo run this test again:[0m dart test test/full_system_test.dart -p vm --plain-name 'Full E2E Regtest Flow'
+00:21 [32m+0[0m[31m -1[0m: (tearDownAll)[0m                                                                                                                                                                             00:21 [32m+0[0m[31m -1[0m: [31mSome tests failed.[0m                                                                                                                                                                        
+
+Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+For example, 'dart test --chain-stack-traces'.

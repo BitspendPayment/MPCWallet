@@ -8,6 +8,7 @@
       "version": "1.0.0",
       "dependencies": [
         "bitcoin_base",
+        "blockchain_utils",
         "client",
         "grpc",
         "hive",
@@ -59,6 +60,11 @@
         "crypto",
         "meta"
       ]
+    },
+    {
+      "name": "blockchain_utils",
+      "version": "5.4.0",
+      "dependencies": []
     },
     {
       "name": "bitcoin_base",
@@ -402,11 +408,6 @@
     {
       "name": "meta",
       "version": "1.17.0",
-      "dependencies": []
-    },
-    {
-      "name": "blockchain_utils",
-      "version": "5.4.0",
       "dependencies": []
     },
     {

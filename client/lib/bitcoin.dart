@@ -10,8 +10,8 @@ import 'package:threshold/threshold.dart' as threshold; // Access bigIntToBytes
 
 class MpcBitcoinWallet {
   final MpcClient client;
+  final WalletStore store;
   final bool isTestnet;
-  final WalletStore store = WalletStore();
 
   late P2trAddress _address;
   P2trAddress get address {
@@ -21,7 +21,9 @@ class MpcBitcoinWallet {
     return _address;
   }
 
-  MpcBitcoinWallet(this.client, {this.isTestnet = false});
+  MpcBitcoinWallet(this.client, {this.isTestnet = false, String? storageId})
+      : store = WalletStore(
+            boxName: storageId ?? 'bitcoin_wallet_state_${client.deviceId}');
 
   Future<void> init() async {
     await store.init();

@@ -2,13 +2,15 @@ import 'package:hive/hive.dart';
 import 'package:bitcoin_base/bitcoin_base.dart';
 
 class WalletStore {
-  static const String _boxName = 'bitcoin_wallet_state';
+  final String boxName;
   late Box _box;
+
+  WalletStore({this.boxName = 'bitcoin_wallet_state'});
 
   Future<void> init() async {
     // Determine path? For now just use default or in-memory if not specified.
     // Client usually runs in context where Hive.init is called.
-    _box = await Hive.openBox(_boxName);
+    _box = await Hive.openBox(boxName);
   }
 
   Future<void> saveUtxos(List<UtxoWithAddress> utxos) async {
