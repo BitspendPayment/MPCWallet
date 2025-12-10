@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 import 'package:bitcoin_base/bitcoin_base.dart';
 import 'package:client/client.dart';
+import 'package:convert/convert.dart';
 import 'package:client/persistence/wallet_store.dart';
 import 'package:client/coin_selection.dart';
 import 'package:client/fees.dart';
@@ -39,8 +40,13 @@ class MpcBitcoinWallet {
   /// Explicitly runs the DKG protocol and saves the resulting shares.
   /// Call this when creating a fresh wallet or resetting.
   Future<void> initializeNewWallet() async {
-    print("No saved state found. Running DKG...");
-    await client.doDkg();
+    print("No saved state found. Checking client initialization...");
+    if (!client.isInitialized) {
+      print("Client not initialized. Running DKG...");
+      await client.doDkg();
+    } else {
+      print("Client already initialized. Skipping DKG.");
+    }
 
     print("Saving MPC Client state...");
     await store.saveClientState(
@@ -239,5 +245,53 @@ class MpcBitcoinWallet {
     );
 
     return signedTx.serialize();
+  }
+
+  /// Syncs the wallet's UTXOs using the provided Electrum [provider].
+  /// [provider] should be an ElectrumProvider. Typed dynamic to bypass missing interface.
+  Future<void> sync(dynamic provider) async {
+    // 1. Get Script Hash for P2TR address
+    final scriptHash = address.pubKeyHash();
+
+    // 2. Fetch Unspent Outputs
+    // Ensure we await the request.
+    final List<dynamic> unspent = await (provider as dynamic)
+        .request(ElectrumRequestScriptHashListUnspent(scriptHash: scriptHash));
+
+    // 3. Convert to UtxoWithAddress
+    // Find P2TR type robustly
+    final p2trType = BitcoinAddressType.values.firstWhere(
+        (e) => e
+            .toString()
+            .toLowerCase()
+            .contains('tr'), // matches p2tr or taproot
+        orElse: () => BitcoinAddressType.values.last);
+
+    final newUtxos = unspent.map((u) {
+      // u is expected to differ based on library version, usually has tx_hash, tx_pos, value (sats)
+      // Inspecting user snippet implies direct access or Map.
+      // If it's a Map: u['tx_hash'], u['tx_pos']...
+      // If it's a strongly typed object: u.txHash
+      // Let's assume typed object as per typical Dart libs.
+
+      return UtxoWithAddress(
+        utxo: BitcoinUtxo(
+          txHash: u.txHash,
+          vout: u.txPos,
+          value: BigInt.from(u.value),
+          scriptType: p2trType,
+        ),
+        ownerDetails: UtxoAddressDetails(
+          // Serialize verifying key to hex
+          publicKey: hex.encode(threshold
+              .elemSerializeCompressed(client.publicKey!.verifyingKey.E)),
+          address: address,
+        ),
+      );
+    }).toList();
+
+    // 4. Save to Store
+    await store.saveUtxos(newUtxos);
+    print("Synced ${newUtxos.length} UTXOs.");
   }
 }

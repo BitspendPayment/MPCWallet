@@ -34,7 +34,7 @@ packages:
     source: hosted
     version: "2.13.0"
   bitcoin_base:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: bitcoin_base
       sha256: "88be48282b67f61918c12586df3f23d9ff40b032c5cfe755dd802f2866a0a768"
@@ -169,7 +169,7 @@ packages:
     source: hosted
     version: "5.1.0"
   hive:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: hive
       sha256: "8dcf6db979d7933da8217edcec84e9df1bdb4e4edc7fc77dbd5aa74356d6d941"
@@ -177,7 +177,7 @@ packages:
     source: hosted
     version: "2.2.3"
   http:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: http
       sha256: "87721a4a50b19c7f1d49001e51409bddc46303966ce89a65af4f4e6004896412"

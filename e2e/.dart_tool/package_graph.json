@@ -7,8 +7,11 @@
       "name": "e2e",
       "version": "1.0.0",
       "dependencies": [
+        "bitcoin_base",
         "client",
         "grpc",
+        "hive",
+        "http",
         "protobuf",
         "protocol",
         "server",
@@ -47,6 +50,31 @@
         "web_socket_channel",
         "webkit_inspection_protocol",
         "yaml"
+      ]
+    },
+    {
+      "name": "hive",
+      "version": "2.2.3",
+      "dependencies": [
+        "crypto",
+        "meta"
+      ]
+    },
+    {
+      "name": "bitcoin_base",
+      "version": "7.0.0",
+      "dependencies": [
+        "blockchain_utils"
+      ]
+    },
+    {
+      "name": "http",
+      "version": "1.6.0",
+      "dependencies": [
+        "async",
+        "http_parser",
+        "meta",
+        "web"
       ]
     },
     {
@@ -108,7 +136,9 @@
       "version": "1.0.0",
       "dependencies": [
         "bitcoin_base",
+        "convert",
         "grpc",
+        "hive",
         "protobuf",
         "protocol",
         "threshold"
@@ -363,17 +393,39 @@
       ]
     },
     {
+      "name": "crypto",
+      "version": "3.0.7",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
       "name": "meta",
       "version": "1.17.0",
       "dependencies": []
     },
     {
-      "name": "fixnum",
-      "version": "1.1.1",
+      "name": "blockchain_utils",
+      "version": "5.4.0",
       "dependencies": []
     },
     {
       "name": "web",
+      "version": "1.1.1",
+      "dependencies": []
+    },
+    {
+      "name": "http_parser",
+      "version": "4.1.2",
+      "dependencies": [
+        "collection",
+        "source_span",
+        "string_scanner",
+        "typed_data"
+      ]
+    },
+    {
+      "name": "fixnum",
       "version": "1.1.1",
       "dependencies": []
     },
@@ -388,16 +440,6 @@
       "dependencies": []
     },
     {
-      "name": "http",
-      "version": "1.6.0",
-      "dependencies": [
-        "async",
-        "http_parser",
-        "meta",
-        "web"
-      ]
-    },
-    {
       "name": "googleapis_auth",
       "version": "2.0.0",
       "dependencies": [
@@ -406,13 +448,6 @@
         "google_identity_services_web",
         "http",
         "http_parser"
-      ]
-    },
-    {
-      "name": "crypto",
-      "version": "3.0.7",
-      "dependencies": [
-        "typed_data"
       ]
     },
     {
@@ -435,21 +470,6 @@
       "name": "secp256k1",
       "version": "0.3.0",
       "dependencies": []
-    },
-    {
-      "name": "hive",
-      "version": "2.2.3",
-      "dependencies": [
-        "crypto",
-        "meta"
-      ]
-    },
-    {
-      "name": "bitcoin_base",
-      "version": "7.0.0",
-      "dependencies": [
-        "blockchain_utils"
-      ]
     },
     {
       "name": "string_scanner",
@@ -526,16 +546,6 @@
       "dependencies": []
     },
     {
-      "name": "http_parser",
-      "version": "4.1.2",
-      "dependencies": [
-        "collection",
-        "source_span",
-        "string_scanner",
-        "typed_data"
-      ]
-    },
-    {
       "name": "cli_config",
       "version": "0.2.0",
       "dependencies": [
@@ -576,11 +586,6 @@
     {
       "name": "js",
       "version": "0.7.2",
-      "dependencies": []
-    },
-    {
-      "name": "blockchain_utils",
-      "version": "5.4.0",
       "dependencies": []
     },
     {

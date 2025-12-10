@@ -1,0 +1,37 @@
+version: '3'
+services:
+  bitcoind:
+    image: ruimarinho/bitcoin-core:22
+    container_name: mpc_bitcoind
+    ports:
+      - "18443:18443" # RPC
+      - "18444:18444" # P2P
+    command:
+      -printtoconsole
+      -regtest=1
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0
+      -rpcuser=admin
+      -rpcpassword=admin
+      -fallbackfee=0.00001
+      -txindex=1
+      -server=1
+
+  electrs:
+    image: getumbrel/electrs:v0.9.11
+    container_name: mpc_electrs
+    ports:
+      - "50001:50001" # TCP
+    depends_on:
+      - bitcoind
+    command:
+      -vvvv
+      --network=regtest
+      --daemon-dir=/data/.bitcoin
+      --electrum-rpc-addr=0.0.0.0:50001
+      --daemon-rpc-addr=bitcoind:18443
+      --cookie=admin:admin
+    volumes:
+      - type: bind
+        source: ./bitcoin_data
+        target: /data/.bitcoin
