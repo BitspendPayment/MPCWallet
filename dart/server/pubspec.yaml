@@ -1,0 +1,17 @@
+name: server
+description: A gRPC server for MPC Wallet
+version: 1.0.0
+# repository: https://github.com/my_org/my_repo
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  grpc: ^5.1.0
+  protobuf: ^6.0.0
+  threshold:
+    path: ../threshold
+  hive: ^2.2.3
+
+dev_dependencies:
+  test: ^1.24.0
