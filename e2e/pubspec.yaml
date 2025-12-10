@@ -1,0 +1,19 @@
+name: e2e
+description: End-to-End tests for MPC Wallet
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  client:
+    path: ../client
+  server:
+    path: ../server
+  threshold:
+    path: ../threshold
+  grpc: ^5.1.0
+
+dev_dependencies:
+  test: ^1.24.0
