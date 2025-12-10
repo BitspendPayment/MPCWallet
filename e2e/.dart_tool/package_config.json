@@ -26,6 +26,18 @@
       "languageVersion": "3.4"
     },
     {
+      "name": "bitcoin_base",
+      "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/bitcoin_base-7.0.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
+      "name": "blockchain_utils",
+      "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/blockchain_utils-5.4.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
       "name": "boolean_selector",
       "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/boolean_selector-2.1.2",
       "packageUri": "lib/",

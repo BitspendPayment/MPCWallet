@@ -42,9 +42,9 @@ void main() {
     final message = utf8.encode("Hello 2-of-3 World from Dual-Identity Client");
 
     // Sign using the "active" identity (defaults to ID 2)
-    final valid = await client.sign(Uint8List.fromList(message));
+    final signature = await client.sign(Uint8List.fromList(message));
 
-    expect(valid, isTrue);
+    expect(signature, isA<threshold.Signature>());
     print('--- SIGNING COMPLETE ---');
 
     await channel.shutdown();

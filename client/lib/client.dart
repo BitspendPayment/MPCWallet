@@ -13,7 +13,7 @@ class MpcClient {
   final MPCWalletClient _stub;
 
   // Unique Session ID for this client instance (persisted or generated)
-  final String _deviceId;
+  String _deviceId;
   String get deviceId => _deviceId;
 
   // Two client identities
@@ -39,6 +39,8 @@ class MpcClient {
   threshold.KeyPackage? _keyPackage2;
   threshold.PublicKeyPackage? _publicKeyPackage2;
 
+  // Bitcoin Wallet removed (Decoupled)
+
   /// Creates a client that manages two shares (identities).
   /// [id1] and [id2] are the identifiers for this client's two shares.
   /// [deviceId] identifies this DKG session. If null, a random one is generated.
@@ -53,6 +55,17 @@ class MpcClient {
     final r = Random();
     return List.generate(
         16, (index) => r.nextInt(255).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  bool get isInitialized => _keyPackage1 != null && _keyPackage2 != null;
+
+  void restoreState(String deviceId, threshold.KeyPackage k1,
+      threshold.KeyPackage k2, threshold.PublicKeyPackage pk) {
+    _deviceId = deviceId;
+    _keyPackage1 = k1;
+    _keyPackage2 = k2;
+    _publicKeyPackage1 = pk;
+    _publicKeyPackage2 = pk;
   }
 
   // Getters for testing
@@ -153,7 +166,8 @@ class MpcClient {
 
   // --- SIGNING ---
 
-  Future<bool> sign(Uint8List message, {bool useIdentity2 = true}) async {
+  Future<threshold.Signature> sign(Uint8List message,
+      {bool useIdentity2 = true}) async {
     final myId = useIdentity2 ? _id2 : _id1;
     final myKeyPkg = useIdentity2 ? _keyPackage2 : _keyPackage1;
     final groupPubKey = _publicKeyPackage1;
@@ -209,7 +223,10 @@ class MpcClient {
     final cY = (groupPubKey.verifyingKey.E * challenge)!;
     final R_plus_cY = (R + cY)!;
 
-    return threshold.pointsEqual(zG, R_plus_cY);
+    final isValid = threshold.pointsEqual(zG, R_plus_cY);
+    if (!isValid) throw Exception("Invalid signature produced by MPC group");
+
+    return threshold.Signature(R, z);
   }
 
   // Helpers

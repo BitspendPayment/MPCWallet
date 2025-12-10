@@ -82,8 +82,8 @@ void main() {
       clientB.sign(Uint8List.fromList(msgB)),
     ]);
 
-    expect(results[0], isTrue);
-    expect(results[1], isTrue);
+    expect(results[0], isA<threshold.Signature>());
+    expect(results[1], isA<threshold.Signature>());
 
     print('--- CONCURRENT SIGNING COMPLETE ---');
 

@@ -7,7 +7,10 @@
       "name": "client",
       "version": "1.0.0",
       "dependencies": [
+        "bitcoin_base",
+        "convert",
         "grpc",
+        "hive",
         "protobuf",
         "protocol",
         "threshold"
@@ -51,6 +54,28 @@
         "web_socket_channel",
         "webkit_inspection_protocol",
         "yaml"
+      ]
+    },
+    {
+      "name": "convert",
+      "version": "3.1.2",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
+      "name": "hive",
+      "version": "2.2.3",
+      "dependencies": [
+        "crypto",
+        "meta"
+      ]
+    },
+    {
+      "name": "bitcoin_base",
+      "version": "7.0.0",
+      "dependencies": [
+        "blockchain_utils"
       ]
     },
     {
@@ -345,6 +370,23 @@
       ]
     },
     {
+      "name": "crypto",
+      "version": "3.0.7",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
+    },
+    {
+      "name": "blockchain_utils",
+      "version": "5.4.0",
+      "dependencies": []
+    },
+    {
       "name": "pointycastle",
       "version": "3.9.1",
       "dependencies": [
@@ -354,27 +396,8 @@
       ]
     },
     {
-      "name": "convert",
-      "version": "3.1.2",
-      "dependencies": [
-        "typed_data"
-      ]
-    },
-    {
-      "name": "crypto",
-      "version": "3.0.7",
-      "dependencies": [
-        "typed_data"
-      ]
-    },
-    {
       "name": "secp256k1",
       "version": "0.3.0",
-      "dependencies": []
-    },
-    {
-      "name": "meta",
-      "version": "1.17.0",
       "dependencies": []
     },
     {

@@ -1,0 +1,21 @@
+00:00 [32m+0[0m: [1m[90mloading test/bitcoin_full_test.dart[0m[0m                                                                                                                                                          00:00 [32m+0[0m: (setUpAll)[0m                                                                                                                                                                                   00:00 [32m+0[0m: MpcBitcoinWallet initialization and address derivation[0m                                                                                                                                       00:00 [32m+0[0m: MpcBitcoinWallet initialization and address derivation[0m                                                                                                                                       
+No saved state found. Running DKG...
+Saving MPC Client state...
+00:00 [32m+0[0m[31m -1[0m: MpcBitcoinWallet initialization and address derivation [1m[31m[E][0m[0m                                                                                                                                
+  Invalid bech32 format (data part not valid)
+  package:blockchain_utils/bech32/bech32_utils.dart 218:7                  Bech32DecoderBase.decodeBech32
+  package:blockchain_utils/bech32/segwit_bech32.dart 83:39                 SegwitBech32Decoder.decode
+  package:bitcoin_base/src/bitcoin/address/utils/address_utils.dart 89:41  _BitcoinAddressUtils.toSegwitProgramWithVersionAndNetwork
+  package:bitcoin_base/src/bitcoin/address/segwit_address.dart 12:43       new SegwitAddress.fromAddress
+  package:bitcoin_base/src/bitcoin/address/segwit_address.dart 84:15       new P2trAddress.fromAddress
+  package:client/bitcoin.dart 74:28                                        MpcBitcoinWallet._deriveAddress
+  package:client/bitcoin.dart 53:5                                         MpcBitcoinWallet.init
+  ===== asynchronous gap ===========================
+  test/bitcoin_full_test.dart 89:5                                         main.<fn>
+  
+
+[1m[36mTo run this test again:[0m dart test test/bitcoin_full_test.dart -p vm --plain-name 'MpcBitcoinWallet initialization and address derivation'
+00:00 [32m+0[0m[31m -1[0m: (tearDownAll)[0m                                                                                                                                                                             00:00 [32m+0[0m[31m -1[0m: [31mSome tests failed.[0m                                                                                                                                                                        
+
+Consider enabling the flag chain-stack-traces to receive more detailed exceptions.
+For example, 'dart test --chain-stack-traces'.
