@@ -10,6 +10,7 @@
         "grpc",
         "hive",
         "protobuf",
+        "protocol",
         "threshold"
       ],
       "devDependencies": [
@@ -53,6 +54,14 @@
       "dependencies": [
         "crypto",
         "meta"
+      ]
+    },
+    {
+      "name": "protocol",
+      "version": "1.0.0",
+      "dependencies": [
+        "grpc",
+        "protobuf"
       ]
     },
     {
@@ -339,16 +348,16 @@
       ]
     },
     {
-      "name": "meta",
-      "version": "1.17.0",
-      "dependencies": []
-    },
-    {
       "name": "crypto",
       "version": "3.0.7",
       "dependencies": [
         "typed_data"
       ]
+    },
+    {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
     },
     {
       "name": "pointycastle",

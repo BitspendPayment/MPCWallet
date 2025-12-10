@@ -7,7 +7,7 @@ import 'package:grpc/grpc.dart';
 import 'package:threshold/threshold.dart' as threshold;
 import 'package:threshold/frost/signing.dart' as frost;
 import 'package:threshold/frost/commitment.dart' as frost_comm;
-import 'package:server/src/generated/mpc_wallet.pbgrpc.dart';
+import 'package:protocol/protocol.dart';
 
 class MpcClient {
   final MPCWalletClient _stub;

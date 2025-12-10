@@ -5,6 +5,7 @@ import 'package:client/client.dart';
 import 'package:grpc/grpc.dart';
 import 'package:test/test.dart';
 import 'package:threshold/threshold.dart' as threshold;
+import 'package:protocol/protocol.dart';
 
 void main() {
   test('End-to-End DKG and Signing with Dual-Identity Client + Server',

@@ -1,0 +1,11 @@
+name: protocol
+description: Shared gRPC protocol definitions for MPC Wallet.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  grpc: ^5.1.0
+  protobuf: ^6.0.0

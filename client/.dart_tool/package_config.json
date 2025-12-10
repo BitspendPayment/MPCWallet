@@ -212,6 +212,12 @@
       "languageVersion": "3.7"
     },
     {
+      "name": "protocol",
+      "rootUri": "../../protocol",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
       "name": "pub_semver",
       "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/pub_semver-2.2.0",
       "packageUri": "lib/",
@@ -222,12 +228,6 @@
       "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/secp256k1-0.3.0",
       "packageUri": "lib/",
       "languageVersion": "2.12"
-    },
-    {
-      "name": "server",
-      "rootUri": "../../server",
-      "packageUri": "lib/",
-      "languageVersion": "3.0"
     },
     {
       "name": "shelf",

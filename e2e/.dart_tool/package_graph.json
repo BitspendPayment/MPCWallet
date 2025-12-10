@@ -9,6 +9,8 @@
       "dependencies": [
         "client",
         "grpc",
+        "protobuf",
+        "protocol",
         "server",
         "threshold"
       ],
@@ -48,6 +50,15 @@
       ]
     },
     {
+      "name": "protobuf",
+      "version": "6.0.0",
+      "dependencies": [
+        "collection",
+        "fixnum",
+        "meta"
+      ]
+    },
+    {
       "name": "grpc",
       "version": "5.1.0",
       "dependencies": [
@@ -61,6 +72,14 @@
         "meta",
         "protobuf",
         "web"
+      ]
+    },
+    {
+      "name": "protocol",
+      "version": "1.0.0",
+      "dependencies": [
+        "grpc",
+        "protobuf"
       ]
     },
     {
@@ -80,6 +99,7 @@
         "grpc",
         "hive",
         "protobuf",
+        "protocol",
         "threshold"
       ]
     },
@@ -89,7 +109,7 @@
       "dependencies": [
         "grpc",
         "protobuf",
-        "server",
+        "protocol",
         "threshold"
       ]
     },
@@ -342,6 +362,16 @@
       ]
     },
     {
+      "name": "meta",
+      "version": "1.17.0",
+      "dependencies": []
+    },
+    {
+      "name": "fixnum",
+      "version": "1.1.1",
+      "dependencies": []
+    },
+    {
       "name": "web",
       "version": "1.1.1",
       "dependencies": []
@@ -350,15 +380,6 @@
       "name": "clock",
       "version": "1.1.2",
       "dependencies": []
-    },
-    {
-      "name": "protobuf",
-      "version": "6.0.0",
-      "dependencies": [
-        "collection",
-        "fixnum",
-        "meta"
-      ]
     },
     {
       "name": "http2",
@@ -376,11 +397,6 @@
       ]
     },
     {
-      "name": "meta",
-      "version": "1.17.0",
-      "dependencies": []
-    },
-    {
       "name": "googleapis_auth",
       "version": "2.0.0",
       "dependencies": [
@@ -390,11 +406,6 @@
         "http",
         "http_parser"
       ]
-    },
-    {
-      "name": "fixnum",
-      "version": "1.1.1",
-      "dependencies": []
     },
     {
       "name": "crypto",

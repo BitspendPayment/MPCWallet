@@ -11,8 +11,8 @@ dependencies:
   protobuf: ^6.0.0
   threshold:
     path: ../threshold
-  server: # Depend on server for generated protos
-    path: ../server 
+  protocol:
+    path: ../protocol
 
 dev_dependencies:
   test: ^1.24.0

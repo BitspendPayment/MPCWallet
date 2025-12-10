@@ -11,6 +11,8 @@ dependencies:
   protobuf: ^6.0.0
   threshold:
     path: ../threshold
+  protocol:
+    path: ../protocol
   hive: ^2.2.3
 
 dev_dependencies:

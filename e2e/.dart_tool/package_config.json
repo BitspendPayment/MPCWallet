@@ -218,6 +218,12 @@
       "languageVersion": "3.7"
     },
     {
+      "name": "protocol",
+      "rootUri": "../../protocol",
+      "packageUri": "lib/",
+      "languageVersion": "3.3"
+    },
+    {
       "name": "pub_semver",
       "rootUri": "file:///home/joshua/.pub-cache/hosted/pub.dev/pub_semver-2.2.0",
       "packageUri": "lib/",

@@ -7,7 +7,7 @@ import 'package:threshold/threshold.dart' as threshold;
 import 'package:threshold/frost/signing.dart' as frost;
 import 'package:threshold/frost/commitment.dart' as frost_comm;
 
-import 'src/generated/mpc_wallet.pbgrpc.dart';
+import 'package:protocol/protocol.dart';
 import 'persistence/store.dart';
 
 // --- Session State ---
