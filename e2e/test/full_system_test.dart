@@ -101,7 +101,7 @@ void main() {
     await wallet.init(); // Derives address and inits store
 
     // Use manual bcrt address for bitcoind interaction
-    final address = wallet.address.toAddress(BitcoinNetwork.testnet);
+    final address = wallet.toAddressCustom(hrp: 'bcrt');
     print('Wallet Address: $address');
 
     // 3. Mine to maturity
@@ -149,7 +149,7 @@ void main() {
       final wallet2 = MpcBitcoinWallet(client2,
           storageId: 'wallet_bob_${randomId}', isTestnet: true);
       await wallet2.init();
-      final address2 = wallet2.address.toAddress(BitcoinNetwork.testnet);
+      final address2 = wallet2.toAddressCustom(hrp: 'bcrt');
       print('Wallet 2 Address: $address2');
 
       // 6. Send Transaction from Wallet 1 to Wallet 2

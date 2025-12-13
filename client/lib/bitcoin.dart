@@ -1,4 +1,6 @@
 import 'dart:typed_data';
+import 'package:blockchain_utils/blockchain_utils.dart'
+    hide hex; // For Regtest address encoding
 import 'package:bitcoin_base/bitcoin_base.dart';
 import 'package:client/client.dart';
 import 'package:convert/convert.dart';
@@ -76,24 +78,29 @@ class MpcBitcoinWallet {
     final publicKey = client.publicKey;
     if (publicKey == null) return; // Should not happen after init
 
-    // 1. Extract Public Key Point
     final point = publicKey.verifyingKey.E;
 
-    // 2. Serialize to x-only bytes (32 bytes) for Taproot
-    final xBigInt = point.x!.toBigInteger();
-    // Manual padding to 32 bytes
-    final xBytesRaw = threshold.bigIntToBytes(xBigInt!);
-    final xBytes = Uint8List(32);
-    final offset = 32 - xBytesRaw.length;
-    xBytes.setRange(offset, 32, xBytesRaw);
+    // Serialize point to compressed hex
+    final pointBytes = threshold.elemSerializeCompressed(point);
+    final pointHex = hex.encode(pointBytes);
 
-    // 3. Derive P2TR address
-    final programHex =
-        xBytes.map((e) => e.toRadixString(16).padLeft(2, '0')).join();
-    _address = P2trAddress.fromProgram(program: programHex);
+    final ecPub = ECPublic.fromHex(pointHex);
+    _address = ecPub.toTaprootAddress();
 
     print(
         "Wallet Address: ${_address.toAddress(isTestnet ? BitcoinNetwork.testnet : BitcoinNetwork.mainnet)}");
+  }
+
+  /// Helper to generate address with custom HRP (e.g. 'bcrt' for Regtest)
+  String toAddressCustom({required String hrp}) {
+    // Generate valid Testnet address first (program is same for Testnet/Regtest)
+    final addr = address.toAddress(BitcoinNetwork.testnet);
+    // Decode to get version/program (Tuple<int, List<int>>)
+    final decoded = SegwitBech32Decoder.decode("tb", addr);
+    final version = decoded.item1;
+    final program = decoded.item2;
+    // Encode with custom HRP
+    return SegwitBech32Encoder.encode(hrp, version, program);
   }
 
   /// Builds a transaction, hashes it, and returns the sighash to be signed by MPC.
@@ -164,12 +171,21 @@ class MpcBitcoinWallet {
     final inputsValue = totalIn;
     final changeValue = inputsValue - amount - fee;
 
+    BitcoinBaseAddress outputAddress; // Was BitcoinAddress
+    if (destination.startsWith('bcrt')) {
+      // Manual decoding for custom/Regtest HRP
+      final decoded = SegwitBech32Decoder.decode("bcrt", destination);
+      final program = decoded.item2;
+      outputAddress = P2trAddress.fromProgram(program: hex.encode(program));
+    } else {
+      outputAddress = P2trAddress.fromAddress(
+          address: destination,
+          network: isTestnet ? BitcoinNetwork.testnet : BitcoinNetwork.mainnet);
+    }
+
     final outputs = <BitcoinOutput>[
       BitcoinOutput(
-        address: P2trAddress.fromAddress(
-            address: destination,
-            network:
-                isTestnet ? BitcoinNetwork.testnet : BitcoinNetwork.mainnet),
+        address: outputAddress,
         value: amount,
       ),
     ];

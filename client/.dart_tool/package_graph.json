@@ -8,6 +8,7 @@
       "version": "1.0.0",
       "dependencies": [
         "bitcoin_base",
+        "blockchain_utils",
         "convert",
         "grpc",
         "hive",
@@ -55,6 +56,11 @@
         "webkit_inspection_protocol",
         "yaml"
       ]
+    },
+    {
+      "name": "blockchain_utils",
+      "version": "5.4.0",
+      "dependencies": []
     },
     {
       "name": "convert",
@@ -379,11 +385,6 @@
     {
       "name": "meta",
       "version": "1.17.0",
-      "dependencies": []
-    },
-    {
-      "name": "blockchain_utils",
-      "version": "5.4.0",
       "dependencies": []
     },
     {
