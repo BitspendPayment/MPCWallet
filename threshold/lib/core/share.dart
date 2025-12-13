@@ -12,7 +12,7 @@ class VerifyingKey {
   final ECPoint E;
   VerifyingKey({required this.E});
 
-  bool verify(Uint8List message, Signature signature) {
+  bool verify(Uint8List message, DKGSignature signature) {
     final left = elemBaseMul(signature.Z);
 
     final s = bytesToBigInt(message) % secp256k1Curve.n;
@@ -21,6 +21,22 @@ class VerifyingKey {
     final right = elemAdd(signature.R, temp);
 
     return left == right;
+  }
+
+  bool get hasEvenY {
+    return E.y!.toBigInteger()!.isEven;
+  }
+
+  VerifyingKey intoEvenY({bool? isEven}) {
+    final currentIsEven = isEven ?? hasEvenY;
+    if (!currentIsEven) {
+      final n = secp256k1Curve.n;
+      // Negate E: -E = (n-1)*E
+      final negMultiplier = n - BigInt.one;
+      final newE = (E * negMultiplier)!;
+      return VerifyingKey(E: newE);
+    }
+    return this;
   }
 }
 
@@ -51,7 +67,9 @@ class ThresholdShare {
 }
 
 SecretKey reconstruct(
-    int minParticipants, Map<Identifier, SecretShare> participants) {
+  int minParticipants,
+  Map<Identifier, SecretShare> participants,
+) {
   if (participants.isEmpty) {
     throw IncorrectNumberOfSharesException("incorrect number of shares");
   }

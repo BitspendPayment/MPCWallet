@@ -7,6 +7,7 @@ export 'core/commitment.dart';
 export 'core/dkg.dart';
 export 'core/errors.dart';
 export 'core/identifier.dart';
+export 'frost/signature.dart';
 export 'core/share.dart';
 export 'core/utils.dart' hide generateNonce;
 export 'frost/binding.dart';

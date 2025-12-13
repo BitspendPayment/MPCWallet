@@ -34,7 +34,6 @@ Uint8List bigIntToBytes(BigInt number) {
   return bytes;
 }
 
-
 BigInt modNFromBytesBE(Uint8List b) {
   final s = bytesToBigInt(b) % secp256k1Curve.n;
   if (s == BigInt.zero) {
@@ -115,7 +114,8 @@ BigInt modNRandom() {
   BigInt s;
   do {
     final bytes = Uint8List.fromList(
-        List<int>.generate(32, (i) => random.nextInt(256)));
+      List<int>.generate(32, (i) => random.nextInt(256)),
+    );
     s = bytesToBigInt(bytes) % secp256k1Curve.n;
   } while (s == BigInt.zero);
   return s;
@@ -132,7 +132,11 @@ List<BigInt> generateCoefficients(int size) {
 }
 
 (List<BigInt>, List<ECPoint>) generateSecretPolynomial(
-    BigInt secret, int maxSigners, int minSigners, List<BigInt> coeffOnly) {
+  BigInt secret,
+  int maxSigners,
+  int minSigners,
+  List<BigInt> coeffOnly,
+) {
   validateNumOfSigners(minSigners, maxSigners);
   if (coeffOnly.length != minSigners - 1) {
     throw InvalidCoefficientsException("invalid coefficients");
@@ -144,7 +148,10 @@ List<BigInt> generateCoefficients(int size) {
 }
 
 Challenge dkgChallenge(
-    Identifier identifier, VerifyingKey verifyingKey, ECPoint R) {
+  Identifier identifier,
+  VerifyingKey verifyingKey,
+  ECPoint R,
+) {
   final pre = BytesBuilder();
   pre.add(identifier.serialize());
   pre.add(elemSerializeCompressed(verifyingKey.E));
@@ -154,8 +161,11 @@ Challenge dkgChallenge(
   return Challenge(bytesToBigInt(Uint8List.fromList(sum)) % secp256k1Curve.n);
 }
 
-Signature computeProofOfKnowledge(Identifier identifier,
-    List<BigInt> coefficients, VerifyingKey verifyingKey) {
+DKGSignature computeProofOfKnowledge(
+  Identifier identifier,
+  List<BigInt> coefficients,
+  VerifyingKey verifyingKey,
+) {
   final (k, R) = generateNonce();
   final chal = dkgChallenge(identifier, verifyingKey, R);
   if (coefficients.isEmpty) {
@@ -164,11 +174,14 @@ Signature computeProofOfKnowledge(Identifier identifier,
   final a0 = coefficients[0];
   final zc = (a0 * chal.C) % secp256k1Curve.n;
   final z = (zc + k) % secp256k1Curve.n;
-  return Signature(R, z);
+  return DKGSignature(R, z);
 }
 
 void verifyProofOfKnowledge(
-    Identifier identifier, VerifyingKey verifyingKey, Signature sig) {
+  Identifier identifier,
+  VerifyingKey verifyingKey,
+  DKGSignature sig,
+) {
   final chal = dkgChallenge(identifier, verifyingKey, sig.R);
   final gmu = elemBaseMul(sig.Z);
   final cneg = (secp256k1Curve.n - chal.C) % secp256k1Curve.n;
@@ -188,7 +201,9 @@ void validateNumOfSigners(int minSigners, int maxSigners) {
     throw InvalidMaxSignersException("max_signers must be >= 2");
   }
   if (minSigners > maxSigners) {
-    throw InvalidMinSignersException("min_signers cannot be greater than max_signers");
+    throw InvalidMinSignersException(
+      "min_signers cannot be greater than max_signers",
+    );
   }
 }
 

@@ -63,52 +63,10 @@ void main() {
         signatureShares[id] = share;
       }
 
-      // 4. Aggregate
       final signature = aggregate(signingPackage, signatureShares, pkp);
+      final isTrue = signature.verify(pkp.verifyingKey, message);
 
-      // 5. Verify
-      final challenge = computeChallenge(
-        signature.R,
-        pkp.verifyingKey,
-        message,
-      );
-
-      // Check: z * G == R + c * P
-      final zG = (secp256k1Curve.G * signature.Z)!;
-      final cP = (pkp.verifyingKey.E * challenge)!;
-      final RHS = (signature.R + cP)!;
-
-      expect(
-        pointsEqual(zG, RHS),
-        isTrue,
-        reason: "Signature verification failed",
-      );
-
-      // Also verify using standard Verify method on VerifyingKey if available or re-implement check
-      // In `share.dart`, VerifyingKey.verify(message, signature)
-      // But `share.dart` `verify` uses Schnorr where hash includes R || P || m
-      // Our `computeChallenge` uses R || P || m
-      // so it should match
-
-      // Note: `share.dart` definition of `Signature` might differ from `frost/signing.dart` `Signature`.
-      // `dkg.dart` defines `Signature` (R, Z).
-      // `frost/signing.dart` imports `dkg.dart`.
-      // So they use the same `Signature` class.
-
-      // But `share.dart` VerifyingKey.verify logic:
-      // final s = bytesToBigInt(message) % secp256k1Curve.n;
-      // final temp = elemMul(E, s);
-      // ...
-      // It treats message as scalar directly? That looks like ECDSA-ish or naive Schnorr without hashing message?
-      // Wait, `share.dart` :
-      // final s = bytesToBigInt(message) % ...
-      // It does NOT hash message ??
-      // Actually `share.dart` seems to implement a simplified check or expects hashed message as input.
-      // BUT `frost` `computeChallenge` implements `H2(R, P, m)`.
-      // So `share.dart` `verify` is likely incompatible with correct Schnorr/FROST verification if it doesn't do the same hashing.
-      // The manual check I did above (zG == R + cP) IS valid.
-
-      // Let's rely on manual check for this test.
+      expect(isTrue, true, reason: "Signature verification failed");
     });
   });
 }

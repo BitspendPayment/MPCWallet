@@ -229,20 +229,7 @@ class MpcBitcoinWallet {
 
       final signature = await client.sign(sighashUint8);
 
-      // Convert (R, Z) to Schnorr (R || s) 64 bytes
-      final rBigInt = signature.R.x!.toBigInteger()!;
-      final zBigInt = signature.Z;
-
-      final rBytesRaw = threshold.bigIntToBytes(rBigInt);
-      final sBytesRaw = threshold.bigIntToBytes(zBigInt);
-
-      final rBytes = Uint8List(32);
-      final sBytes = Uint8List(32);
-
-      rBytes.setRange(32 - rBytesRaw.length, 32, rBytesRaw);
-      sBytes.setRange(32 - sBytesRaw.length, 32, sBytesRaw);
-
-      final sigBytes = Uint8List.fromList([...rBytes, ...sBytes]);
+      final sigBytes = signature.serialize();
       final sigHex =
           sigBytes.map((e) => e.toRadixString(16).padLeft(2, '0')).join();
 

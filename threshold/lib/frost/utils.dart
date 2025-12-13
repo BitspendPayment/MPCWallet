@@ -30,3 +30,10 @@ ECPoint vartimeMultiscalarMul(List<BigInt> scalars, List<ECPoint> elems) {
   }
   return acc;
 }
+
+bool pointsEqual(ECPoint a, ECPoint b) {
+  if (a.isInfinity && b.isInfinity) return true;
+  if (a.isInfinity || b.isInfinity) return false;
+  return a.x!.toBigInteger() == b.x!.toBigInteger() &&
+      a.y!.toBigInteger() == b.y!.toBigInteger();
+}

@@ -7,6 +7,7 @@ import 'package:grpc/grpc.dart';
 import 'package:threshold/threshold.dart' as threshold;
 import 'package:threshold/frost/signing.dart' as frost;
 import 'package:threshold/frost/commitment.dart' as frost_comm;
+import 'package:threshold/frost/signature.dart' as frost_sig;
 import 'package:protocol/protocol.dart';
 
 class MpcClient {
@@ -218,7 +219,7 @@ class MpcClient {
         threshold.bytesToBigInt(Uint8List.fromList(signStep2Resp.zScalar));
 
     final challenge =
-        frost.computeChallenge(R, groupPubKey.verifyingKey, message);
+        frost_sig.computeChallenge(R, groupPubKey.verifyingKey, message);
     final zG = (threshold.secp256k1Curve.G * z)!;
     final cY = (groupPubKey.verifyingKey.E * challenge)!;
     final R_plus_cY = (R + cY)!;

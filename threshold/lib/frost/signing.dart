@@ -6,10 +6,10 @@ import 'package:threshold/core/identifier.dart';
 import 'package:threshold/core/share.dart';
 import 'package:threshold/core/utils.dart'; // for constants, BigInt utils
 import 'package:threshold/frost/errors.dart';
-import 'package:threshold/frost/hasher.dart';
 import 'package:threshold/frost/utils.dart';
 import 'package:threshold/frost/commitment.dart';
 import 'package:threshold/frost/binding.dart';
+import 'package:threshold/frost/signature.dart';
 
 class SignatureShare {
   final BigInt s;
@@ -26,6 +26,9 @@ SignatureShare sign(
   if (signingPackage.commitments.length < keyPackage.minSigners) {
     throw errIncorrectNumberOfCommitments;
   }
+
+  // ensure keyPackage Public key is even
+  keyPackage = keyPackage.intoEvenY();
 
   final commitment = signingPackage.commitments[keyPackage.identifier];
   if (commitment == null) {
@@ -66,18 +69,6 @@ SignatureShare sign(
     keyPackage,
     challenge,
   );
-}
-
-BigInt computeChallenge(ECPoint R, VerifyingKey vk, Uint8List message) {
-  final RBytes = serializePointCompressed(R);
-  final YBytes = serializePointCompressed(vk.E);
-
-  final builder = BytesBuilder();
-  builder.add(RBytes);
-  builder.add(YBytes);
-  builder.add(message);
-
-  return h2(builder.toBytes());
 }
 
 BigInt deriveInterpolatingValue(Identifier id, SigningPackage pkg) {
@@ -136,6 +127,10 @@ Signature aggregate(
   if (signingPackage.commitments.length != signatureShares.length) {
     throw errUnknownIdentifier;
   }
+
+  // ensure pubkeys Public key is even
+  pubkeys = pubkeys.intoEvenY();
+
   for (final id in signingPackage.commitments.keys) {
     if (!signatureShares.containsKey(id) ||
         !pubkeys.verifyingShares.containsKey(id)) {
@@ -223,11 +218,4 @@ void verifySignatureShare(
   if (!pointsEqual(LHS, RHS)) {
     throw errorInvalidSignature;
   }
-}
-
-bool pointsEqual(ECPoint a, ECPoint b) {
-  if (a.isInfinity && b.isInfinity) return true;
-  if (a.isInfinity || b.isInfinity) return false;
-  return a.x!.toBigInteger() == b.x!.toBigInteger() &&
-      a.y!.toBigInteger() == b.y!.toBigInteger();
 }

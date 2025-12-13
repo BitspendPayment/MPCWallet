@@ -7,42 +7,42 @@ import 'package:threshold/core/utils.dart';
 import 'package:convert/convert.dart';
 import 'dart:typed_data';
 
+class DKGSignature {
+  final ECPoint R;
+  final BigInt Z;
+
+  DKGSignature(this.R, this.Z);
+
+  factory DKGSignature.fromJson(Map<String, dynamic> json) {
+    final R = elemDeserializeCompressed(
+      Uint8List.fromList(hex.decode(json['R'])),
+    );
+    final Z = bytesToBigInt(Uint8List.fromList(hex.decode(json['Z'])));
+    return DKGSignature(R, Z);
+  }
+
+  Map<String, dynamic> toJson() => {
+    'R': hex.encode(elemSerializeCompressed(R)),
+    'Z': hex.encode(bigIntToBytes(Z)),
+  };
+}
+
 class Round1Package {
   final VerifiableSecretSharingCommitment commitment;
-  final Signature proofOfKnowledge;
+  final DKGSignature proofOfKnowledge;
 
   Round1Package(this.commitment, this.proofOfKnowledge);
 
   factory Round1Package.fromJson(Map<String, dynamic> json) {
     return Round1Package(
       VerifiableSecretSharingCommitment.fromJson(json['commitment']),
-      Signature.fromJson(json['proofOfKnowledge']),
+      DKGSignature.fromJson(json['proofOfKnowledge']),
     );
   }
 
   Map<String, dynamic> toJson() => {
     'commitment': commitment.toJson(),
     'proofOfKnowledge': proofOfKnowledge.toJson(),
-  };
-}
-
-class Signature {
-  final ECPoint R;
-  final BigInt Z;
-
-  Signature(this.R, this.Z);
-
-  factory Signature.fromJson(Map<String, dynamic> json) {
-    final R = elemDeserializeCompressed(
-      Uint8List.fromList(hex.decode(json['R'])),
-    );
-    final Z = bytesToBigInt(Uint8List.fromList(hex.decode(json['Z'])));
-    return Signature(R, Z);
-  }
-
-  Map<String, dynamic> toJson() => {
-    'R': hex.encode(elemSerializeCompressed(R)),
-    'Z': hex.encode(bigIntToBytes(Z)),
   };
 }
 
@@ -139,6 +139,33 @@ class KeyPackage {
     'verifyingKey': hex.encode(elemSerializeCompressed(verifyingKey.E)),
     'minSigners': minSigners,
   };
+
+  bool get hasEvenY {
+    return verifyingKey.E.y!.toBigInteger()!.isEven;
+  }
+
+  KeyPackage intoEvenY({bool? isEven}) {
+    final currentIsEven = isEven ?? hasEvenY;
+    if (!currentIsEven) {
+      // Negate all components
+      final n = secp256k1Curve.n;
+      final negMultiplier = n - BigInt.one;
+
+      final newSecretShare = (n - secretShare) % n;
+      // Negate points by multiplying by (n-1) since .negate() is missing
+      final newVerifyingShare = (verifyingShare * negMultiplier)!;
+      final newVerifyingKeyPoint = (verifyingKey.E * negMultiplier)!;
+
+      return KeyPackage(
+        identifier,
+        newSecretShare,
+        newVerifyingShare,
+        VerifyingKey(E: newVerifyingKeyPoint),
+        minSigners,
+      );
+    }
+    return this;
+  }
 }
 
 class PublicKeyPackage {
@@ -177,6 +204,30 @@ class PublicKeyPackage {
       'verifyingShares': verifyingShares,
       'verifyingKey': hex.encode(elemSerializeCompressed(verifyingKey.E)),
     };
+  }
+
+  bool get hasEvenY {
+    return verifyingKey.E.y!.toBigInteger()!.isEven;
+  }
+
+  PublicKeyPackage intoEvenY({bool? isEven}) {
+    final currentIsEven = isEven ?? hasEvenY;
+    if (!currentIsEven) {
+      final n = secp256k1Curve.n;
+      final negMultiplier = n - BigInt.one;
+
+      final newVerifyingKeyPoint = (verifyingKey.E * negMultiplier)!;
+      final newVerifyingShares = verifyingShares.map((id, share) {
+        final newShare = (share * negMultiplier)!;
+        return MapEntry(id, newShare);
+      });
+
+      return PublicKeyPackage(
+        newVerifyingShares,
+        VerifyingKey(E: newVerifyingKeyPoint),
+      );
+    }
+    return this;
   }
 }
 

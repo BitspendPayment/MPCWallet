@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:client/client.dart';
 import 'package:client/bitcoin.dart';
-import 'package:bitcoin_base/bitcoin_base.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:grpc/grpc.dart';
 import 'package:threshold/threshold.dart' as threshold;
@@ -196,88 +195,72 @@ class RealElectrumProvider {
   static const String host = 'localhost';
 
   Future<List<dynamic>> request(dynamic request) async {
-    // Connect, Send, Receive, Close.
-    // Optimization: Keep persistent connection if possible, but for test simple is better.
-    // However, sync might expect persistent? No, underlying method just awaits request.
-
-    // Check request type
-    // dynamic request -> assuming ElectrumRequestScriptHashListUnspent
-    // It has a method `scriptHash`
-    // We cannot easily check type without importing bitcoin_base classes if strict
-    // But we know what it is.
     final scriptHash = request.scriptHash;
+    int retries = 3;
+    while (retries > 0) {
+      try {
+        return await _doRequest(scriptHash);
+      } catch (e) {
+        retries--;
+        print("Electrum Connection Error: $e. Retrying ($retries left)...");
+        if (retries == 0) rethrow;
+        await Future.delayed(Duration(seconds: 2));
+      }
+    }
+    throw Exception("Unreachable");
+  }
 
+  Future<List<dynamic>> _doRequest(String scriptHash) async {
     final socket = await Socket.connect(host, port);
-
-    final payload = {
-      "jsonrpc": "2.0",
-      "method": "blockchain.scripthash.listunspent",
-      "params": [scriptHash],
-      "id": 1
-    };
-
-    socket.writeln(jsonEncode(payload));
-
-    // Read response
-    // Electrum sends newline terminated JSON
     final completer = Completer<List<dynamic>>();
 
-    // transform(utf8.decoder) should work on Stream<List<int>> which Socket is.
-    // If strict mode complains, we can cast or wrap.
-    socket
-        .cast<List<int>>()
-        .transform(utf8.decoder)
-        .transform(const LineSplitter())
-        .listen((line) {
-      if (line.isNotEmpty) {
-        try {
-          final body = jsonDecode(line);
-          if (body['error'] != null) {
-            completer.completeError("Electrum Error: ${body['error']}");
-          } else {
-            // result is list of utxos
-            // [{tx_hash, tx_pos, value, height}]
-            // We need to map this to what MpcBitcoinWallet expects.
-            // MpcBitcoinWallet expects: u.txHash, u.txPos, u.value
-            // Note: electrs returns `tx_hash`, `tx_pos`, `value`
-            // BUT `FakeElectrumProvider` returned objects or maps?
-            // `MpcBitcoinWallet` line 266: `u.txHash`.
-            // It seems MpcBitcoinWallet expects a typed object if using a typed library!
-            // Wait, check MpcBitcoinWallet import.
-            // It imports `bitcoin_base`.
-            // Does `provider.request` return raw JSON list or typed objects?
-            // In `MpcBitcoinWallet.sync`:
-            /*
-                final List<dynamic> unspent = await (provider as dynamic)
-                  .request(ElectrumRequestScriptHashListUnspent(scriptHash: scriptHash));
-                ...
-                final newUtxos = unspent.map((u) { ... u.txHash ... }).toList();
-             */
-            // This suggests `unspent` list contains objects with `.txHash`, not Maps.
-            // If `RealElectrumProvider` returns Maps (from JSON), `u.txHash` will fail.
-            // UNLESS `u` is dynamic and user uses `.property` on it?
-            // Dart allows `.property` on dynamic, but Map doesn't have `txHash`.
-            // `FakeElectrumProvider` returned `MockUtxo` objects.
-            // So I MUST return objects that have `txHash`, `txPos`, `value`.
+    try {
+      final payload = {
+        "jsonrpc": "2.0",
+        "method": "blockchain.scripthash.listunspent",
+        "params": [scriptHash],
+        "id": 1
+      };
 
-            final result = body['result'] as List;
-            final mapped = result
-                .map((r) => ElectrumUtxo(
-                    txHash: r['tx_hash'],
-                    txPos: r['tx_pos'],
-                    value: r['value']))
-                .toList();
+      socket.writeln(jsonEncode(payload));
 
-            if (!completer.isCompleted) completer.complete(mapped);
+      socket
+          .cast<List<int>>()
+          .transform(utf8.decoder)
+          .transform(const LineSplitter())
+          .listen((line) {
+        if (line.isNotEmpty) {
+          try {
+            final body = jsonDecode(line);
+            if (body['error'] != null) {
+              if (!completer.isCompleted) {
+                completer.completeError("Electrum Error: ${body['error']}");
+              }
+            } else {
+              final result = body['result'] as List;
+              final mapped = result
+                  .map((r) => ElectrumUtxo(
+                      txHash: r['tx_hash'],
+                      txPos: r['tx_pos'],
+                      value: r['value']))
+                  .toList();
+              if (!completer.isCompleted) completer.complete(mapped);
+            }
+          } catch (e) {
+            if (!completer.isCompleted) completer.completeError(e);
           }
-        } catch (e) {
-          if (!completer.isCompleted) completer.completeError(e);
+          socket.destroy();
         }
-        socket.destroy();
-      }
-    }, onError: (e) {
-      if (!completer.isCompleted) completer.completeError(e);
-    });
+      }, onError: (e) {
+        if (!completer.isCompleted) completer.completeError(e);
+      }, onDone: () {
+        if (!completer.isCompleted)
+          completer.completeError("Socket closed without response");
+      });
+    } catch (e) {
+      socket.destroy();
+      rethrow;
+    }
 
     return completer.future;
   }
