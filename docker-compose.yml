@@ -1,6 +1,5 @@
 name: mpctest
 
-version: '3'
 services:
   bitcoind:
     image: ghcr.io/getumbrel/docker-bitcoind:v29.0  # or another recent tag, includes bitcoin-cli
