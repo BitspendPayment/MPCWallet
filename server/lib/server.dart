@@ -721,6 +721,9 @@ class MPCWalletService extends MPCWalletServiceBase {
         ..rPoint = threshold.elemSerializeCompressed(signature.R)
         ..zScalar = threshold.bigIntToBytes(signature.Z);
 
+      // Reset session after successful signing so next sign gets fresh nonces
+      session.reset();
+
       return response;
     } catch (e) {
       _log.severe('[$userId] SignStep2 Error: $e');
