@@ -207,6 +207,30 @@ make e2e-test
 
 # Pico firmware over USB HID
 make pico-test ARGS="--full-dkg"
+
+## Performance & Stress Testing
+
+The project includes benchmarks for the core cryptography and E2E load tests to ensure stability under concurrent usage.
+
+### 1. Cryptography Benchmarks
+Run [Criterion](https://github.com/bheisler/criterion.rs) benchmarks for the Rust `threshold` library:
+```bash
+make crypto-bench
+```
+This measures the latency of DKG rounds, signature share generation, and share aggregation.
+
+### 2. Multi-User Stress Test
+Simulate multiple users performing concurrent DKGs and sequential transaction rounds in a Regtest environment:
+```bash
+make stress-test
+```
+This target:
+1. Stops any running servers.
+2. Starts a fresh Bitcoin Regtest environment.
+3. Launches the hardware signer simulator (`signer-server`).
+4. Launches the MPC Wallet Server.
+5. Runs the Dart E2E stress test suite (`multi_user_stress_test.dart`).
+6. Cleans up by stopping the servers.
 ```
 
 ## Makefile Reference
@@ -233,6 +257,8 @@ make pico-test ARGS="--full-dkg"
 | `regtest` | Full dev stack: Docker + init + signer + server |
 | `regtest-hardware` | Hardware dev stack: Docker + init + ADB + server |
 | `proto` | Regenerate Dart gRPC stubs from `.proto` files |
+| `crypto-bench` | Run Rust cryptography benchmarks (Criterion) |
+| `stress-test` | Run multi-user E2E stress test (DKG + transactions) |
 
 ## Security Model
 
