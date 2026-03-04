@@ -1,4 +1,13 @@
-.PHONY: regtest-up regtest-down regtest regtest-hardware proto bitcoin-init signer-build signer-run signer-stop pico-build pico-flash pico-test flutter-run threshold-ffi-build threshold-test threshold-ffi-test e2e-test cosigner-build server-build server-run server-stop
+.PHONY: regtest-up regtest-down regtest regtest-hardware proto bitcoin-init signer-build signer-run signer-stop pico-build pico-flash pico-test flutter-run threshold-ffi-build threshold-test threshold-ffi-test e2e-test cosigner-build server-build server-run server-stop crypto-bench stress-test
+
+# Rust and Flutter environment for sudo compatibility
+export RUSTUP_HOME=/home/ehis/.rustup
+export CARGO_HOME=/home/ehis/.cargo
+export FLUTTER_HOME=/home/ehis/flutter
+export PATH:=$(CARGO_HOME)/bin:$(FLUTTER_HOME)/bin:$(PATH)
+
+# Stress test data isolation
+export DATA_DIR=/tmp/mpc_wallet_stress
 
 # Start Docker environment (Bitcoind + Electrs)
 regtest-up:
@@ -11,26 +20,29 @@ regtest-up:
 regtest-down:
 	@echo "Stopping Regtest environment..."
 	cd e2e && docker compose down
-	-pkill -f "signer-server" || true
-	-pkill -f "target/release/server" || true
+	-sudo pkill -9 -f "signer-server" || true
+	-sudo pkill -9 -f "target/release/server" || true
+	-sudo pkill -9 -f "server --wasm" || true
+	sudo rm -rf /root/.mpc_wallet/server/db || true
+	@sleep 2
 
 # Build the hardware signer test server
 signer-build:
 	@echo "Building Hardware Signer Test Server..."
-	export PATH="$$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$$PATH" && \
 	cd e2e/signer-server && cargo build --release
 
 # Run the hardware signer test server (background, default port 9090)
 signer-run: signer-build
 	@echo "Starting Hardware Signer Test Server on port 9090..."
-	export PATH="$$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/bin:$$PATH" && \
 	cd e2e/signer-server && cargo run --release -- --port 9090 &
 	@sleep 2
 
 # Stop the hardware signer test server
 signer-stop:
 	@echo "Stopping Hardware Signer Test Server..."
-	-pkill -f "signer-server" || true
+	-sudo pkill -9 -f "signer-server" || true
+	-sudo pkill -9 signer-server || true
+	@sleep 1
 
 # Helper to start everything
 regtest: regtest-up bitcoin-init signer-run server-run
@@ -125,7 +137,8 @@ server-run: cosigner-build server-build
 	export ELECTRUM_PORT=50001 && \
 	export BITCOIN_RPC_USER=admin1 && \
 	export BITCOIN_RPC_PASSWORD=123 && \
-	cd server && cargo run --release -- \
+	export PROTOC=/home/ehis/vscode/work/MPCWallet/bin/bin/protoc && \
+	cd server && cargo run --release --bin server -- \
 		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 		--port 50051 &
 	@sleep 2
@@ -134,9 +147,26 @@ server-run: cosigner-build server-build
 # Stop MPC Wallet Server
 server-stop:
 	@echo "Stopping MPC Wallet Server..."
-	-pkill -f "target/release/server" || true
+	-sudo fuser -k 50051/tcp || true
+	-sudo pkill -9 -f "target/release/server" || true
+	-sudo pkill -9 -f "server --wasm" || true
+	-sudo pkill -9 server || true
+	sudo rm -rf $(DATA_DIR) || true
+	@sleep 2
 
 # Generate Dart gRPC stubs from protos
 proto:
 	@echo "Generating Dart gRPC stubs..."
-	protoc -I protocol/protos --dart_out=grpc:protocol/lib/src/generated protocol/protos/mpc_wallet.proto
+	/home/ehis/vscode/work/MPCWallet/bin/bin/protoc -I protocol/protos --dart_out=grpc:protocol/lib/src/generated protocol/protos/mpc_wallet.proto
+
+# Run Rust cryptography benchmarks
+crypto-bench:
+	@echo "Running Rust cryptography benchmarks..."
+	cd threshold && cargo bench
+
+# Run multi-user E2E stress test
+stress-test: server-stop signer-stop regtest-up bitcoin-init signer-run server-run
+	@echo "Running Multi-User E2E Stress Test..."
+	cd e2e && dart test test/multi_user_stress_test.dart
+	@$(MAKE) server-stop
+	@$(MAKE) signer-stop

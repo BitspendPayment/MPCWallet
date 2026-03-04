@@ -20,16 +20,21 @@ CONTAINER="mpc_bitcoind"
 RPC_USER="admin1"
 RPC_PASS="123"
 
-bcli() {
+bcli_no_wallet() {
   docker exec "$CONTAINER" bitcoin-cli -regtest -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" "$@"
+}
+
+bcli() {
+  docker exec "$CONTAINER" bitcoin-cli -regtest -rpcuser="$RPC_USER" -rpcpassword="$RPC_PASS" -rpcwallet="default" "$@"
 }
 
 cmd_init() {
   echo "Initializing regtest chain..."
 
-  # Create default wallet if it doesn't exist
-  if ! bcli listwallets 2>/dev/null | grep -q '"default"'; then
-    bcli createwallet "default" 2>/dev/null || true
+  # Create default wallet if it doesn't exist, or load it if it does
+  if ! bcli_no_wallet listwallets 2>/dev/null | grep -q '"default"'; then
+    echo "Creating 'default' wallet..."
+    bcli_no_wallet createwallet "default" > /dev/null 2>&1 || bcli_no_wallet loadwallet "default" > /dev/null 2>&1 || true
   fi
 
   local addr
