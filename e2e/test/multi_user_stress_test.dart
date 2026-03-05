@@ -39,7 +39,7 @@ void main() {
 
     // 1. Setup two hardware signers (separate connections to avoid state conflicts in signer-server)
     final signerA = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    final signerB = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    final signerB = TcpHardwareSigner(host: '127.0.0.1', port: 9091);
     await Future.wait([signerA.connect(), signerB.connect()]);
 
     final clientA = MpcClient(channel, hardwareSigner: signerA, storageId: 'user_a_stress');
