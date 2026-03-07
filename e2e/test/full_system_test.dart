@@ -6,6 +6,7 @@ import 'package:client/client.dart';
 import 'package:client/bitcoin.dart';
 import 'package:client/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
+import 'package:e2e/logger.dart';
 import 'package:grpc/grpc.dart';
 import 'package:hive/hive.dart';
 import 'package:fixnum/fixnum.dart';
@@ -24,7 +25,7 @@ void main() {
       final utxos = await wallet.store.getUtxos();
       final hasExpected = utxos.any((u) => u.utxo.txHash == expectedTxId);
       if (hasExpected) return;
-      print("Waiting for change UTXO from $expectedTxId... ($retries left)");
+      Log.info("Waiting for change UTXO from ${expectedTxId.substring(0, 12)}… ($retries left)");
       retries--;
       if (retries > 0) {
         await Future.delayed(Duration(seconds: 2));
@@ -34,14 +35,14 @@ void main() {
   }
 
   setUpAll(() async {
-    print('--- Setup ---');
+    Log.header('Setup');
 
     // 0. Hive Init
     tempDir = await Directory.systemTemp.createTemp('mpc_e2e_');
     Hive.init(tempDir.path);
 
     // 1. Docker
-    print('Starting Docker (Bitcoind)...');
+    Log.info('Starting Docker (Bitcoind)…');
     var dRes = await Process.run('docker', [
       'compose',
       'up',
@@ -51,10 +52,10 @@ void main() {
     if (dRes.exitCode != 0)
       throw Exception("Docker Bitcoind failed: ${dRes.stderr}");
 
-    print("Waiting for Bitcoind (10s)...");
+    Log.info("Waiting for Bitcoind (10s)…");
     await Future.delayed(Duration(seconds: 10));
 
-    print('Starting Docker (Electrs)...');
+    Log.info('Starting Docker (Electrs)…');
     dRes = await Process.run('docker', [
       'compose',
       'up',
@@ -64,8 +65,7 @@ void main() {
     if (dRes.exitCode != 0)
       throw Exception("Docker Electrs failed: ${dRes.stderr}");
 
-    // Wait for services to stabilize
-    print("Waiting for Electrs (20s)...");
+    Log.info("Waiting for Electrs (20s)…");
     await Future.delayed(Duration(seconds: 20));
 
     // Probe
@@ -78,13 +78,13 @@ void main() {
       }
       btc = RegtestHelper(rpcUrl: "http://127.0.0.1:18443/wallet/default");
       await btc.getNewAddress();
-      print("Docker Regtest Operational.");
+      Log.ok("Docker Regtest operational.");
     } catch (e) {
       throw Exception("Docker started but RPC unreachable: $e");
     }
 
     // 2. Server (Rust)
-    print('Starting MPC Server...');
+    Log.info('Starting MPC Server…');
     final portSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     serverPort = portSocket.port;
     await portSocket.close();
@@ -109,7 +109,7 @@ void main() {
     final stdoutBuffer = StringBuffer();
     serverProcess!.stdout.transform(utf8.decoder).listen((data) {
       stdoutBuffer.write(data);
-      print('[Server]: $data');
+      Log.server(data);
       if (!serverReady.isCompleted &&
           stdoutBuffer.toString().contains('MPC Wallet Server listening on')) {
         serverReady.complete();
@@ -123,7 +123,7 @@ void main() {
     final stderrBuffer = StringBuffer();
     serverProcess!.stderr.transform(utf8.decoder).listen((data) {
       stderrBuffer.write(data);
-      print('[Server]: $data');
+      Log.server(data);
       if (!serverReady.isCompleted &&
           stderrBuffer.toString().contains('MPC Wallet Server listening on')) {
         serverReady.complete();
@@ -150,7 +150,8 @@ void main() {
       } catch (_) {}
       rethrow;
     }
-    print('--- Setup Complete ---');
+    Log.ok('Setup complete.');
+    Log.separator();
   });
 
   tearDownAll(() async {
@@ -165,7 +166,7 @@ void main() {
 
   test('Full E2E Regtest Flow with Policies', () async {
     // 1. MPC Setup
-    print('1. MPC Setup');
+    Log.step(1, 'MPC Setup');
     final channel = ClientChannel(
       '127.0.0.1',
       port: serverPort,
@@ -176,26 +177,26 @@ void main() {
     final client1 = MpcClient(channel, hardwareSigner: signer);
 
     await client1.doDkg();
-    print('DKG Complete');
+    Log.ok('DKG complete.');
 
     // 2. Init Wallet
     final wallet = MpcBitcoinWallet(client1, isTestnet: true);
     await wallet.init();
 
     final address = wallet.toAddressCustom(hrp: 'bcrt');
-    print('Wallet Address: $address');
+    Log.info('Wallet address: $address');
 
     // 3. Fund Wallet
-    print('2. Funding Wallet 1');
+    Log.step(2, 'Funding Wallet');
     final minerAddr = await btc.getNewAddress();
     await btc.generateToAddress(101, minerAddr);
 
     final txId = await btc.sendToAddress(address, 1.0);
-    print('Funded Wallet 1 with $txId');
+    Log.ok('Funded wallet · txid: $txId');
     await btc.generateToAddress(1, minerAddr);
 
     // 4. Sync Wallet
-    print('3. Syncing Wallet 1');
+    Log.step(3, 'Syncing Wallet');
     try {
       int retries = 30;
       while (retries > 0) {
@@ -203,9 +204,9 @@ void main() {
           await wallet.sync();
           final utxos = await wallet.store.getUtxos();
           if (utxos.isNotEmpty) break;
-          print("Synced 0 UTXOs from server. Retrying... ($retries left)");
+          Log.warn("Synced 0 UTXOs from server — retrying… ($retries left)");
         } catch (e) {
-          print("Sync error: $e, retrying...");
+          Log.warn("Sync error: $e — retrying…");
         }
         retries--;
         if (retries > 0) await Future.delayed(Duration(seconds: 2));
@@ -216,68 +217,59 @@ void main() {
         // Debug: Check Bitcoind direct view
         try {
           final scan = await btc.scanUtxos(address);
-          print("DEBUG: Bitcoind scanUtxos for $address: $scan");
+          Log.debug("Bitcoind scanUtxos for $address: $scan");
         } catch (e) {
-          print("DEBUG: scanUtxos failed: $e");
+          Log.debug("scanUtxos failed: $e");
         }
 
         // Dump logs
         final logs = await Process.run('docker', ['logs', 'mpc_electrs']);
-        print("DEBUG: Electrs Logs:\n${logs.stdout}\n${logs.stderr}");
+        Log.warn("Electrs logs:\n${logs.stdout}\n${logs.stderr}");
       }
 
       expect(utxos.length, greaterThanOrEqualTo(1));
-      print(
-          'Synced: ${utxos.length} UTXOs. Balance: ${utxos.fold(BigInt.zero, (s, u) => s + u.utxo.value)}');
+      final balance = utxos.fold(BigInt.zero, (s, u) => s + u.utxo.value);
+      Log.ok('Synced ${utxos.length} UTXO(s) · balance: $balance sats');
     } catch (e) {
       fail("Failed to sync wallet: $e");
     }
 
     // 5. Initial Spend (Normal)
-    print('4. Normal Spend (100,000 sats)');
+    Log.step(4, 'Normal Spend (10,000 sats)');
     final dest1 = await btc.getNewAddress();
-    // Using wallet helper
     final unsignedTx1 = await wallet.createTransaction(
         destination: dest1, amount: BigInt.from(10000), feeRate: 1);
     final hexTx1 = await wallet.signTransaction(unsignedTx1);
     final tx1Id = await wallet.broadcast(hexTx1);
-    print('Normal Spend Broadcast: $tx1Id');
+    Log.ok('Broadcast · txid: $tx1Id');
     await btc.generateToAddress(1, minerAddr);
     await waitForUtxoByTxId(wallet, tx1Id);
 
-    // 6. Create Spending Policy (Threshold 50,000 sats)
-    // History is now 10,000 sats spend.
-    // Next transaction should trigger Policy.
-    print('5. Creating Spending Policy (Limit 50,000 sats)');
+    // 6. Create Spending Policy
+    Log.step(5, 'Creating Spending Policy (limit: 50,000 sats)');
     final interval = Duration(hours: 1);
     const pin = "123456";
     final limit = Int64(50000);
 
-    // Create policy on server
     await client1.createSpendingPolicy(interval, limit, pin);
-    print('Spending Policy Created. PIN protected.');
+    Log.ok('Spending policy created (PIN-protected).');
 
-    // 7. Attempt Spend exceeding limit (Wallet API -> Should Fail)
-    print('6. Attempting Spend (60,000 sats) via Wallet API (Expect Failure)');
-    // Current window usage: 10,000. Limit 50,000. Any spend triggers policy.
+    // 7. Attempt Spend exceeding limit (should fail)
+    Log.step(6, 'Attempting Over-Limit Spend (60,000 sats) — expect failure');
     bool failed = false;
     try {
       final dest2 = await btc.getNewAddress();
       final unsignedTx2 = await wallet.createTransaction(
           destination: dest2, amount: BigInt.from(60000), feeRate: 1);
-
       await wallet.signTransaction(unsignedTx2);
     } catch (e) {
-      print('Expected Failure Caught: $e');
+      Log.warn('Expected failure caught: $e');
       failed = true;
     }
     expect(failed, isTrue, reason: "Transaction should fail without PIN");
 
-    // 8. Spend with PIN (Manual Construction)
-    print('7. Spending with PIN (Manual Construction)');
-    // We need to manually construct the transaction and call client.sign with PIN.
-
-    // a. Select Inputs
+    // 8. Spend with PIN
+    Log.step(7, 'Spending with PIN (60,000 sats)');
     await waitForUtxoByTxId(wallet, tx1Id);
 
     final dest3 = await btc.getNewAddress();
@@ -287,68 +279,68 @@ void main() {
     final hexTx2 =
         await wallet.signTransaction(unsignedTx2, policyId: policyId, pin: pin);
     final tx2Id = await wallet.broadcast(hexTx2);
-    print('Normal Spend Broadcast: $tx2Id');
+    Log.ok('Broadcast · txid: $tx2Id');
     await btc.generateToAddress(1, minerAddr);
 
-    // Wait for Electrs to index the new block
     await waitForUtxoByTxId(wallet, tx2Id);
     await wallet.sync();
 
     final balance = await wallet.store
         .getUtxos()
         .then((l) => l.fold(BigInt.zero, (s, u) => s + u.utxo.value).toInt());
+    Log.info('Final balance: $balance sats');
 
-    print('Final Balance: ${balance}');
     final res = await btc.getRawTransaction(tx2Id);
     expect(res['confirmations'], 1);
 
     // 9. Restore wallet (simulate new phone)
-    print('8. Restoring wallet via re-DKG');
+    Log.step(8, 'Restoring Wallet via re-DKG');
     final originalAddress = address;
     final client2 = MpcClient(channel, hardwareSigner: signer, storageId: 'restore_e2e');
     await client2.doRestore();
-    print('   Restore Complete');
+    Log.ok('Restore complete.');
 
     final wallet2 = MpcBitcoinWallet(client2, isTestnet: true);
     await wallet2.init();
     final restoredAddress = wallet2.toAddressCustom(hrp: 'bcrt');
-    print('   Restored Address: $restoredAddress');
+    Log.info('Restored address: $restoredAddress');
     expect(restoredAddress, equals(originalAddress),
         reason: "Restored wallet must have the same Bitcoin address");
 
     // 10. Sync restored wallet
-    // Wait for init()'s background sync to settle to avoid auth replay
     await Future.delayed(Duration(seconds: 2));
-    print('9. Syncing restored wallet');
+    Log.step(9, 'Syncing Restored Wallet');
     int syncRetries = 30;
     while (syncRetries > 0) {
       try {
         await wallet2.sync();
       } catch (e) {
-        print('   Sync error (retrying): $e');
+        Log.warn('Sync error (retrying): $e');
         syncRetries--;
         if (syncRetries > 0) await Future.delayed(Duration(seconds: 2));
         continue;
       }
       final utxos = await wallet2.store.getUtxos();
       if (utxos.isNotEmpty) break;
-      print('   Waiting for UTXO... ($syncRetries left)');
+      Log.info('Waiting for UTXO… ($syncRetries left)');
       syncRetries--;
       if (syncRetries > 0) await Future.delayed(Duration(seconds: 2));
     }
     final restoredUtxos = await wallet2.store.getUtxos();
     expect(restoredUtxos.length, greaterThanOrEqualTo(1),
         reason: "Restored wallet should see existing UTXOs");
-    print('   Balance: ${restoredUtxos.fold(BigInt.zero, (s, u) => s + u.utxo.value)} sats');
+    final restoredBalance =
+        restoredUtxos.fold(BigInt.zero, (s, u) => s + u.utxo.value);
+    Log.ok('Restored balance: $restoredBalance sats');
 
     // 11. Sign with restored wallet
-    print('10. Signing transaction with restored wallet');
+    Log.step(10, 'Signing Transaction with Restored Wallet');
     final dest4 = await btc.getNewAddress();
     final unsignedTx3 = await wallet2.createTransaction(
         destination: dest4, amount: BigInt.from(10000), feeRate: 1);
     final hexTx3 = await wallet2.signTransaction(unsignedTx3);
     final tx3Id = await wallet2.broadcast(hexTx3);
-    print('    Broadcast: $tx3Id');
+    Log.ok('Broadcast · txid: $tx3Id');
     await btc.generateToAddress(1, minerAddr);
 
     await Future.delayed(Duration(seconds: 2));
@@ -356,6 +348,7 @@ void main() {
     expect(res2['confirmations'], 1,
         reason: "Post-restore transaction should be confirmed");
 
-    print('Testing Complete.');
+    Log.separator();
+    Log.ok('All tests passed.');
   }, timeout: Timeout(Duration(minutes: 10)));
 }

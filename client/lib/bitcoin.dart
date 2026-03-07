@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 import 'package:blockchain_utils/blockchain_utils.dart'
     hide hex; // For Regtest address encoding
@@ -71,7 +72,7 @@ class MpcBitcoinWallet {
       await sync();
       await onSyncComplete?.call();
     } catch (e) {
-      print("Error during initial sync: $e");
+      stderr.writeln('[WARN] bitcoin: initial sync error: $e');
     }
     subscribe();
   }
@@ -79,12 +80,12 @@ class MpcBitcoinWallet {
   /// Explicitly runs the DKG protocol.
   /// Call this when creating a fresh wallet or resetting.
   Future<void> initializeNewWallet() async {
-    print("Initializing new wallet...");
+    stderr.writeln('[INFO] bitcoin: initializing new wallet…');
     if (!client.isInitialized) {
-      print("Client not initialized. Running DKG...");
+      stderr.writeln('[INFO] bitcoin: client not initialized — running DKG…');
       await client.doDkg();
     } else {
-      print("Client already initialized. Skipping DKG.");
+      stderr.writeln('[INFO] bitcoin: client already initialized, skipping DKG.');
     }
   }
 
@@ -306,7 +307,7 @@ class MpcBitcoinWallet {
     try {
       _transactions = await client.fetchRecentTransactions();
     } catch (e) {
-      print("Error fetching recent transactions: $e");
+      stderr.writeln('[WARN] bitcoin: error fetching recent transactions: $e');
     }
 
     // 2. Convert to UtxoWithAddress
@@ -354,10 +355,10 @@ class MpcBitcoinWallet {
       sync().then((_) async {
         await onSyncComplete?.call();
       }).catchError((e) {
-        print("Error during notification sync: $e");
+        stderr.writeln('[WARN] bitcoin: notification sync error: $e');
       });
     }, onError: (e) {
-      print("History Subscription Error: $e");
+      stderr.writeln('[WARN] bitcoin: history subscription error: $e');
     });
   }
 

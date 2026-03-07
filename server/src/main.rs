@@ -37,7 +37,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    use std::io::IsTerminal as _;
+    tracing_subscriber::fmt()
+        .with_timer(tracing_subscriber::fmt::time::uptime())
+        .with_target(false)
+        .with_ansi(std::io::stderr().is_terminal())
+        .compact()
+        .init();
 
     let args = Args::parse();
 

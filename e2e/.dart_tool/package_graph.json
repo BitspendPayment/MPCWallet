@@ -7,6 +7,7 @@
       "name": "e2e",
       "version": "1.0.0",
       "dependencies": [
+        "args",
         "bitcoin_base",
         "blockchain_utils",
         "client",
@@ -51,6 +52,11 @@
         "webkit_inspection_protocol",
         "yaml"
       ]
+    },
+    {
+      "name": "args",
+      "version": "2.7.0",
+      "dependencies": []
     },
     {
       "name": "hive",
@@ -522,11 +528,6 @@
         "async",
         "path"
       ]
-    },
-    {
-      "name": "args",
-      "version": "2.7.0",
-      "dependencies": []
     },
     {
       "name": "term_glyph",

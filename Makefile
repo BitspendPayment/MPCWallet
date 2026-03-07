@@ -1,4 +1,4 @@
-.PHONY: regtest-up regtest-down regtest regtest-hardware proto bitcoin-init signer-build signer-run signer-stop pico-build pico-flash pico-test flutter-run threshold-ffi-build threshold-test threshold-ffi-test e2e-test cosigner-build server-build server-run server-stop crypto-bench stress-test
+.PHONY: regtest-up regtest-down regtest regtest-hardware proto bitcoin-init signer-build signer-run signer-stop pico-build pico-flash pico-test flutter-run threshold-ffi-build threshold-test threshold-ffi-test e2e-test cosigner-build server-build server-run server-stop crypto-bench stress-test load-test
 
 # Rust and Flutter environment for sudo compatibility
 export RUSTUP_HOME=/home/ehis/.rustup
@@ -29,6 +29,7 @@ regtest-down:
 # Build the hardware signer test server
 signer-build:
 	@echo "Building Hardware Signer Test Server..."
+	-sudo chown -R $(USER):$(USER) e2e/signer-server/target 2>/dev/null || true
 	cd e2e/signer-server && cargo build --release
 
 # Run the hardware signer test server (background, default port 9090)
@@ -168,5 +169,27 @@ crypto-bench:
 stress-test: server-stop signer-stop regtest-up bitcoin-init signer-run server-run
 	@echo "Running Multi-User E2E Stress Test..."
 	cd e2e && dart test test/multi_user_stress_test.dart
+	@$(MAKE) server-stop
+	@$(MAKE) signer-stop
+
+# Run Dart load tester using real MpcClient + TcpHardwareSigner (like the e2e tests)
+# Variables:
+#   SESSIONS     – total DKG sessions to complete  (default: 10)
+#   CONCURRENCY  – max sessions in flight at once   (default: 5)
+#   SIGNER_PORT  – base signer-server TCP port       (default: 9090)
+#   SERVER       – gRPC server address               (default: 127.0.0.1:50051)
+SESSIONS    ?= 10
+CONCURRENCY ?= 5
+SIGNER_PORT ?= 9090
+SERVER      ?= 127.0.0.1:50051
+load-test: server-stop signer-stop regtest-up bitcoin-init signer-run server-run
+	@echo "Running Dart Load Tester (sessions=$(SESSIONS), concurrency=$(CONCURRENCY))..."
+	cd e2e && dart pub get && \
+		dart run bin/load_tester.dart \
+			--server $(SERVER) \
+			--signer-host 127.0.0.1 \
+			--signer-port $(SIGNER_PORT) \
+			--sessions $(SESSIONS) \
+			--concurrency $(CONCURRENCY)
 	@$(MAKE) server-stop
 	@$(MAKE) signer-stop
