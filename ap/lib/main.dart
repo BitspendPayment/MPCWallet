@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'theme/app_theme.dart';
@@ -22,7 +23,17 @@ import 'screens/ark/ark_board_screen.dart';
 import 'package:provider/provider.dart';
 import 'services/mpc_service.dart';
 
+class _AllowSelfSignedCerts extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (cert, host, port) => true;
+  }
+}
+
 void main() {
+  // Accept self-signed TLS certificates (enclave uses self-signed certs).
+  HttpOverrides.global = _AllowSelfSignedCerts();
   runApp(
     MultiProvider(
       providers: [

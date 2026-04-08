@@ -99,8 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("Failed to download WASM: {e}"))?
             .bytes()
             .await?;
-        std::fs::write(&local_path, &bytes)?;
-        tracing::info!("Downloaded {} bytes to {}", bytes.len(), local_path.display());
+                            std::fs::write(&local_path, &bytes)?;
+                            tracing::info!("Downloaded {} bytes to {}", bytes.len(), local_path.display());
         local_path.to_string_lossy().into_owned()
     } else {
         wasm_source

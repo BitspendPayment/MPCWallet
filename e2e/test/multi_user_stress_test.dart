@@ -109,7 +109,6 @@ void main() {
     Log.separator();
     Log.ok('Multi-User Stress Test complete.');
     await Future.wait([signerA.disconnect(), signerB.disconnect()]);
-    await channel.terminate();
   }, timeout: Timeout(Duration(minutes: 10)));
 }
 

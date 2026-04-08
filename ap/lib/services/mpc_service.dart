@@ -4,6 +4,8 @@ import 'package:path_provider/path_provider.dart';
 import 'package:client/ark_wallet.dart';
 import 'package:client/bitcoin.dart';
 import 'package:client/client.dart';
+import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
+import 'package:client/enclave/manifest.dart' as manifest;
 import 'package:client/hardware_signer.dart';
 import 'package:client/policy.dart';
 import '../usb/usb_hardware_signer.dart';
@@ -101,7 +103,43 @@ class MpcService extends ChangeNotifier {
   String _host = '10.0.2.2'; // Default, will be overwritten by persistence
   static const int _port = 7074;
 
-  String get _baseUrl => 'http://$_host:$_port';
+  /// GitHub repo for fetching deployment manifest (PCR0).
+  /// Set to empty to disable attestation (uses plain REST).
+  static const String _manifestRepo = 'BitspendPayment/MPCWallet';
+  static const String _manifestTag = 'eif-latest';
+
+  /// Cached PCR0 from the deployment manifest.
+  String? _expectedPcr0;
+
+  /// Base URL for the server.
+  /// Uses HTTPS (port 443) for remote hosts (enclave).
+  /// Uses HTTP (port 7074) for local addresses (dev).
+  String get _baseUrl {
+    final isLocal = _host == '127.0.0.1' ||
+        _host == 'localhost' ||
+        _host == '10.0.2.2' ||
+        _host.startsWith('192.168.');
+    return isLocal ? 'http://$_host:$_port' : 'https://$_host';
+  }
+
+  /// Attestation status from the enclave client (null if not using attested transport).
+  AttestationStatus? get attestationStatus => _client?.attestationStatus;
+
+  /// The expected PCR0 (from manifest). Null if not yet fetched.
+  String? get expectedPcr0 => _expectedPcr0;
+
+  /// Fetch PCR0 from the deployment manifest.
+  Future<void> fetchManifest() async {
+    if (_manifestRepo.isEmpty) return;
+    try {
+      final m = await manifest.fetchManifest(_manifestRepo, tag: _manifestTag);
+      _expectedPcr0 = m.pcr0;
+      print('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
+    } catch (e) {
+      print('Warning: Could not fetch manifest: $e');
+      // Continue without attestation -- will use plain REST.
+    }
+  }
 
   Future<void> _ensurePersistenceInitialized() async {
     _persistenceInitFuture ??= () async {
@@ -123,8 +161,12 @@ class MpcService extends ChangeNotifier {
       _host = _identityBox!.get('serverHost', defaultValue: '10.0.2.2');
       print("MPC Service: Using host: $_host");
 
+      // Fetch deployment manifest for enclave PCR0 (non-blocking on failure).
+      await fetchManifest();
+
       _dkgComplete = _identityBox!.get('dkgComplete', defaultValue: false);
-      _network = _identityBox!.get('network', defaultValue: 'regtest') as String;
+      _network =
+          _identityBox!.get('network', defaultValue: 'regtest') as String;
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
@@ -173,6 +215,20 @@ class MpcService extends ChangeNotifier {
     return UsbHardwareSigner();
   }
 
+  /// Create an MpcClient using REST transport.
+  /// TLS for self-signed enclave certs is handled by HttpOverrides in main.dart.
+  /// Attestation verification is done separately via the enclave-ffi.
+  MpcClient _createMpcClient({
+    required HardwareSignerInterface hardwareSigner,
+    String? storageId,
+  }) {
+    return MpcClient.rest(
+      _baseUrl,
+      hardwareSigner: hardwareSigner,
+      storageId: storageId,
+    );
+  }
+
   Future<void> doDkg() async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
 
@@ -186,12 +242,12 @@ class MpcService extends ChangeNotifier {
     _hardwareSigner = _createSigner();
     await _hardwareSigner!.connect();
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();
@@ -217,22 +273,22 @@ class MpcService extends ChangeNotifier {
     await _hardwareSigner!.connect();
     debugPrint("[RESTORE] Hardware signer connected.");
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
 
     debugPrint("[RESTORE] Starting re-DKG...");
     // Re-DKG: derive new shares from existing secrets on HW + server
     await _client!.doRestore().timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => throw StateError(
-          'Restore timed out. Check that the server is running and ADB reverse is set up.'),
-    );
+          const Duration(seconds: 30),
+          onTimeout: () => throw StateError(
+              'Restore timed out. Check that the server is running and ADB reverse is set up.'),
+        );
     debugPrint("[RESTORE] Re-DKG complete.");
 
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     // init() will find restored state and skip DKG, then sync
@@ -266,12 +322,12 @@ class MpcService extends ChangeNotifier {
       }
     }
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();

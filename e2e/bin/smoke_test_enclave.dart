@@ -27,6 +27,9 @@ void main(List<String> args) async {
     exit(1);
   }
 
+  // Allow self-signed certs (enclaves use self-signed TLS)
+  HttpOverrides.global = _AllowAllCerts();
+
   final baseUrl = args[0].replaceAll(RegExp(r'/+$'), '');
   print('=== Enclave Smoke Test ===');
   print('Target: $baseUrl');
@@ -86,5 +89,13 @@ void main(List<String> args) async {
     try {
       await tempDir.delete(recursive: true);
     } catch (_) {}
+  }
+}
+
+class _AllowAllCerts extends HttpOverrides {
+  @override
+  HttpClient createHttpClient(SecurityContext? context) {
+    return super.createHttpClient(context)
+      ..badCertificateCallback = (cert, host, port) => true;
   }
 }

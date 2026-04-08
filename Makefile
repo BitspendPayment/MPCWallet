@@ -11,7 +11,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .PHONY: e2e e2e-ark hardware hardware-ark flash down \
-	ffi-build ffi-android threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android \
+	ffi-build ffi-android threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android enclave-ffi-build enclave-ffi-android \
 	cosigner-build server-build signer-build pico-build \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	signer-run signer-stop server-run server-stop \
@@ -130,9 +130,9 @@ down:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Combined FFI builds
-ffi-build: threshold-ffi-build ark-ffi-build
+ffi-build: threshold-ffi-build ark-ffi-build enclave-ffi-build
 
-ffi-android: threshold-ffi-android ark-ffi-android
+ffi-android: threshold-ffi-android ark-ffi-android enclave-ffi-android
 
 # Individual FFI builds
 threshold-ffi-build:
@@ -162,6 +162,20 @@ ark-ffi-android:
 	cp ark-ffi/target/aarch64-linux-android/release/libark_ffi.so \
 		ap/android/app/src/main/jniLibs/arm64-v8a/
 	@echo "Installed: ap/android/app/src/main/jniLibs/arm64-v8a/libark_ffi.so"
+
+enclave-ffi-build:
+	@echo "Building enclave-ffi..."
+	cd enclave-ffi && cargo build --release
+	@echo "Built: enclave-ffi/target/release/libenclave_ffi.so"
+
+enclave-ffi-android:
+	@echo "Building enclave-ffi for Android arm64..."
+	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
+	cd enclave-ffi && cargo build --release --target aarch64-linux-android
+	mkdir -p ap/android/app/src/main/jniLibs/arm64-v8a
+	cp enclave-ffi/target/aarch64-linux-android/release/libenclave_ffi.so \
+		ap/android/app/src/main/jniLibs/arm64-v8a/
+	@echo "Installed: ap/android/app/src/main/jniLibs/arm64-v8a/libenclave_ffi.so"
 
 # Server & cosigner
 cosigner-build:
