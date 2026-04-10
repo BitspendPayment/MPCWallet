@@ -7,8 +7,8 @@ import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
 /// Shows PCR0, verification state (verified/unverified/verifying),
 /// and a countdown timer to the next attestation check.
 class AttestationStatusWidget extends StatefulWidget {
-  /// Function to poll the current attestation status.
-  final AttestationStatus? Function() statusProvider;
+  /// Async function to poll the current attestation status.
+  final Future<AttestationStatus?> Function() statusProvider;
 
   const AttestationStatusWidget({super.key, required this.statusProvider});
 
@@ -24,14 +24,16 @@ class _AttestationStatusWidgetState extends State<AttestationStatusWidget> {
   @override
   void initState() {
     super.initState();
-    _status = widget.statusProvider();
+    _pollStatus();
     // Refresh every second for the countdown timer.
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      final newStatus = widget.statusProvider();
-      if (mounted) {
-        setState(() => _status = newStatus);
-      }
-    });
+    _timer = Timer.periodic(const Duration(seconds: 1), (_) => _pollStatus());
+  }
+
+  void _pollStatus() async {
+    final newStatus = await widget.statusProvider();
+    if (mounted) {
+      setState(() => _status = newStatus);
+    }
   }
 
   @override
@@ -45,7 +47,6 @@ class _AttestationStatusWidgetState extends State<AttestationStatusWidget> {
     final status = _status;
 
     if (status == null) {
-      // Not using attested transport -- don't show anything.
       return const SizedBox.shrink();
     }
 

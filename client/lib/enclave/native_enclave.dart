@@ -27,6 +27,9 @@ typedef _GetDart = Pointer<Utf8> Function(Pointer<Void>, Pointer<Utf8>);
 typedef _StatusNative = Pointer<Utf8> Function(Pointer<Void>);
 typedef _StatusDart = Pointer<Utf8> Function(Pointer<Void>);
 
+typedef _VerifyNative = Pointer<Utf8> Function(Pointer<Void>);
+typedef _VerifyDart = Pointer<Utf8> Function(Pointer<Void>);
+
 typedef _FreeClientNative = Void Function(Pointer<Void>);
 typedef _FreeClientDart = void Function(Pointer<Void>);
 
@@ -37,17 +40,17 @@ typedef _FreeStringDart = void Function(Pointer<Utf8>);
 class AttestationStatus {
   final bool verified;
   final String pcr0;
-  final int? lastVerifiedAtSecs;
+  final int verifiedAtEpochSecs;
   final int ttlRemainingSecs;
-  final String? attestationPubkey;
+  final String attestationKey;
   final String? error;
 
   AttestationStatus({
     required this.verified,
     required this.pcr0,
-    this.lastVerifiedAtSecs,
+    required this.verifiedAtEpochSecs,
     required this.ttlRemainingSecs,
-    this.attestationPubkey,
+    required this.attestationKey,
     this.error,
   });
 
@@ -55,14 +58,18 @@ class AttestationStatus {
     return AttestationStatus(
       verified: json['verified'] as bool? ?? false,
       pcr0: json['pcr0'] as String? ?? '',
-      lastVerifiedAtSecs: json['last_verified_at_secs'] as int?,
+      verifiedAtEpochSecs: json['verified_at_epoch_secs'] as int? ?? 0,
       ttlRemainingSecs: json['ttl_remaining_secs'] as int? ?? 0,
-      attestationPubkey: json['attestation_pubkey'] as String?,
+      attestationKey: json['attestation_key'] as String? ?? '',
       error: json['error'] as String?,
     );
   }
 
   Duration get ttlRemaining => Duration(seconds: ttlRemainingSecs);
+
+  DateTime? get verifiedAt => verifiedAtEpochSecs > 0
+      ? DateTime.fromMillisecondsSinceEpoch(verifiedAtEpochSecs * 1000)
+      : null;
 }
 
 /// Response from an attested HTTP request.
@@ -100,6 +107,7 @@ class NativeEnclaveClient {
   late final _PostDart _post;
   late final _GetDart _get;
   late final _StatusDart _status;
+  late final _VerifyDart _verify;
   late final _FreeClientDart _freeClient;
   late final _FreeStringDart _freeString;
   bool _disposed = false;
@@ -118,6 +126,8 @@ class NativeEnclaveClient {
     _get = lib.lookupFunction<_GetNative, _GetDart>('enclave_client_get');
     _status =
         lib.lookupFunction<_StatusNative, _StatusDart>('enclave_client_attestation_status');
+    _verify =
+        lib.lookupFunction<_VerifyNative, _VerifyDart>('enclave_client_verify');
     _freeClient =
         lib.lookupFunction<_FreeClientNative, _FreeClientDart>('enclave_client_free');
     _freeString =
@@ -178,6 +188,18 @@ class NativeEnclaveClient {
   AttestationStatus get attestationStatus {
     _checkDisposed();
     final resultPtr = _status(_ptr);
+    try {
+      final json = jsonDecode(resultPtr.toDartString()) as Map<String, dynamic>;
+      return AttestationStatus.fromJson(json);
+    } finally {
+      _freeString(resultPtr);
+    }
+  }
+
+  /// Force re-verification of attestation and update the cache.
+  AttestationStatus verify() {
+    _checkDisposed();
+    final resultPtr = _verify(_ptr);
     try {
       final json = jsonDecode(resultPtr.toDartString()) as Map<String, dynamic>;
       return AttestationStatus.fromJson(json);

@@ -122,8 +122,16 @@ class MpcService extends ChangeNotifier {
     return isLocal ? 'http://$_host:$_port' : 'https://$_host';
   }
 
+  /// Cached attestation status for immediate UI access.
+  AttestationStatus? _lastAttestationStatus;
+
   /// Attestation status from the enclave client (null if not using attested transport).
-  AttestationStatus? get attestationStatus => _client?.attestationStatus;
+  /// Caches the result so the UI doesn't flicker on widget rebuilds.
+  Future<AttestationStatus?> getAttestationStatus() async {
+    final status = await _client?.getAttestationStatus();
+    if (status != null) _lastAttestationStatus = status;
+    return _lastAttestationStatus;
+  }
 
   /// The expected PCR0 (from manifest). Null if not yet fetched.
   String? get expectedPcr0 => _expectedPcr0;
@@ -215,13 +223,21 @@ class MpcService extends ChangeNotifier {
     return UsbHardwareSigner();
   }
 
-  /// Create an MpcClient using REST transport.
-  /// TLS for self-signed enclave certs is handled by HttpOverrides in main.dart.
-  /// Attestation verification is done separately via the enclave-ffi.
-  MpcClient _createMpcClient({
+  /// Create an MpcClient with the appropriate transport.
+  /// Uses attested transport (background isolate FFI) if PCR0 is available,
+  /// plain REST otherwise.
+  Future<MpcClient> _createMpcClient({
     required HardwareSignerInterface hardwareSigner,
     String? storageId,
-  }) {
+  }) async {
+    if (_expectedPcr0 != null && _expectedPcr0!.isNotEmpty) {
+      return MpcClient.attested(
+        _baseUrl,
+        expectedPcr0: _expectedPcr0!,
+        hardwareSigner: hardwareSigner,
+        storageId: storageId,
+      );
+    }
     return MpcClient.rest(
       _baseUrl,
       hardwareSigner: hardwareSigner,
@@ -242,7 +258,7 @@ class MpcService extends ChangeNotifier {
     _hardwareSigner = _createSigner();
     await _hardwareSigner!.connect();
 
-    _client = _createMpcClient(
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
       storageId: storageId,
     );
@@ -273,7 +289,7 @@ class MpcService extends ChangeNotifier {
     await _hardwareSigner!.connect();
     debugPrint("[RESTORE] Hardware signer connected.");
 
-    _client = _createMpcClient(
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
       storageId: storageId,
     );
@@ -322,7 +338,7 @@ class MpcService extends ChangeNotifier {
       }
     }
 
-    _client = _createMpcClient(
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
       storageId: storageId,
     );

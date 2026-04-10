@@ -120,7 +120,8 @@ class MpcClient {
 
   /// Create an MpcClient using attested REST transport (enclave FFI).
   /// Verifies enclave attestation (PCR0) and response signatures (BIP-340).
-  MpcClient.attested(
+  /// FFI runs in a background isolate -- non-blocking.
+  static Future<MpcClient> attested(
     String baseUrl, {
     required String expectedPcr0,
     int maxSigners = 3,
@@ -129,8 +130,29 @@ class MpcClient {
     HiveCipher? encryptionCipher,
     required HardwareSignerInterface hardwareSigner,
     int cacheTtlSecs = 60,
-  })  : _stub = AttestedWalletApi(baseUrl,
-            expectedPcr0: expectedPcr0, cacheTtlSecs: cacheTtlSecs),
+  }) async {
+    final api = await AttestedWalletApi.create(baseUrl,
+        expectedPcr0: expectedPcr0, cacheTtlSecs: cacheTtlSecs);
+    final client = MpcClient._internal(
+      stub: api,
+      maxSigners: maxSigners,
+      minSigners: minSigners,
+      hardwareSigner: hardwareSigner,
+      storageId: storageId,
+      encryptionCipher: encryptionCipher,
+    );
+    return client;
+  }
+
+  /// Internal constructor used by the async `attested()` factory.
+  MpcClient._internal({
+    required WalletApi stub,
+    required int maxSigners,
+    required int minSigners,
+    required HardwareSignerInterface hardwareSigner,
+    String? storageId,
+    HiveCipher? encryptionCipher,
+  })  : _stub = stub,
         _maxSigners = maxSigners,
         _minSigners = minSigners,
         _hardwareSigner = hardwareSigner,
@@ -142,10 +164,11 @@ class MpcClient {
   }
 
   /// Get the attestation status (only available with `MpcClient.attested()`).
-  AttestationStatus? get attestationStatus {
+  /// Returns a Future since the FFI runs in a background isolate.
+  Future<AttestationStatus?> getAttestationStatus() async {
     final stub = _stub;
     if (stub is AttestedWalletApi) {
-      return stub.attestationStatus;
+      return stub.getAttestationStatus();
     }
     return null;
   }

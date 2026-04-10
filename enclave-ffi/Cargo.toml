@@ -7,7 +7,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-enclave-client = { git = "https://github.com/ArkLabsHQ/introspector-enclave", tag = "v0.0.65" }
+enclave-client = { path = "../enclave-client" }
 tokio = { version = "1", features = ["rt"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }

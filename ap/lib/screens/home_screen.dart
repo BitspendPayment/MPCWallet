@@ -45,7 +45,7 @@ class HomeScreen extends StatelessWidget {
           children: [
             // Attestation status (only shown when using attested transport)
             AttestationStatusWidget(
-              statusProvider: () => mpcService.attestationStatus,
+              statusProvider: () => mpcService.getAttestationStatus(),
             ),
             const SizedBox(height: 24),
             // Balance Card

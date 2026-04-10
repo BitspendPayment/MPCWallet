@@ -1,4 +1,5 @@
-/// Attested REST transport that routes HTTP through the enclave FFI client.
+/// Attested REST transport that routes HTTP through the enclave FFI client
+/// running in a background isolate (non-blocking).
 ///
 /// Every request is verified against the enclave's attestation document (PCR0)
 /// and response signatures are checked (BIP-340 Schnorr).
@@ -6,7 +7,8 @@ library;
 
 import 'dart:convert';
 
-import 'enclave/native_enclave.dart';
+import 'enclave/async_enclave.dart';
+import 'enclave/native_enclave.dart' show AttestationStatus;
 import 'rest_wallet_api.dart';
 import 'wallet_api.dart';
 import 'package:protocol/protocol.dart';
@@ -14,41 +16,61 @@ import 'package:protocol/protocol.dart';
 /// WalletApi implementation that uses the enclave FFI client for attested HTTP.
 ///
 /// Delegates all serialization to [RestWalletApi] but routes HTTP through
-/// [NativeEnclaveClient] for attestation verification + response signing.
+/// [AsyncEnclaveClient] for attestation verification + response signing.
+/// FFI calls run in a background isolate to avoid blocking the main thread.
 class AttestedWalletApi implements WalletApi {
-  final NativeEnclaveClient _enclave;
+  final AsyncEnclaveClient _enclave;
   final RestWalletApi _inner;
 
-  AttestedWalletApi(String baseUrl,
-      {required String expectedPcr0, int cacheTtlSecs = 60})
-      : _enclave = NativeEnclaveClient(baseUrl, expectedPcr0,
-            cacheTtlSecs: cacheTtlSecs),
-        _inner = RestWalletApi.withPostFn(baseUrl, _placeholder) {
-    // Replace the placeholder with the real enclave-backed POST function.
-    _inner.customPost = _attestedPost;
+  AttestedWalletApi._(this._enclave, this._inner);
+
+  /// Create an attested wallet API.
+  /// Must be called with `await` -- initializes the background isolate.
+  static Future<AttestedWalletApi> create(
+    String baseUrl, {
+    required String expectedPcr0,
+    int cacheTtlSecs = 60,
+  }) async {
+    final enclave = await AsyncEnclaveClient.create(
+      baseUrl, expectedPcr0,
+      cacheTtlSecs: cacheTtlSecs,
+    );
+    final inner = RestWalletApi.withPostFn(baseUrl, (path, body) async {
+      // Retry once on transient errors (attestation warmup, connection reset).
+      for (var attempt = 0; attempt < 2; attempt++) {
+        final resp = await enclave.post(path, jsonEncode(body));
+        if (resp.error != null || resp.statusCode == 0) {
+          if (attempt == 0) {
+            print('[AttestedWalletApi] Retrying $path (err: ${resp.error})');
+            continue;
+          }
+          throw Exception(resp.error ?? 'Enclave request failed');
+        }
+        if (resp.body.isEmpty) {
+          throw Exception('Empty response from enclave (HTTP ${resp.statusCode})');
+        }
+        if (resp.statusCode != 200) {
+          try {
+            final errBody = jsonDecode(resp.body);
+            throw Exception(
+                errBody['error'] ?? 'HTTP ${resp.statusCode}: ${resp.body}');
+          } catch (e) {
+            if (e is Exception) rethrow;
+            throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
+          }
+        }
+        return jsonDecode(resp.body) as Map<String, dynamic>;
+      }
+      throw Exception('Enclave request failed after retries');
+    });
+    return AttestedWalletApi._(enclave, inner);
   }
 
   /// Current attestation status for UI display.
-  AttestationStatus get attestationStatus => _enclave.attestationStatus;
+  Future<AttestationStatus> getAttestationStatus() =>
+      _enclave.getAttestationStatus();
 
-  Future<Map<String, dynamic>> _attestedPost(
-      String path, Map<String, dynamic> body) async {
-    final resp = _enclave.post(path, jsonEncode(body));
-    if (resp.error != null) {
-      throw Exception(resp.error);
-    }
-    if (resp.statusCode != 200) {
-      final errBody = jsonDecode(resp.body);
-      throw Exception(errBody['error'] ?? 'HTTP ${resp.statusCode}: ${resp.body}');
-    }
-    return jsonDecode(resp.body) as Map<String, dynamic>;
-  }
-
-  static Future<Map<String, dynamic>> _placeholder(
-          String path, Map<String, dynamic> body) =>
-      throw StateError('not initialized');
-
-  // Delegate all WalletApi methods to _inner (which uses our attested POST).
+  // Delegate all WalletApi methods to _inner (which uses attested POST).
   @override
   Future<DKGStep1Response> dKGStep1(DKGStep1Request r) => _inner.dKGStep1(r);
   @override
@@ -104,6 +126,6 @@ class AttestedWalletApi implements WalletApi {
 
   @override
   Future<void> shutdown() async {
-    _enclave.dispose();
+    await _enclave.dispose();
   }
 }
