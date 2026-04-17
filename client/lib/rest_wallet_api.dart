@@ -26,16 +26,31 @@ Uint8List _unhex(String? s) {
   return Uint8List.fromList(bytes);
 }
 
+/// Function type for making HTTP POST requests.
+/// Used to allow different HTTP backends (plain http.Client vs enclave FFI).
+typedef PostFn = Future<Map<String, dynamic>> Function(
+    String path, Map<String, dynamic> body);
+
 class RestWalletApi implements WalletApi {
   final String baseUrl;
-  final http.Client _http;
+  final http.Client? _http;
+  PostFn? customPost;
 
   RestWalletApi(this.baseUrl, {http.Client? httpClient})
-      : _http = httpClient ?? http.Client();
+      : _http = httpClient ?? http.Client(),
+        customPost = null;
+
+  /// Create a RestWalletApi with a custom POST function (e.g. enclave FFI).
+  RestWalletApi.withPostFn(this.baseUrl, PostFn postFn)
+      : _http = null,
+        customPost = postFn;
 
   Future<Map<String, dynamic>> _post(
       String path, Map<String, dynamic> body) async {
-    final resp = await _http.post(
+    if (customPost != null) {
+      return customPost!(path, body);
+    }
+    final resp = await _http!.post(
       Uri.parse('$baseUrl$path'),
       headers: {'content-type': 'application/json'},
       body: jsonEncode(body),
@@ -494,6 +509,6 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<void> shutdown() async {
-    _http.close();
+    _http?.close();
   }
 }

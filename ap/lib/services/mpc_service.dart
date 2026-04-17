@@ -1,9 +1,10 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:client/ark_wallet.dart';
 import 'package:client/bitcoin.dart';
 import 'package:client/client.dart';
+import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
+import 'package:client/enclave/manifest.dart' as manifest;
 import 'package:client/hardware_signer.dart';
 import 'package:client/policy.dart';
 import '../usb/usb_hardware_signer.dart';
@@ -90,7 +91,7 @@ class MpcService extends ChangeNotifier {
         _balance = await _wallet!.getBalance();
         _isConnected = true;
       } catch (e) {
-        print("Refresh failed: $e");
+        debugPrint("Refresh failed: $e");
         _isConnected = false;
       }
       notifyListeners();
@@ -101,7 +102,50 @@ class MpcService extends ChangeNotifier {
   String _host = '10.0.2.2'; // Default, will be overwritten by persistence
   static const int _port = 7074;
 
-  String get _baseUrl => 'http://$_host:$_port';
+  /// GitHub repo for fetching deployment manifest (PCR0).
+  /// Set to empty to disable attestation (uses plain REST).
+  static const String _manifestRepo = 'BitspendPayment/MPCWallet';
+  static const String _manifestTag = 'eif-latest';
+
+  /// Cached PCR0 from the deployment manifest.
+  String? _expectedPcr0;
+
+  /// Base URL for the server.
+  /// Uses HTTPS (port 443) for remote hosts (enclave).
+  /// Uses HTTP (port 7074) for local addresses (dev).
+  String get _baseUrl {
+    final isLocal = _host == '127.0.0.1' ||
+        _host == 'localhost' ||
+        _host == '10.0.2.2' ||
+        _host.startsWith('192.168.');
+    return isLocal ? 'http://$_host:$_port' : 'https://$_host';
+  }
+
+  /// Cached attestation status for immediate UI access.
+  AttestationStatus? _lastAttestationStatus;
+
+  /// Attestation status from the enclave client (null for local dev).
+  Future<AttestationStatus?> getAttestationStatus() async {
+    final status = await _client?.getAttestationStatus();
+    if (status != null) _lastAttestationStatus = status;
+    return _lastAttestationStatus;
+  }
+
+  /// The expected PCR0 (from manifest). Null if not yet fetched.
+  String? get expectedPcr0 => _expectedPcr0;
+
+  /// Fetch PCR0 from the deployment manifest.
+  /// Throws if the manifest cannot be fetched or PCR0 is invalid —
+  /// attestation is mandatory for non-local connections.
+  Future<void> fetchManifest() async {
+    if (_manifestRepo.isEmpty) return;
+    final m = await manifest.fetchManifest(_manifestRepo, tag: _manifestTag);
+    if (m.pcr0.length != 96 || !RegExp(r'^[a-f0-9]{96}$').hasMatch(m.pcr0)) {
+      throw StateError('Invalid PCR0 from manifest: ${m.pcr0.length} chars');
+    }
+    _expectedPcr0 = m.pcr0;
+    debugPrint('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
+  }
 
   Future<void> _ensurePersistenceInitialized() async {
     _persistenceInitFuture ??= () async {
@@ -121,10 +165,21 @@ class MpcService extends ChangeNotifier {
       _identityBox = await Hive.openBox('mpc_service_identity');
 
       _host = _identityBox!.get('serverHost', defaultValue: '10.0.2.2');
-      print("MPC Service: Using host: $_host");
+      debugPrint("MPC Service: Using host: $_host");
+
+      // Fetch deployment manifest for enclave PCR0.
+      // For remote hosts this is mandatory — failure will propagate.
+      // For local dev, manifest fetch failure is non-fatal.
+      try {
+        await fetchManifest();
+      } catch (e) {
+        if (_requiresAttestation) rethrow;
+        debugPrint('Manifest fetch skipped for local dev: $e');
+      }
 
       _dkgComplete = _identityBox!.get('dkgComplete', defaultValue: false);
-      _network = _identityBox!.get('network', defaultValue: 'regtest') as String;
+      _network =
+          _identityBox!.get('network', defaultValue: 'regtest') as String;
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
@@ -133,7 +188,7 @@ class MpcService extends ChangeNotifier {
 
       _isInitialized = true;
     } catch (e) {
-      print("MPC Service Error: $e");
+      debugPrint("MPC Service Error: $e");
       rethrow;
     }
   }
@@ -145,13 +200,13 @@ class MpcService extends ChangeNotifier {
       await _hardwareSigner?.disconnect();
       _hardwareSigner = null;
     } catch (e) {
-      print("MPC Service: Error disconnecting hardware signer: $e");
+      debugPrint("MPC Service: Error disconnecting hardware signer: $e");
     }
     try {
       await _identityBox?.close();
       _identityBox = null;
     } catch (e) {
-      print("MPC Service: Error closing identity box: $e");
+      debugPrint("MPC Service: Error closing identity box: $e");
     }
     super.dispose();
   }
@@ -159,7 +214,7 @@ class MpcService extends ChangeNotifier {
   Future<void> setHost(String host) async {
     if (_host == host && _isInitialized) return;
 
-    print("MPC Service: Switching host to $host");
+    debugPrint("MPC Service: Switching host to $host");
     _host = host;
 
     await _ensurePersistenceInitialized();
@@ -171,6 +226,41 @@ class MpcService extends ChangeNotifier {
 
   HardwareSignerInterface _createSigner() {
     return UsbHardwareSigner();
+  }
+
+  /// Whether the current host requires attestation.
+  bool get _requiresAttestation {
+    return !(_host == '127.0.0.1' ||
+        _host == 'localhost' ||
+        _host == '10.0.2.2' ||
+        _host.startsWith('192.168.'));
+  }
+
+  /// Create an MpcClient with the appropriate transport.
+  /// Local hosts use plain REST. Remote hosts MUST use attested transport —
+  /// if attestation fails, the error propagates (no silent fallback).
+  Future<MpcClient> _createMpcClient({
+    required HardwareSignerInterface hardwareSigner,
+    String? storageId,
+  }) async {
+    if (_requiresAttestation) {
+      if (_expectedPcr0 == null || _expectedPcr0!.isEmpty) {
+        throw StateError(
+            'Attestation required for remote host $_host but no PCR0 available. '
+            'Check network connection and retry.');
+      }
+      return MpcClient.attested(
+        _baseUrl,
+        expectedPcr0: _expectedPcr0!,
+        hardwareSigner: hardwareSigner,
+        storageId: storageId,
+      );
+    }
+    return MpcClient.rest(
+      _baseUrl,
+      hardwareSigner: hardwareSigner,
+      storageId: storageId,
+    );
   }
 
   Future<void> doDkg() async {
@@ -186,12 +276,12 @@ class MpcService extends ChangeNotifier {
     _hardwareSigner = _createSigner();
     await _hardwareSigner!.connect();
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();
@@ -217,22 +307,22 @@ class MpcService extends ChangeNotifier {
     await _hardwareSigner!.connect();
     debugPrint("[RESTORE] Hardware signer connected.");
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
 
     debugPrint("[RESTORE] Starting re-DKG...");
     // Re-DKG: derive new shares from existing secrets on HW + server
     await _client!.doRestore().timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => throw StateError(
-          'Restore timed out. Check that the server is running and ADB reverse is set up.'),
-    );
+          const Duration(seconds: 30),
+          onTimeout: () => throw StateError(
+              'Restore timed out. Check that the server is running and ADB reverse is set up.'),
+        );
     debugPrint("[RESTORE] Re-DKG complete.");
 
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     // init() will find restored state and skip DKG, then sync
@@ -266,12 +356,12 @@ class MpcService extends ChangeNotifier {
       }
     }
 
-    _client = MpcClient.rest(
-      _baseUrl,
-      storageId: storageId,
+    _client = await _createMpcClient(
       hardwareSigner: _hardwareSigner!,
+      storageId: storageId,
     );
-    _wallet = MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    _wallet =
+        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();
@@ -303,7 +393,7 @@ class MpcService extends ChangeNotifier {
     try {
       await restoreSession();
     } catch (e) {
-      print("Reconnect failed: $e");
+      debugPrint("Reconnect failed: $e");
       _isConnected = false;
       notifyListeners();
     }
@@ -316,7 +406,7 @@ class MpcService extends ChangeNotifier {
       _balance = await _wallet!.getBalance();
       _isConnected = true;
     } catch (e) {
-      print("Post-sync balance update failed: $e");
+      debugPrint("Post-sync balance update failed: $e");
     }
     notifyListeners();
   }

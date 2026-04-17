@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:ap/services/mpc_service.dart';
+import 'package:ap/widgets/attestation_status.dart';
 import 'package:intl/intl.dart';
 import 'package:protocol/protocol.dart' as proto;
 
@@ -42,6 +43,10 @@ class HomeScreen extends StatelessWidget {
       body: SafeArea(
         child: Column(
           children: [
+            // Attestation status (only shown when using attested transport)
+            AttestationStatusWidget(
+              statusProvider: () => mpcService.getAttestationStatus(),
+            ),
             const SizedBox(height: 24),
             // Balance Card
             _buildBalanceCard(context, balance, balanceUsd),

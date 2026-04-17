@@ -220,6 +220,10 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         endpointOut = epOut
 
         Log.i(TAG, "Device opened: IN ep=${epIn.address} OUT ep=${epOut.address} maxPkt=${epIn.maxPacketSize}")
+
+        // Small delay after claiming interface -- some devices need time to be ready.
+        Thread.sleep(200)
+
         result.success(null)
     }
 
@@ -271,10 +275,11 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         }
 
         usbExecutor.execute {
+            Log.d(TAG, "writeReport: ep=${ep.address} type=${ep.type} dir=${ep.direction} report=${report.size}bytes conn=$conn")
             val written = conn.bulkTransfer(ep, report, REPORT_SIZE, WRITE_TIMEOUT_MS)
             mainHandler.post {
                 if (written < 0) {
-                    Log.e(TAG, "writeReport: bulkTransfer returned $written")
+                    Log.e(TAG, "writeReport: bulkTransfer returned $written (ep=${ep.address}, timeout=${WRITE_TIMEOUT_MS}ms)")
                     result.error("USB_WRITE_ERROR", "Write failed (code $written)", null)
                 } else {
                     result.success(null)

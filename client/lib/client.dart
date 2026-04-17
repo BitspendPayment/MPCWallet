@@ -10,6 +10,8 @@ import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:client/wallet_api.dart';
 import 'package:client/grpc_wallet_api.dart';
 import 'package:client/rest_wallet_api.dart';
+import 'package:client/attested_wallet_api.dart';
+import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:http/http.dart' as http;
 import 'package:client/threshold/core/dkg.dart';
 import 'package:client/threshold/threshold.dart' as threshold;
@@ -116,6 +118,61 @@ class MpcClient {
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
     );
+  }
+
+  /// Create an MpcClient using attested REST transport (enclave FFI).
+  /// Verifies enclave attestation (PCR0) and response signatures (BIP-340).
+  /// FFI runs in a background isolate -- non-blocking.
+  static Future<MpcClient> attested(
+    String baseUrl, {
+    required String expectedPcr0,
+    int maxSigners = 3,
+    int minSigners = 2,
+    String? storageId,
+    HiveCipher? encryptionCipher,
+    required HardwareSignerInterface hardwareSigner,
+    int cacheTtlSecs = 60,
+  }) async {
+    final api = await AttestedWalletApi.create(baseUrl,
+        expectedPcr0: expectedPcr0, cacheTtlSecs: cacheTtlSecs);
+    final client = MpcClient._internal(
+      stub: api,
+      maxSigners: maxSigners,
+      minSigners: minSigners,
+      hardwareSigner: hardwareSigner,
+      storageId: storageId,
+      encryptionCipher: encryptionCipher,
+    );
+    return client;
+  }
+
+  /// Internal constructor used by the async `attested()` factory.
+  MpcClient._internal({
+    required WalletApi stub,
+    required int maxSigners,
+    required int minSigners,
+    required HardwareSignerInterface hardwareSigner,
+    String? storageId,
+    HiveCipher? encryptionCipher,
+  })  : _stub = stub,
+        _maxSigners = maxSigners,
+        _minSigners = minSigners,
+        _hardwareSigner = hardwareSigner,
+        _protectedPolicies = {} {
+    _store = WalletStore(
+      boxName: storageId ?? 'mpc_wallet_state_default',
+      cipher: encryptionCipher,
+    );
+  }
+
+  /// Get the attestation status (only available with `MpcClient.attested()`).
+  /// Returns a Future since the FFI runs in a background isolate.
+  Future<AttestationStatus?> getAttestationStatus() async {
+    final stub = _stub;
+    if (stub is AttestedWalletApi) {
+      return stub.getAttestationStatus();
+    }
+    return null;
   }
 
   /// Initializes persistence for the client.
@@ -240,8 +297,19 @@ class MpcClient {
     await _store.init();
     final signer = _hardwareSigner;
 
+    // 0. Quick connectivity test
+    print('[DKG] Step 0: Testing signer connectivity (getInfo)...');
+    try {
+      final info = await signer.getInfo();
+      print('[DKG] Step 0: Signer responded: hasKeyPackage=${info.hasKeyPackage}');
+    } catch (e) {
+      print('[DKG] Step 0: Signer getInfo FAILED: $e');
+    }
+
     // 1. Hardware signer generates secret (dealer)
+    print('[DKG] Step 1: Calling signer.dkgInit...');
     final dkgInit = await signer.dkgInit(_maxSigners, _minSigners);
+    print('[DKG] Step 1: signer.dkgInit complete');
     final hwVerifyingKey = dkgInit.verifyingKeyBytes;
     final hwIdentifier = dkgInit.identifier;
 
@@ -269,12 +337,16 @@ class MpcClient {
       ..identifier = hwIdentifier.serialize()
       ..round1Package = hwR1Json;
 
+    print('[DKG] Step 1: Sending DKGStep1 to server...');
     final step1Futures = await Future.wait(
         [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
     final step1Resp = step1Futures[0];
+    print('[DKG] Step 1: Server responded with ${step1Resp.round1Packages.length} packages');
 
     // 4. Trigger Step 2 on server (server computes round2)
+    print('[DKG] Step 2: Calling DKGStep2...');
     await _stub.dKGStep2(DKGStep2Request()..userId = tempUserId);
+    print('[DKG] Step 2: Server responded');
 
     // 5. Parse dealer R1 packages (for HW signer and wallet)
     final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
@@ -291,10 +363,12 @@ class MpcClient {
     });
 
     // 6. HW signer computes shares for server + wallet
+    print('[DKG] Step 3: Calling signer.dkgRound2 (${dealerR1ForHw.length} packages)...');
     final sharesFromHw = await signer.dkgRound2(
       dealerR1ForHw,
       receiverIdentifiers: [walletIdentifier],
     );
+    print('[DKG] Step 3: signer.dkgRound2 complete');
 
     // 7. Send Round2 packages to server
     //    - HW signer: actual shares for others
@@ -309,8 +383,10 @@ class MpcClient {
       ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar());
     // wallet sends no round2 packages (passive receiver)
 
+    print('[DKG] Step 3: Sending DKGStep3 to server...');
     final step3Futures = await Future.wait(
         [_stub.dKGStep3(reqStep3Wallet), _stub.dKGStep3(reqStep3Hw)]);
+    print('[DKG] Step 3: Server responded');
 
     // 8. Wallet receives shares from dealers (HW signer + server)
     final sharesForWallet = _parseShares(step3Futures[0].round2PackagesForMe);
