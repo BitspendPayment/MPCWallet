@@ -50,6 +50,7 @@ impl EnclaveStore {
 }
 
 impl KvStore for EnclaveStore {
+    #[tracing::instrument(skip(self), fields(tree = %tree, key = %key), err)]
     fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
@@ -60,12 +61,15 @@ impl KvStore for EnclaveStore {
                 .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave get: {e}")))?;
 
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            let status = resp.status();
+            tracing::debug!(http_status = %status, "enclave get response");
+            if status == reqwest::StatusCode::NOT_FOUND {
                 return Ok(None);
             }
-            if !resp.status().is_success() {
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
                 return Err(PersistenceError::Backend(
-                    format!("enclave get: status {}", resp.status()),
+                    format!("enclave get: status {status} body={body}"),
                 ));
             }
             let body = resp.text().await
@@ -74,6 +78,7 @@ impl KvStore for EnclaveStore {
         })
     }
 
+    #[tracing::instrument(skip(self, value), fields(tree = %tree, key = %key, value_bytes = value.len()), err)]
     fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
@@ -85,15 +90,19 @@ impl KvStore for EnclaveStore {
                 .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave put: {e}")))?;
 
-            if !resp.status().is_success() {
+            let status = resp.status();
+            tracing::debug!(http_status = %status, "enclave put response");
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
                 return Err(PersistenceError::Backend(
-                    format!("enclave put: status {}", resp.status()),
+                    format!("enclave put: status {status} body={body}"),
                 ));
             }
             Ok(())
         })
     }
 
+    #[tracing::instrument(skip(self), fields(tree = %tree, key = %key), err)]
     fn delete(&self, tree: &str, key: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
@@ -104,15 +113,18 @@ impl KvStore for EnclaveStore {
                 .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave delete: {e}")))?;
 
-            if !resp.status().is_success() {
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
                 return Err(PersistenceError::Backend(
-                    format!("enclave delete: status {}", resp.status()),
+                    format!("enclave delete: status {status} body={body}"),
                 ));
             }
             Ok(())
         })
     }
 
+    #[tracing::instrument(skip(self), fields(tree = %tree), err)]
     fn get_all(&self, tree: &str) -> Result<HashMap<String, String>, PersistenceError> {
         let (h, v) = self.auth_header();
         let prefix = format!("{tree}/");
@@ -132,8 +144,12 @@ impl KvStore for EnclaveStore {
                 ));
             }
 
-            let keys: Vec<String> = resp.json().await
+            // Supervisor returns {"keys": ["key1", "key2", ...]}.
+            #[derive(serde::Deserialize)]
+            struct ListResponse { keys: Vec<String> }
+            let list: ListResponse = resp.json().await
                 .map_err(|e| PersistenceError::Backend(format!("enclave list parse: {e}")))?;
+            let keys = list.keys;
 
             let mut result = HashMap::new();
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
@@ -158,6 +174,7 @@ impl KvStore for EnclaveStore {
         })
     }
 
+    #[tracing::instrument(skip(self), fields(tree = %tree), err)]
     fn clear(&self, tree: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         let prefix = format!("{tree}/");
@@ -176,8 +193,11 @@ impl KvStore for EnclaveStore {
                 ));
             }
 
-            let keys: Vec<String> = resp.json().await
+            #[derive(serde::Deserialize)]
+            struct ListResponse { keys: Vec<String> }
+            let list: ListResponse = resp.json().await
                 .map_err(|e| PersistenceError::Backend(format!("enclave clear parse: {e}")))?;
+            let keys = list.keys;
 
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
             for full_key in keys {
@@ -190,6 +210,7 @@ impl KvStore for EnclaveStore {
 }
 
 impl SecretStore for EnclaveStore {
+    #[tracing::instrument(skip(self), fields(name = %name), err)]
     fn get_secret(&self, name: &str) -> Result<Option<String>, PersistenceError> {
         let (h, v) = self.auth_header();
         let url = format!("{}/v1/secrets/{name}", self.base_url);
@@ -215,6 +236,7 @@ impl SecretStore for EnclaveStore {
         })
     }
 
+    #[tracing::instrument(skip(self, value), fields(name = %name, value_bytes = value.len()), err)]
     fn put_secret(&self, name: &str, value: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         let url = format!("{}/v1/secrets/{name}", self.base_url);
@@ -237,6 +259,7 @@ impl SecretStore for EnclaveStore {
         })
     }
 
+    #[tracing::instrument(skip(self), fields(name = %name), err)]
     fn delete_secret(&self, name: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         let url = format!("{}/v1/secrets/{name}", self.base_url);

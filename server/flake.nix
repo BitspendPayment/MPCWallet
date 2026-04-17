@@ -8,13 +8,15 @@
   };
 
   outputs = { self, nixpkgs, flake-utils, aws-nitro-util }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" ] (system:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ] (system:
       let
         pkgs = import nixpkgs { inherit system; };
-        nitro = aws-nitro-util.lib.${system};
+        eifPkgs = if system == "x86_64-linux" then pkgs
+                  else import nixpkgs { system = "x86_64-linux"; };
+        nitro = aws-nitro-util.lib.x86_64-linux;
 
         configPath = let p = builtins.getEnv "BUILD_CONFIG_PATH"; in
-          if p != "" then p else "/src/enclave/build-config.json";
+          if p != "" then p else "./enclave/build-config.json";
         buildCfg = builtins.fromJSON (builtins.readFile configPath);
         appCfg = buildCfg.app;
         sdkCfg = buildCfg.sdk;
@@ -24,11 +26,11 @@
         deployment = buildCfg.prefix;
 
         # Enclave supervisor — built from the SDK repo.
-        enclave-supervisor = pkgs.buildGoModule {
+        enclave-supervisor = eifPkgs.buildGoModule {
           pname = "enclave-supervisor";
           version = buildCfg.version;
 
-          src = pkgs.fetchFromGitHub {
+          src = eifPkgs.fetchFromGitHub {
             owner = "ArkLabsHQ";
             repo = "introspector-enclave";
             rev = sdkCfg.rev;
@@ -48,26 +50,26 @@
         };
 
         # User's Rust app — fetched from GitHub. No SDK dependency needed.
-        upstream-app = pkgs.rustPlatform.buildRustPackage {
+        upstream-app = eifPkgs.rustPlatform.buildRustPackage ({
           pname = appCfg.binary_name;
           version = buildCfg.version;
 
-          src = pkgs.fetchFromGitHub {
+          src = eifPkgs.fetchFromGitHub {
             owner = appCfg.nix_owner;
             repo = appCfg.nix_repo;
             rev = appCfg.nix_rev;
             hash = appCfg.nix_hash;
           };
 
-          cargoRoot = "server";
-          buildAndTestSubdir = "server";
-
           cargoHash = if appCfg.nix_vendor_hash == "" then "" else appCfg.nix_vendor_hash;
 
-          nativeBuildInputs = with pkgs; [ pkg-config protobuf ];
-          buildInputs = with pkgs; [ openssl ];
-
           doCheck = false;
+
+          buildNoDefaultFeatures = true;
+          buildFeatures = [ "enclave-backend" ];
+
+          nativeBuildInputs = [ eifPkgs.pkg-config eifPkgs.protobuf ];
+          buildInputs = [ eifPkgs.openssl ];
 
           postInstall = ''
             # Rename whatever was built to the configured binary name.
@@ -77,13 +79,17 @@
               fi
             done
           '';
-        };
+        } // (if (appCfg.nix_subdir or "") != "" then {
+          sourceRoot = "source";
+          cargoRoot = appCfg.nix_subdir;
+          buildAndTestSubdir = appCfg.nix_subdir;
+        } else {}));
 
-        nitriding = pkgs.buildGoModule {
+        nitriding = eifPkgs.buildGoModule {
           pname = "nitriding-daemon";
           version = "unstable-2024-01-01";
 
-          src = pkgs.fetchFromGitHub {
+          src = eifPkgs.fetchFromGitHub {
             owner = "brave";
             repo = "nitriding-daemon";
             rev = "c8cb7248843c82a5d72ff6cdde90f4a4cf68c87f";
@@ -101,11 +107,11 @@
           '';
         };
 
-        viproxy = pkgs.buildGoModule {
+        viproxy = eifPkgs.buildGoModule {
           pname = "viproxy";
           version = "0.1.2";
 
-          src = pkgs.fetchFromGitHub {
+          src = eifPkgs.fetchFromGitHub {
             owner = "brave";
             repo = "viproxy";
             rev = "v0.1.2";
@@ -122,7 +128,7 @@
           '';
         };
 
-        appDir = pkgs.runCommand "enclave-app" { } ''
+        appDir = eifPkgs.runCommand "enclave-app" { } ''
           mkdir -p $out/app/data
           cp ${upstream-app}/bin/${appCfg.binary_name} $out/app/${appCfg.binary_name}
           cp ${enclave-supervisor}/bin/enclave-supervisor $out/app/enclave-supervisor
@@ -131,12 +137,12 @@
           install -m 0755 ${./enclave/start.sh} $out/app/start.sh
         '';
 
-        enclaveRootfs = pkgs.buildEnv {
+        enclaveRootfs = eifPkgs.buildEnv {
           name = "enclave-rootfs";
           paths = [
             appDir
-            pkgs.busybox
-            pkgs.cacert
+            eifPkgs.busybox
+            eifPkgs.cacert
           ];
           pathsToLink = [ "/" ];
         };
@@ -173,10 +179,34 @@
           env = enclaveEnv;
         };
 
+        # Vendor hash check — used by enclave setup to discover the correct hash.
+        vendor-hash-check = eifPkgs.rustPlatform.buildRustPackage ({
+          pname = "vendor-hash-check";
+          version = buildCfg.version;
+          src = eifPkgs.fetchFromGitHub {
+            owner = appCfg.nix_owner;
+            repo = appCfg.nix_repo;
+            rev = appCfg.nix_rev;
+            hash = appCfg.nix_hash;
+          };
+          cargoHash = "";
+          doCheck = false;
+
+          buildNoDefaultFeatures = true;
+          buildFeatures = [ "enclave-backend" ];
+
+          nativeBuildInputs = [ eifPkgs.pkg-config eifPkgs.protobuf ];
+          buildInputs = [ eifPkgs.openssl ];
+        } // (if (appCfg.nix_subdir or "") != "" then {
+          sourceRoot = "source";
+          cargoRoot = appCfg.nix_subdir;
+          buildAndTestSubdir = appCfg.nix_subdir;
+        } else {}));
+
       in
       {
         packages = {
-          inherit upstream-app enclave-supervisor nitriding viproxy eif;
+          inherit upstream-app enclave-supervisor nitriding viproxy eif vendor-hash-check;
           default = eif;
         };
       }

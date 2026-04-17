@@ -1,7 +1,7 @@
 /// USB HID transport layer.
 ///
 /// Bridges Flutter platform channels (Android USB Host API) with the
-/// HID chunking protocol to send/receive JSON commands to the Pico Signer.
+/// HID chunking protocol to send/receive JSON commands to the HW Signer.
 library;
 
 import 'dart:convert';
@@ -13,7 +13,7 @@ class UsbHidTransport {
   final _reassembler = HidReassembler();
   bool _connected = false;
 
-  /// Discover connected Pico Signer devices.
+  /// Discover connected HW Signer devices.
   Future<List<Map<String, dynamic>>> enumerate() async {
     final result = await _channel.invokeMethod('enumerate');
     return (result as List).map((e) => Map<String, dynamic>.from(e)).toList();

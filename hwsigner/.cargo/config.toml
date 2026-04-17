@@ -1,0 +1,16 @@
+[target.thumbv8m.main-none-eabihf]
+rustflags = [
+    "-C", "link-arg=--nmagic",
+    "-C", "link-arg=-Tlink.x",
+    "-C", "link-arg=-Tdefmt.x",
+    "-C", "target-cpu=cortex-m33",
+
+    # Link CMSE veneer stubs from Secure world build
+    "-C", "link-arg=../hwsigner-secure/target/veneers.o",
+]
+
+[build]
+target = "thumbv8m.main-none-eabihf"
+
+[env]
+DEFMT_LOG = "debug"

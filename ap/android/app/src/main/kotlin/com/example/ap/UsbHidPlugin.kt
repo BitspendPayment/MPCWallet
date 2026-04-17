@@ -16,7 +16,7 @@ import io.flutter.plugin.common.MethodChannel
 import java.util.concurrent.Executors
 
 /**
- * Flutter platform channel plugin for USB HID communication with Pico Signer.
+ * Flutter platform channel plugin for USB HID communication with HW Signer.
  *
  * Exposes methods: enumerate, open, close, writeReport, readReport
  * via MethodChannel "com.mpcwallet.ap/usb_hid".
@@ -31,7 +31,7 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         private const val CHANNEL = "com.mpcwallet.ap/usb_hid"
         private const val ACTION_USB_PERMISSION = "com.mpcwallet.ap.USB_PERMISSION"
 
-        // Pico Signer USB IDs (pid.codes open-source VID)
+        // HW Signer USB IDs (pid.codes open-source VID)
         private const val VENDOR_ID = 0x1209
         private const val PRODUCT_ID = 0x0001
 
@@ -77,7 +77,7 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     /**
-     * List connected USB devices matching Pico Signer VID/PID.
+     * List connected USB devices matching HW Signer VID/PID.
      */
     private fun enumerate(result: MethodChannel.Result) {
         val manager = usbManager ?: run {
@@ -104,7 +104,7 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     /**
-     * Open connection to the first matching Pico Signer device.
+     * Open connection to the first matching HW Signer device.
      */
     private fun open(result: MethodChannel.Result) {
         val manager = usbManager ?: run {
@@ -115,7 +115,7 @@ class UsbHidPlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
         val device = manager.deviceList.values.firstOrNull { d ->
             d.vendorId == VENDOR_ID && d.productId == PRODUCT_ID
         } ?: run {
-            result.error("USB_NOT_FOUND", "No Pico Signer device found", null)
+            result.error("USB_NOT_FOUND", "No HW Signer device found", null)
             return
         }
 

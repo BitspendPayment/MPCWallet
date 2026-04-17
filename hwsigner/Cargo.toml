@@ -1,0 +1,34 @@
+[package]
+name = "hwsigner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Embassy framework — using local fork with init_ns() for TrustZone NS support
+embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "defmt"] }
+embassy-rp = { path = "../embassy-rp-fork", features = ["defmt", "rp235xa", "time-driver", "trustzone-ns"] }
+embassy-time = { version = "0.5", features = ["defmt"] }
+embassy-usb = { version = "0.5", features = ["defmt"] }
+embassy-futures = "0.1"
+embassy-sync = { version = "0.7", features = ["defmt"] }
+
+# Cortex-M support
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
+# cortex-m-rt for vector table + interrupt dispatch (Secure world handles actual boot)
+cortex-m-rt = "0.7"
+
+# Allocator
+embedded-alloc = "0.7"
+
+# Logging
+defmt = "0.3"
+defmt-rtt = "0.4"
+
+# Panic handler
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+debug = 2
+codegen-units = 1

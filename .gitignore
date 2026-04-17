@@ -7,6 +7,11 @@
 # Rust
 **/target/
 
+# Nix build outputs (symlinks to /nix/store/...)
+result
+result-*
+**/flake_result
+
 # Flutter
 **/build/
 **/.flutter-plugins
@@ -23,9 +28,12 @@
 **/.venv/
 **/__pycache__/
 
-# Pico firmware
-*/pico-signer.elf
-*/pico-signer.uf2
+# HW Signer firmware build artifacts
+*.elf
+*.uf2
+*.bak
+hwsigner-secure/target/
+embassy-rp-fork/target/
 threshold/target
 threshold-ffi/target
 cosigner/target
@@ -33,6 +41,7 @@ server/target
 e2e/signer-server/target
 ark/target
 ark-ffi/target
+hwsigner-secure/target
 
 # IDE
 .vscode/
@@ -42,6 +51,9 @@ ark-ffi/target
 # Secrets / environment
 .env
 *.env
+
+# Secure Boot signing keys (NEVER commit)
+keys/
 
 # Downloaded tooling (vendored protoc binary — install via package manager instead)
 /bin/

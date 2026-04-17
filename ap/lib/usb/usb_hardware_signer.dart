@@ -24,7 +24,7 @@ class UsbHardwareSigner implements HardwareSignerInterface {
   Future<void> connect() async {
     final devices = await _transport.enumerate();
     if (devices.isEmpty) {
-      throw StateError('No Pico Signer device found. '
+      throw StateError('No HW Signer device found. '
           'Connect the device via USB OTG and try again.');
     }
     await _transport.open();

@@ -5,6 +5,7 @@ mod crypto_ops;
 mod persistence;
 mod policy;
 mod rest_api;
+mod telemetry;
 mod wallet_service;
 mod wasm_manager;
 
@@ -40,13 +41,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use std::io::IsTerminal as _;
-    tracing_subscriber::fmt()
-        .with_timer(tracing_subscriber::fmt::time::uptime())
-        .with_target(false)
-        .with_ansi(std::io::stderr().is_terminal())
-        .compact()
-        .init();
+    let mut telemetry_guard = telemetry::init();
 
     let args = Args::parse();
 
@@ -201,11 +196,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let rest_app = axum::Router::new()
         .nest("/api", rest_api::routes(service.clone()))
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::cors::CorsLayer::permissive());
     let rest_addr = format!("0.0.0.0:{rest_port}");
     tracing::info!("MPC Wallet Server listening on {rest_addr} (REST/HTTP1.1)");
     let listener = tokio::net::TcpListener::bind(&rest_addr).await?;
-    axum::serve(listener, rest_app).await?;
+    let serve_result = axum::serve(listener, rest_app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await;
 
+    // Flush OTEL batches before process exit.
+    telemetry_guard.shutdown();
+    serve_result?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            s.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!("Shutdown signal received, flushing telemetry...");
 }

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Pico Signer: pid.codes open-source VID 0x1209, PID 0x0001 -->
+    <!-- HW Signer: pid.codes open-source VID 0x1209, PID 0x0001 -->
     <usb-device vendor-id="4617" product-id="1" />
 </resources>

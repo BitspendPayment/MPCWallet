@@ -25,7 +25,7 @@ class SignerSelectionScreen extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Your recovery key is managed by an external signing device.\n'
-              'Connect your Pico 2 signer via USB to continue.',
+              'Connect your hardware signer via USB to continue.',
               style: GoogleFonts.inter(color: Colors.white70, height: 1.5),
             ),
             const SizedBox(height: 24),
@@ -49,7 +49,7 @@ class SignerSelectionScreen extends StatelessWidget {
                             style: GoogleFonts.inter(
                                 fontWeight: FontWeight.w600, fontSize: 15)),
                         const SizedBox(height: 4),
-                        Text('Connect a Pico 2 signing device via USB',
+                        Text('Connect a hardware signing device via USB',
                             style: GoogleFonts.inter(
                                 color: Colors.white54, fontSize: 13)),
                       ],

@@ -171,6 +171,7 @@ macro_rules! rpc_handler {
 // Health
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::health")]
 async fn health() -> impl IntoResponse {
     Json(json!({"status": "ok"}))
 }
@@ -181,6 +182,7 @@ async fn health() -> impl IntoResponse {
 
 use crate::wallet_proto;
 
+#[tracing::instrument(skip_all, name = "rest::dkg_step1")]
 async fn dkg_step1(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -194,6 +196,7 @@ async fn dkg_step1(
     rpc_handler!(svc, dkg_step1, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::dkg_step2")]
 async fn dkg_step2(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -206,6 +209,7 @@ async fn dkg_step2(
     rpc_handler!(svc, dkg_step2, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::dkg_step3")]
 async fn dkg_step3(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -222,6 +226,7 @@ async fn dkg_step3(
 // Signing
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::sign_step1")]
 async fn sign_step1(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -261,6 +266,7 @@ async fn sign_step1(
     }
 }
 
+#[tracing::instrument(skip_all, name = "rest::sign_step2")]
 async fn sign_step2(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -287,6 +293,7 @@ async fn sign_step2(
 // Refresh
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::refresh_step1")]
 async fn refresh_step1(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -302,6 +309,7 @@ async fn refresh_step1(
     rpc_handler!(svc, refresh_step1, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::refresh_step2")]
 async fn refresh_step2(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -315,6 +323,7 @@ async fn refresh_step2(
     rpc_handler!(svc, refresh_step2, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::refresh_step3")]
 async fn refresh_step3(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -332,6 +341,7 @@ async fn refresh_step3(
 // Policy
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::create_spending_policy")]
 async fn create_spending_policy(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -347,6 +357,7 @@ async fn create_spending_policy(
     rpc_handler!(svc, create_spending_policy, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::get_policy_id")]
 async fn get_policy_id(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -360,6 +371,7 @@ async fn get_policy_id(
     rpc_handler!(svc, get_policy_id, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::update_policy")]
 async fn update_policy(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -376,6 +388,7 @@ async fn update_policy(
     rpc_handler!(svc, update_policy, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::delete_policy")]
 async fn delete_policy(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -394,6 +407,7 @@ async fn delete_policy(
 // Transactions
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::broadcast_transaction")]
 async fn broadcast_transaction(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -405,6 +419,7 @@ async fn broadcast_transaction(
     rpc_handler!(svc, broadcast_transaction, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::fetch_history")]
 async fn fetch_history(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -417,6 +432,7 @@ async fn fetch_history(
     rpc_handler!(svc, fetch_history, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions")]
 async fn fetch_recent_transactions(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -433,6 +449,7 @@ async fn fetch_recent_transactions(
 // Ark Protocol
 // ---------------------------------------------------------------------------
 
+#[tracing::instrument(skip_all, name = "rest::get_ark_info")]
 async fn get_ark_info(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -445,6 +462,7 @@ async fn get_ark_info(
     rpc_handler!(svc, get_ark_info, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::get_ark_address")]
 async fn get_ark_address(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -457,6 +475,7 @@ async fn get_ark_address(
     rpc_handler!(svc, get_ark_address, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::get_boarding_address")]
 async fn get_boarding_address(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -469,6 +488,7 @@ async fn get_boarding_address(
     rpc_handler!(svc, get_boarding_address, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::check_boarding_balance")]
 async fn check_boarding_balance(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -481,6 +501,7 @@ async fn check_boarding_balance(
     rpc_handler!(svc, check_boarding_balance, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::list_vtxos")]
 async fn list_vtxos(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -493,6 +514,7 @@ async fn list_vtxos(
     rpc_handler!(svc, list_vtxos, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::list_ark_transactions")]
 async fn list_ark_transactions(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -505,6 +527,7 @@ async fn list_ark_transactions(
     rpc_handler!(svc, list_ark_transactions, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::send_vtxo")]
 async fn send_vtxo(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -533,6 +556,7 @@ async fn send_vtxo(
     }
 }
 
+#[tracing::instrument(skip_all, name = "rest::redeem_vtxo")]
 async fn redeem_vtxo(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -547,6 +571,7 @@ async fn redeem_vtxo(
     rpc_handler!(svc, redeem_vtxo, req)
 }
 
+#[tracing::instrument(skip_all, name = "rest::settle")]
 async fn settle(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -572,6 +597,7 @@ async fn settle(
     }
 }
 
+#[tracing::instrument(skip_all, name = "rest::settle_delegate")]
 async fn settle_delegate(
     State(svc): State<AppState>,
     Json(body): Json<Value>,
@@ -597,6 +623,7 @@ async fn settle_delegate(
     }
 }
 
+#[tracing::instrument(skip_all, name = "rest::submit_ark_send")]
 async fn submit_ark_send(
     State(svc): State<AppState>,
     Json(body): Json<Value>,

@@ -7,16 +7,16 @@ region: us-east-1                # AWS region
 account: "043673801220"                      # AWS account ID (required)
 prefix: dev                      # Deployment prefix (stack = {prefix}Nitro{Name})
 instance_type: m6i.xlarge        # EC2 instance type
-nix_image: nixos/nix:2.24.9      # Docker image for reproducible builds
 migration_cooldown: "1m"         # Cooldown before migration proceeds
+previous_pcr0: "d7748cfe7f1e52e46cea19f160720010ad5617176ba2417e205a15a90684ea4e010126a79b3aad4f002a02927996ceaa"
 
 # SDK coordinates for the enclave supervisor binary.
 # The supervisor handles attestation, secrets, PCR extension, and signing
 # middleware automatically. Your app is a plain HTTP server with zero SDK imports.
 sdk:
-  rev: "v0.0.64"
-  hash: "sha256-b+TF+Nz2sOXUd35DRR/5ynr+0ccARfNPs3dEkp+1avo="
-  vendor_hash: "sha256-nj/KWLaYuxV67ytwoX5YnnWlGzsTKrm8TL7EpLPAC40="
+  rev: "v0.0.68"
+  hash: "sha256-/5YoFEHiKJ01XrzGTTlco+EXZzYFTlsLq2cD5DuaMd4="
+  vendor_hash: "sha256-txUyJGwLZWTMfYZXhruNnEKhC13LKqu1XsT6xlhzJxs="
 
 app:
   language: "rust"               # App language: go, nodejs, dotnet, rust
@@ -27,22 +27,29 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "de9ad7cd0ec5ad59be4049f0e0bb7c0d694f35f0"                    # Git commit SHA (required)
-  nix_hash: "sha256-teEQZvVTTdYBo1mm+Q6QVq9EQq8HgChKTMXkWLijYtI="                   # Nix source hash: nix-prefetch-url --unpack (required)
-  nix_vendor_hash: "sha256-DYo9etpmdBOCoGbW3+HxoUXYOE00qBVcOb+AeYAwAP0="            # Go vendor hash (required)
+  nix_rev: "fde5705393b8754a7ff632086faf9fd03545155f"                    # Git commit SHA (required)
+  nix_hash: "sha256-Eus3bF7VVRgRpG5oVRFMGL/n+G8jN1dWWvSKmYQA0LY="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_vendor_hash: "sha256-QPBa326MlMDIxvxC4Zp8PMgW9hi31pdH0MRwv8+j7uc="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
+  nix_subdir: "server"                 # Subdirectory for monorepo (e.g. "server")
   binary_name: ""                # Output binary name (defaults to 'name')
+
+  # Extra nixpkgs attrs added to the build sandbox.
+  nix_build_inputs: ["openssl"]
+  nix_native_build_inputs: ["pkg-config", "protobuf"]
 
   # Environment variables baked into the EIF.
   # Template vars: {{region}}, {{prefix}}, {{version}}
   env:
       PORT: "7074"
-      COSIGNER_WASM_PATH: "https://github.com/BitspendPayment/MPCWallet/releases/latest/download/cosigner.wasm"
+      COSIGNER_WASM_PATH: "https://github.com/BitspendPayment/MPCWallet/releases/download/cosigner-8c631a813dff4f34080b83631ce10ebdc8829d26/cosigner.wasm"
       BITCOIN_NETWORK: "signet"
       ELECTRUM_URL: "electrum.mutinynet.com"
       ELECTRUM_PORT: "50001"
       ASP_URL: "https://mutinynet.arkade.sh"
+      PERSISTENCE_BACKEND: "enclave"
+      SUPERVISOR_URL: "http://127.0.0.1:7073"
 
 
 # Secrets managed by KMS inside the enclave.

@@ -15,10 +15,17 @@ library;
 
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'dart:convert';
+import 'package:http/io_client.dart';
 import 'package:client/client.dart';
 import 'package:client/hardware_signer.dart';
 import 'package:hive/hive.dart';
+
+/// HTTP client that accepts self-signed certs (for Nitro enclave TLS).
+http.Client _insecureHttpClient() {
+  final inner = HttpClient()
+    ..badCertificateCallback = (cert, host, port) => true;
+  return IOClient(inner);
+}
 
 void main(List<String> args) async {
   if (args.isEmpty) {
@@ -35,10 +42,12 @@ void main(List<String> args) async {
   print('Target: $baseUrl');
   print('');
 
+  final httpClient = _insecureHttpClient();
+
   // 1. Health check
   print('1. Health check...');
   try {
-    final resp = await http.get(Uri.parse('$baseUrl/api/health'));
+    final resp = await httpClient.get(Uri.parse('$baseUrl/api/health'));
     if (resp.statusCode == 200) {
       print('   OK: ${resp.body}');
     } else {
@@ -58,7 +67,7 @@ void main(List<String> args) async {
   try {
     final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
     await signer.connect();
-    final client = MpcClient.rest(baseUrl, hardwareSigner: signer, storageId: 'enclave_smoke');
+    final client = MpcClient.rest(baseUrl, hardwareSigner: signer, storageId: 'enclave_smoke', httpClient: httpClient);
     await client.doDkg();
     print('   OK: DKG complete, userId=${client.userId?.substring(0, 16)}...');
 

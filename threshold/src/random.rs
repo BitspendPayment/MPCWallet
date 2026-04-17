@@ -1,7 +1,7 @@
 //! Random scalar generation utilities.
 //!
 //! Provides functions for generating random and seeded scalars.
-//! Requires the `std` feature (pico-signer uses its own RNG).
+//! Requires the `std` feature (hwsigner uses its own RNG).
 
 use alloc::vec::Vec;
 use k256::elliptic_curve::ops::Reduce;

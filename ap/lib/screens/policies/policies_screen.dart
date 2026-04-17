@@ -77,7 +77,7 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
       }
     } catch (e) {
       if (mounted) {
-        final isHardwareError = e.toString().contains('No Pico Signer device found') ||
+        final isHardwareError = e.toString().contains('No HW Signer device found') ||
             e.toString().contains('USB') ||
             e.toString().contains('transport');
         if (isHardwareError) {
@@ -92,7 +92,7 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
                     color: Colors.white, fontWeight: FontWeight.bold),
               ),
               content: Text(
-                'Connect your Pico Signer via USB OTG, then tap Retry.',
+                'Connect your HW Signer via USB OTG, then tap Retry.',
                 style: GoogleFonts.inter(color: Colors.white70),
               ),
               actions: [

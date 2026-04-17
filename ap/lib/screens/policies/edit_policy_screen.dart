@@ -163,7 +163,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
 
   Future<void> _showErrorFeedback(Object e) async {
     final msg = e.toString();
-    final isHardwareError = msg.contains('No Pico Signer device found') ||
+    final isHardwareError = msg.contains('No HW Signer device found') ||
         msg.contains('USB') ||
         msg.contains('transport');
     if (isHardwareError) {
@@ -176,7 +176,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
               style: GoogleFonts.inter(
                   color: Colors.white, fontWeight: FontWeight.bold)),
           content: Text(
-              'Connect your Pico Signer via USB OTG, then tap Retry.',
+              'Connect your HW Signer via USB OTG, then tap Retry.',
               style: GoogleFonts.inter(color: Colors.white70)),
           actions: [
             TextButton(

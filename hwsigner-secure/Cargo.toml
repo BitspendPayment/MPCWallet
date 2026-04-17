@@ -1,0 +1,50 @@
+[package]
+name = "hwsigner-secure"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hwsigner-secure"
+path = "src/main.rs"
+
+[dependencies]
+# RP2350 HAL for clock init (same as ~/blinker)
+rp235x-hal = { version = "0.3", features = ["rt", "critical-section-impl"] }
+
+# Cortex-M support
+# NOTE: critical-section-impl provided by rp235x-hal, don't enable it here
+cortex-m = "0.7"
+cortex-m-rt = { version = "0.7", features = ["device"] }
+
+# Threshold crypto (no_std, no default features)
+threshold = { path = "../threshold", default-features = false }
+
+# Crypto primitives
+k256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
+rand_core = { version = "0.6", default-features = false }
+
+# Serialization (no_std + alloc)
+serde = { version = "1", default-features = false, features = ["derive", "alloc"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+# Allocator
+embedded-alloc = "0.7"
+
+# HAL traits (for delay, GPIO)
+embedded-hal = "1.0.0"
+
+# Zeroize secrets in RAM
+zeroize = { version = "1", default-features = false, features = ["zeroize_derive"] }
+
+# Logging
+defmt = "0.3"
+defmt-rtt = "0.4"
+
+# Panic handler
+panic-probe = { version = "0.3", features = ["print-defmt"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+debug = 2
+codegen-units = 1

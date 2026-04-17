@@ -125,4 +125,20 @@ data "aws_iam_policy_document" "enclave" {
     actions   = ["sts:GetCallerIdentity"]
     resources = ["*"]
   }
+
+  # CloudWatch Logs: create log groups/streams and write trace entries.
+  statement {
+    sid = "CloudWatchLogsAccess"
+    actions = [
+      "logs:CreateLogGroup",
+      "logs:CreateLogStream",
+      "logs:PutLogEvents",
+      "logs:PutRetentionPolicy",
+      "logs:FilterLogEvents",
+      "logs:DescribeLogStreams",
+    ]
+    resources = [
+      "arn:aws:logs:${var.region}:${var.account}:log-group:/enclave/*",
+    ]
+  }
 }
