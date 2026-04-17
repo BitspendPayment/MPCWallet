@@ -13,7 +13,8 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .PHONY: e2e e2e-ark hardware hardware-ark flash down \
-	ffi-build ffi-android threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android enclave-ffi-build enclave-ffi-android \
+	ffi-build ffi-android ffi-android-all threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android enclave-ffi-build enclave-ffi-android \
+	threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32 \
 	cosigner-build server-build signer-build pico-build \
 	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
@@ -172,7 +173,7 @@ hw-test:
 ffi-build: threshold-ffi-build ark-ffi-build enclave-ffi-build
 
 ffi-android: threshold-ffi-android ark-ffi-android enclave-ffi-android              # arm64 only
-ffi-android-all: ffi-android threshold-ffi-android-32 ark-ffi-android-32  # arm64 + arm32
+ffi-android-all: ffi-android threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32  # arm64 + arm32
 
 # Individual FFI builds (host)
 threshold-ffi-build:
@@ -229,6 +230,17 @@ threshold-ffi-android-32:
 	cp threshold-ffi/target/armv7-linux-androideabi/release/libthreshold_ffi.so \
 		ap/android/app/src/main/jniLibs/armeabi-v7a/
 	@echo "Installed: ap/android/app/src/main/jniLibs/armeabi-v7a/libthreshold_ffi.so"
+
+enclave-ffi-android-32:
+	@echo "Building enclave-ffi for Android arm32..."
+	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
+	export CC_armv7_linux_androideabi=armv7a-linux-androideabi21-clang && \
+	export AR_armv7_linux_androideabi=llvm-ar && \
+	cd enclave-ffi && cargo build --release --target armv7-linux-androideabi
+	mkdir -p ap/android/app/src/main/jniLibs/armeabi-v7a
+	cp enclave-ffi/target/armv7-linux-androideabi/release/libenclave_ffi.so \
+		ap/android/app/src/main/jniLibs/armeabi-v7a/
+	@echo "Installed: ap/android/app/src/main/jniLibs/armeabi-v7a/libenclave_ffi.so"
 
 ark-ffi-android-32:
 	@echo "Building ark-ffi for Android arm32..."
