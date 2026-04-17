@@ -197,11 +197,20 @@ void main() {
     Log.ok('Settled! commitment_txid=$commitmentTxid');
     expect(commitmentTxid, isNotEmpty);
 
-    // 8. Verify VTXOs
-    Log.step(8, 'Verify VTXOs');
+    // 8. Verify VTXOs after settle
+    Log.step(8, 'Verify VTXOs after settle');
     final vtxosResp = await alice.listVtxos();
-    Log.info('VTXOs: ${vtxosResp.vtxos.length}, balance: ${vtxosResp.totalBalance}');
-    expect(vtxosResp.totalBalance.toInt(), greaterThan(0));
+    final aliceBalanceAfterSettle = vtxosResp.totalBalance.toInt();
+    Log.info('VTXOs: ${vtxosResp.vtxos.length}, balance: $aliceBalanceAfterSettle');
+    expect(vtxosResp.vtxos.length, equals(1),
+        reason: 'Alice should have exactly 1 VTXO after settle');
+    expect(aliceBalanceAfterSettle, equals(fundAmountSats),
+        reason: 'Alice balance should equal funded amount');
+    expect(vtxosResp.vtxos.first.exitDelay, greaterThan(0),
+        reason: 'exit_delay must not be 0');
+    expect(vtxosResp.vtxos.first.script, isNotEmpty,
+        reason: 'VTXO script must be populated');
+    Log.ok('Alice: 1 VTXO, balance=$aliceBalanceAfterSettle, exit_delay=${vtxosResp.vtxos.first.exitDelay}');
 
     // 9. Bob DKG
     Log.step(9, 'Bob DKG');
@@ -226,12 +235,32 @@ void main() {
     Log.ok('Send ark_txid: $arkTxid');
     expect(arkTxid, isNotEmpty);
 
-    // 11. Verify balances
-    Log.step(11, 'Verify Final Balances');
-    final aliceVtxos = await alice.listVtxos();
-    Log.info('Alice VTXOs: ${aliceVtxos.vtxos.length}, balance: ${aliceVtxos.totalBalance}');
-    expect(aliceVtxos.totalBalance.toInt(), greaterThan(0));
-    expect(aliceVtxos.totalBalance.toInt(), lessThan(fundAmountSats));
+    // 11. Verify Alice's change balance
+    Log.step(11, 'Verify Alice change');
+    final aliceAfterSend = await alice.listVtxos();
+    final aliceChange = aliceAfterSend.totalBalance.toInt();
+    Log.info('Alice: ${aliceAfterSend.vtxos.length} VTXOs, balance=$aliceChange');
+    expect(aliceChange, equals(aliceBalanceAfterSettle - sendAmount),
+        reason: 'Alice should have exactly ${aliceBalanceAfterSettle - sendAmount} sats remaining');
+    // Verify change VTXO has non-empty script
+    for (final vtxo in aliceAfterSend.vtxos) {
+      expect(vtxo.script, isNotEmpty, reason: 'Change VTXO must have a script');
+    }
+
+    // 12. Verify Bob received
+    Log.step(12, 'Verify Bob received');
+    // Poll — indexer subscription may take a moment
+    int bobBalance = 0;
+    for (int i = 0; i < 15; i++) {
+      final resp = await bob.listVtxos();
+      bobBalance = resp.totalBalance.toInt();
+      if (bobBalance > 0) break;
+      Log.info('Waiting for Bob VTXO... (${i + 1}/15)');
+      await Future.delayed(Duration(seconds: 1));
+    }
+    Log.info('Bob: balance=$bobBalance');
+    expect(bobBalance, equals(sendAmount),
+        reason: 'Bob should have received exactly $sendAmount sats');
 
     Log.separator();
     Log.ok('MutinyNet Ark E2E test passed!');

@@ -3,12 +3,14 @@
 use tonic::transport::Channel;
 
 use crate::client::proto::ark_service_client::ArkServiceClient;
+use crate::client::proto::indexer_service_client::IndexerServiceClient;
 use crate::client::proto;
 use crate::client::types::ArkInfo;
 
 /// Client for communicating with an ASP via gRPC.
 pub struct AspClient {
     inner: ArkServiceClient<Channel>,
+    indexer: IndexerServiceClient<Channel>,
     /// Cached server info, populated after first `get_info()` call.
     pub info: Option<ArkInfo>,
 }
@@ -22,9 +24,65 @@ impl AspClient {
         }
         let channel = endpoint.connect().await?;
         Ok(Self {
-            inner: ArkServiceClient::new(channel),
+            inner: ArkServiceClient::new(channel.clone()),
+            indexer: IndexerServiceClient::new(channel),
             info: None,
         })
+    }
+
+    /// Query the indexer for spendable VTXOs matching the given scriptPubKeys.
+    pub async fn get_vtxos_by_scripts(
+        &mut self,
+        scripts: &[String],
+    ) -> Result<Vec<proto::IndexerVtxo>, Box<dyn std::error::Error + Send + Sync>> {
+        if scripts.is_empty() {
+            return Ok(Vec::new());
+        }
+        let response = self.indexer
+            .get_vtxos(proto::GetVtxosRequest {
+                scripts: scripts.to_vec(),
+                outpoints: Vec::new(),
+                spendable_only: true,
+                spent_only: false,
+                recoverable_only: false,
+                page: None,
+                pending_only: false,
+            })
+            .await?
+            .into_inner();
+        Ok(response.vtxos)
+    }
+
+    /// Subscribe to indexer notifications for the given scriptPubKeys.
+    /// Returns a subscription_id to use with `get_subscription`.
+    pub async fn subscribe_for_scripts(
+        &mut self,
+        scripts: Vec<String>,
+        subscription_id: Option<String>,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        let response = self.indexer
+            .subscribe_for_scripts(proto::SubscribeForScriptsRequest {
+                scripts,
+                subscription_id: subscription_id.unwrap_or_default(),
+            })
+            .await?
+            .into_inner();
+        Ok(response.subscription_id)
+    }
+
+    /// Open a subscription stream for real-time VTXO notifications.
+    pub async fn get_subscription(
+        &mut self,
+        subscription_id: String,
+    ) -> Result<
+        tonic::Streaming<proto::GetSubscriptionResponse>,
+        Box<dyn std::error::Error + Send + Sync>,
+    > {
+        let response = self.indexer
+            .get_subscription(proto::GetSubscriptionRequest { subscription_id })
+            .await?
+            .into_inner();
+        Ok(response)
     }
 
     /// Fetch server info from the ASP.

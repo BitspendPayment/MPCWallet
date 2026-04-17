@@ -203,7 +203,10 @@ class _SigningScreenState extends State<SigningScreen> {
         );
         context.go('/ark');
       }
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('=== ARK SEND FAILED ===');
+      debugPrint('Error: $e');
+      debugPrint('Stack: $st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

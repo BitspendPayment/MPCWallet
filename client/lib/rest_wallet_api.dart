@@ -387,7 +387,8 @@ class RestWalletApi implements WalletApi {
         ..expiresAt = Int64(v['expires_at'] as int? ?? 0)
         ..status = v['status'] as String? ?? ''
         ..isPreconfirmed = v['is_preconfirmed'] as bool? ?? false
-        ..exitDelay = (v['exit_delay'] as num?)?.toInt() ?? 0);
+        ..exitDelay = (v['exit_delay'] as num?)?.toInt() ?? 0
+        ..script = v['script'] as String? ?? '');
     }
     return result;
   }

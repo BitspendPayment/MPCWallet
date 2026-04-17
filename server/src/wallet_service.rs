@@ -55,7 +55,8 @@ pub struct WalletService {
     /// Active send sessions: user_id -> session.
     pub send_sessions: tokio::sync::Mutex<HashMap<String, (ark::client::send::SendSession, u32)>>,
     /// Simple in-memory VTXO store: user_id -> list of (txid, vout, amount_sats, exit_delay).
-    pub vtxo_store: tokio::sync::Mutex<HashMap<String, Vec<(String, u32, u64, u32)>>>,
+    /// Arc-wrapped so indexer subscription tasks can share it.
+    pub vtxo_store: Arc<tokio::sync::Mutex<HashMap<String, Vec<(String, u32, u64, u32)>>>>,
     /// Reverse lookup: VTXO scriptPubKey hex -> user_id_hex.
     /// Populated when users call get_ark_address.
     pub ark_script_to_user: tokio::sync::Mutex<HashMap<String, String>>,
@@ -84,7 +85,7 @@ impl WalletService {
             settle_sessions: tokio::sync::Mutex::new(HashMap::new()),
             delegate_sessions: tokio::sync::Mutex::new(HashMap::new()),
             send_sessions: tokio::sync::Mutex::new(HashMap::new()),
-            vtxo_store: tokio::sync::Mutex::new(HashMap::new()),
+            vtxo_store: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             ark_script_to_user: tokio::sync::Mutex::new(HashMap::new()),
             ark_tx_history: tokio::sync::Mutex::new(HashMap::new()),
         }
@@ -256,6 +257,42 @@ impl WalletService {
         let mut store = self.vtxo_store.lock().await;
         let mut affected_users = std::collections::HashSet::new();
 
+        // Resolve ASP info for exit_delay determination.
+        // If ASP info isn't available, skip — the indexer subscription handles VTXO discovery.
+        let info = {
+            let asp = match self.asp_client.as_ref() {
+                Some(a) => a,
+                None => return,
+            };
+            let guard = asp.lock().await;
+            match guard.info.as_ref() {
+                Some(i) => i.clone(),
+                None => {
+                    tracing::warn!("ASP info not cached, skipping VTXO stream notification");
+                    return;
+                }
+            }
+        };
+        let network = match ark::client::parse_network(&info.network) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+
+        // Build script→exit_delay map from registered scripts.
+        let mut script_exit_delay: HashMap<String, u32> = HashMap::new();
+        for (script, user_id) in script_map.iter() {
+            // Determine which exit_delay produced this script.
+            // The owner_pk can be inferred from the user's policy.
+            let owner_pk = match self.get_user_xonly_pubkey(user_id) {
+                Ok(pk) => pk,
+                Err(_) => continue,
+            };
+            let delay = Self::resolve_exit_delay_from_script(
+                &owner_pk, &info.signer_pubkey, script, &info, network,
+            );
+            script_exit_delay.insert(script.clone(), delay);
+        }
+
         // Remove spent VTXOs
         for spent in &notif.spent_vtxos {
             if let Some(user_id) = script_map.get(&spent.script) {
@@ -284,11 +321,14 @@ impl WalletService {
                             "[{user_id}] VTXO stream: new spendable {}:{} amount={}",
                             outpoint.txid, outpoint.vout, new_vtxo.amount
                         );
+                        let exit_delay = script_exit_delay
+                            .get(&new_vtxo.script).copied()
+                            .unwrap_or(info.boarding_exit_delay as u32);
                         entry.push((
                             outpoint.txid.clone(),
                             outpoint.vout,
                             new_vtxo.amount,
-                            0, // exit_delay — client gets this from ArkInfo
+                            exit_delay,
                         ));
                         affected_users.insert(user_id.clone());
                         // Log "receive" only if no active settle/send session for this user
@@ -322,8 +362,41 @@ impl WalletService {
         }
     }
 
-    /// Register a user's VTXO scriptPubKey for stream matching.
+    /// Determine the correct exit_delay for a VTXO by matching its script
+    /// against both known exit delays. Returns the matching delay, or
+    /// boarding_exit_delay as fallback.
+    fn resolve_exit_delay_from_script(
+        owner_pk_hex: &str,
+        asp_pk_hex: &str,
+        vtxo_script: &str,
+        info: &ark::client::types::ArkInfo,
+        network: bitcoin::Network,
+    ) -> u32 {
+        for delay in [info.boarding_exit_delay as u32, info.unilateral_exit_delay as u32] {
+            if let Ok(computed) = ark::client::vtxo_script_pubkey_hex(
+                owner_pk_hex, asp_pk_hex, delay, network,
+            ) {
+                if computed == vtxo_script {
+                    return delay;
+                }
+            }
+        }
+        // Fallback: use boarding_exit_delay (most common for boarded VTXOs)
+        info.boarding_exit_delay as u32
+    }
+
+    /// Register a user's VTXO scriptPubKey for stream matching and subscribe
+    /// to the indexer for real-time VTXO notifications (incoming sends).
+    /// Only registers once per user — subsequent calls are no-ops.
     async fn register_user_vtxo_script(&self, user_id_hex: &str, owner_pk_hex: &str) {
+        // Skip if already registered.
+        {
+            let script_map = self.ark_script_to_user.lock().await;
+            if script_map.values().any(|uid| uid == user_id_hex) {
+                return;
+            }
+        }
+
         let asp = match self.asp_client.as_ref() {
             Some(a) => a,
             None => return,
@@ -339,6 +412,7 @@ impl WalletService {
             }
         };
 
+        let mut scripts = Vec::new();
         // Register for both exit delays (boarding + unilateral)
         for exit_delay in [info.unilateral_exit_delay as u32, info.boarding_exit_delay as u32] {
             let network = match ark::client::parse_network(&info.network) {
@@ -354,8 +428,127 @@ impl WalletService {
                 let mut script_map = self.ark_script_to_user.lock().await;
                 script_map.insert(script_hex.clone(), user_id_hex.to_string());
                 self.save_script_to_user(&script_hex, user_id_hex);
+                scripts.push(script_hex);
             }
         }
+
+        // Subscribe to the indexer for real-time notifications on these scripts.
+        if scripts.is_empty() { return; }
+        let subscription_id = {
+            let mut guard = asp.lock().await;
+            match guard.subscribe_for_scripts(scripts, None).await {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!("[{user_id_hex}] Indexer subscribe failed: {e}");
+                    return;
+                }
+            }
+        };
+        tracing::info!("[{user_id_hex}] Indexer subscription: {subscription_id}");
+
+        // Spawn background task to listen for incoming VTXOs.
+        let vtxo_store = self.vtxo_store.clone();
+        let persistence = self.persistence.clone();
+        let uid = user_id_hex.to_string();
+        let owner_pk = owner_pk_hex.to_string();
+        let info_clone = info.clone();
+        let net = match ark::client::parse_network(&info.network) {
+            Ok(n) => n,
+            Err(_) => return,
+        };
+        tokio::spawn(async move {
+            Self::run_indexer_subscription(
+                &uid, subscription_id, owner_pk,
+                info_clone, net, vtxo_store, persistence,
+            ).await;
+        });
+    }
+
+    /// Background task: listen to indexer subscription stream and update vtxo_store.
+    async fn run_indexer_subscription(
+        user_id_hex: &str,
+        subscription_id: String,
+        owner_pk_hex: String,
+        info: ark::client::types::ArkInfo,
+        network: bitcoin::Network,
+        vtxo_store: Arc<tokio::sync::Mutex<HashMap<String, Vec<(String, u32, u64, u32)>>>>,
+        persistence: Arc<dyn KvStore>,
+    ) {
+        let asp_url = match std::env::var("ASP_URL") {
+            Ok(u) => u,
+            Err(_) => return,
+        };
+        // Open a dedicated connection for the subscription stream.
+        let mut stream_client = match ark::client::AspClient::connect(&asp_url).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("[{user_id_hex}] Indexer subscription connect failed: {e}");
+                return;
+            }
+        };
+        let mut stream = match stream_client.get_subscription(subscription_id).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("[{user_id_hex}] Indexer get_subscription failed: {e}");
+                return;
+            }
+        };
+        tracing::info!("[{user_id_hex}] Indexer subscription stream started");
+
+        use ark::client::proto::get_subscription_response::Data;
+        while let Ok(Some(event)) = stream.message().await {
+            if let Some(data) = event.data {
+                match data {
+                    Data::Event(e) => {
+                        // Add new VTXOs to store
+                        for vtxo in &e.new_vtxos {
+                            if let Some(outpoint) = &vtxo.outpoint {
+                                let mut store = vtxo_store.lock().await;
+                                let entry = store.entry(user_id_hex.to_string()).or_default();
+                                let exists = entry.iter().any(|(t, v, _, _)| {
+                                    t == &outpoint.txid && *v == outpoint.vout
+                                });
+                                if !exists {
+                                    let exit_delay = Self::resolve_exit_delay_from_script(
+                                        &owner_pk_hex, &info.signer_pubkey,
+                                        &vtxo.script, &info, network,
+                                    );
+                                    tracing::info!(
+                                        "[{user_id_hex}] Indexer: received {}:{} amount={} exit_delay={exit_delay}",
+                                        outpoint.txid, outpoint.vout, vtxo.amount
+                                    );
+                                    entry.push((
+                                        outpoint.txid.clone(),
+                                        outpoint.vout,
+                                        vtxo.amount,
+                                        exit_delay,
+                                    ));
+                                    if let Ok(json) = serde_json::to_string(entry) {
+                                        let _ = persistence.put("vtxo_store", user_id_hex, &json);
+                                    }
+                                }
+                            }
+                        }
+                        // Remove spent VTXOs from store
+                        for vtxo in &e.spent_vtxos {
+                            if let Some(outpoint) = &vtxo.outpoint {
+                                let mut store = vtxo_store.lock().await;
+                                if let Some(entry) = store.get_mut(user_id_hex) {
+                                    entry.retain(|(t, v, _, _)| {
+                                        !(t == &outpoint.txid && *v == outpoint.vout)
+                                    });
+                                    if let Ok(json) = serde_json::to_string(entry) {
+                                        let _ = persistence.put("vtxo_store", user_id_hex, &json);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Data::Heartbeat(_) => {}
+                }
+            }
+        }
+        tracing::info!("[{user_id_hex}] Indexer subscription stream ended");
     }
 
     /// Get the ASP client or return UNAVAILABLE.
@@ -3004,6 +3197,11 @@ impl MpcWallet for WalletService {
             network,
         ).map_err(|e| Status::internal(format!("boarding_address: {e}")))?;
 
+        // Register script for VTXO stream matching (same as get_ark_address).
+        // Without this, VTXOs returned by arkd after settlement won't be
+        // matched to this user and the balance will appear as zero.
+        self.register_user_vtxo_script(&user_id_hex, &owner_pk_hex).await;
+
         Ok(Response::new(GetBoardingAddressResponse {
             boarding_address: boarding_addr,
         }))
@@ -3067,16 +3265,32 @@ impl MpcWallet for WalletService {
         let user_id_hex = Self::user_id_hex(&req.user_id);
         self.verify_auth(&req.user_id, &req.signature, req.timestamp_ms, OP_LIST_VTXOS)?;
 
-        self.require_asp()?;
+        let asp_arc = self.require_asp()?;
 
+        // Get owner key + ASP info for script computation.
+        let owner_pk_hex = self.get_user_xonly_pubkey(&user_id_hex)?;
+        let info = {
+            let mut asp = asp_arc.lock().await;
+            match &asp.info {
+                Some(i) => i.clone(),
+                None => asp.get_info().await
+                    .map_err(|e| Status::internal(format!("get_info: {e}")))?,
+            }
+        };
+        let network = ark::client::parse_network(&info.network)
+            .map_err(|e| Status::internal(e))?;
+
+        // Read from local vtxo_store (kept up-to-date by submit_ark_send for
+        // senders and by the indexer subscription stream for receivers).
         let store = self.vtxo_store.lock().await;
-        let user_vtxos = store.get(&user_id_hex);
         let mut vtxos = Vec::new();
         let mut total_balance: u64 = 0;
-        if let Some(entries) = user_vtxos {
+        if let Some(entries) = store.get(&user_id_hex) {
             for (txid, vout, amount, exit_delay) in entries.iter() {
+                let script = ark::client::vtxo_script_pubkey_hex(
+                    &owner_pk_hex, &info.signer_pubkey, *exit_delay, network,
+                ).unwrap_or_default();
                 total_balance += amount;
-                tracing::info!("[{user_id_hex}] ListVtxos: vtxo {txid}:{vout} amount={amount} exit_delay={exit_delay}");
                 vtxos.push(VtxoInfo {
                     txid: txid.clone(),
                     vout: *vout,
@@ -3086,9 +3300,11 @@ impl MpcWallet for WalletService {
                     status: "confirmed".to_string(),
                     is_preconfirmed: false,
                     exit_delay: *exit_delay,
+                    script,
                 });
             }
         }
+
         tracing::info!("[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}", vtxos.len());
 
         Ok(Response::new(ListVtxosResponse {
@@ -3417,6 +3633,10 @@ impl MpcWallet for WalletService {
 
             // Phase 2/3: Has session + signatures -> register intent or submit commitment sigs
             (Some((mut session, boarding_amount, exit_delay)), true) => {
+                let unilateral_exit_delay = {
+                    let asp_guard = asp_arc.lock().await;
+                    asp_guard.info.as_ref().map(|i| i.unilateral_exit_delay as u32).unwrap_or(86016)
+                };
                 let signatures: Vec<[u8; 64]> = req.signed_messages.iter().map(|s| {
                     if s.len() != 64 {
                         return Err(Status::invalid_argument(
@@ -3457,8 +3677,9 @@ impl MpcWallet for WalletService {
                                     let mut store = self.vtxo_store.lock().await;
                                     let entry = store.entry(user_id_hex.clone()).or_default();
                                     entry.retain(|(t, v, _, _)| !(t == &vtxo_txid && *v == vtxo_vout));
+                                    // Boarded VTXOs use boarding_exit_delay in their taproot tree.
                                     entry.push((vtxo_txid.clone(), vtxo_vout, boarding_amount, exit_delay));
-                                    tracing::info!("[{user_id_hex}] Settle: VTXO recorded vtxo_txid={vtxo_txid}:{vtxo_vout} amount={boarding_amount}");
+                                    tracing::info!("[{user_id_hex}] Settle: VTXO recorded vtxo_txid={vtxo_txid}:{vtxo_vout} amount={boarding_amount} exit_delay={exit_delay}");
                                     if let Some(vtxos) = store.get(&user_id_hex) {
                                         self.save_user_vtxos(&user_id_hex, vtxos);
                                     }
@@ -3505,8 +3726,9 @@ impl MpcWallet for WalletService {
                                     let mut store = self.vtxo_store.lock().await;
                                     let entry = store.entry(user_id_hex.clone()).or_default();
                                     entry.retain(|(t, v, _, _)| !(t == &vtxo_txid && *v == vtxo_vout));
+                                    // Boarded VTXOs use boarding_exit_delay in their taproot tree.
                                     entry.push((vtxo_txid.clone(), vtxo_vout, boarding_amount, exit_delay));
-                                    tracing::info!("[{user_id_hex}] Settle: VTXO recorded vtxo_txid={vtxo_txid}:{vtxo_vout} amount={boarding_amount}");
+                                    tracing::info!("[{user_id_hex}] Settle: VTXO recorded vtxo_txid={vtxo_txid}:{vtxo_vout} amount={boarding_amount} exit_delay={exit_delay}");
                                     if let Some(vtxos) = store.get(&user_id_hex) {
                                         self.save_user_vtxos(&user_id_hex, vtxos);
                                     }

@@ -307,6 +307,10 @@ void main() {
     print('Ark E2E Test Complete!');
   }, timeout: Timeout(Duration(minutes: 5)));
 
+  // Balance and VTXO assertions below caught two production bugs:
+  // 1. get_boarding_address() not registering scripts → VTXOs invisible after settle
+  // 2. exit_delay stored as 0 → VTXO reconstruction used wrong taproot tree → VTXO_NOT_FOUND on send
+  // Without these, the test only verified txid non-empty, which passed even with broken VTXOs.
   test('Ark: Full flow - fund boarding, settle, send Alice→Bob', () async {
     // 1. Alice DKG
     print('1. Alice DKG');
@@ -371,12 +375,22 @@ void main() {
       rethrow;
     }
 
-    // 5. Verify Alice has a VTXO
+    // 5. Verify Alice has a VTXO with correct balance and exit_delay
     print('5. List VTXOs');
     final vtxosResp = await alice.listVtxos();
+    final aliceBalanceAfterSettle = vtxosResp.totalBalance.toInt();
     print(
-        '   VTXOs: ${vtxosResp.vtxos.length}, balance: ${vtxosResp.totalBalance}');
-    expect(vtxosResp.totalBalance.toInt(), greaterThan(0));
+        '   VTXOs: ${vtxosResp.vtxos.length}, balance: $aliceBalanceAfterSettle');
+    expect(vtxosResp.vtxos.length, equals(1),
+        reason: 'Alice should have exactly 1 VTXO after settle');
+    expect(aliceBalanceAfterSettle, greaterThan(900000),
+        reason: 'Alice should have ~1M sats (0.01 BTC minus fees)');
+    expect(vtxosResp.vtxos.first.exitDelay, greaterThan(0),
+        reason:
+            'exit_delay must not be 0 — would produce wrong taproot tree on spend');
+    final aliceScript = vtxosResp.vtxos.first.script;
+    expect(aliceScript, isNotEmpty, reason: 'VTXO script must be populated');
+    print('   Alice script: ${aliceScript.substring(0, 16)}...');
 
     // 6. Bob DKG
     print('6. Bob DKG');
@@ -406,6 +420,35 @@ void main() {
     print('   Send ark_txid: $arkTxid');
     expect(arkTxid, isNotEmpty);
 
+    // 8b. Verify balances after first send.
+    // Wait for Bob's indexer subscription to deliver the received VTXO.
+    final aliceAfterSend1 = await alice.listVtxos();
+    print(
+        '   Alice: ${aliceAfterSend1.vtxos.length} VTXOs, balance=${aliceAfterSend1.totalBalance}');
+    expect(
+        aliceAfterSend1.totalBalance.toInt(), lessThan(aliceBalanceAfterSettle),
+        reason: 'Alice balance should decrease after send');
+    // Verify all Alice VTXOs have a non-empty script.
+    // Note: boarding VTXOs use boarding_exit_delay, change VTXOs use
+    // unilateral_exit_delay — so scripts may differ. Both must be non-empty.
+    for (final vtxo in aliceAfterSend1.vtxos) {
+      expect(vtxo.script, isNotEmpty,
+          reason: 'Every VTXO must have a non-empty scriptPubKey');
+    }
+
+    // Poll Bob's balance — subscription event may take a moment to arrive.
+    int bobBalance1 = 0;
+    for (int i = 0; i < 10; i++) {
+      final resp = await bob.listVtxos();
+      bobBalance1 = resp.totalBalance.toInt();
+      if (bobBalance1 > 0) break;
+      print('   Waiting for Bob VTXO... (${i + 1}/10)');
+      await Future.delayed(Duration(seconds: 1));
+    }
+    print('   Bob: balance=$bobBalance1');
+    expect(bobBalance1, equals(sendAmount),
+        reason: 'Bob should have received exactly $sendAmount sats');
+
     // 9. Alice sends again to Bob (uses change VTXO from first send)
     print('9. Alice sends to Bob again');
     final sendAmount2 = 50000; // 50k sats
@@ -419,6 +462,24 @@ void main() {
     final arkTxid2 = await aliceArkWallet.submit(signed2);
     print('   Send ark_txid: $arkTxid2');
     expect(arkTxid2, isNotEmpty);
+
+    // 9b. Verify balances after second send
+    final aliceAfterSend2 = await alice.listVtxos();
+    print(
+        '   Alice: ${aliceAfterSend2.vtxos.length} VTXOs, balance=${aliceAfterSend2.totalBalance}');
+    expect(aliceAfterSend2.totalBalance.toInt(),
+        lessThan(aliceAfterSend1.totalBalance.toInt()),
+        reason: 'Alice balance should decrease after second send');
+    int bobBalance2 = 0;
+    for (int i = 0; i < 10; i++) {
+      final resp = await bob.listVtxos();
+      bobBalance2 = resp.totalBalance.toInt();
+      if (bobBalance2 >= sendAmount + sendAmount2) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    print('   Bob: balance=$bobBalance2');
+    expect(bobBalance2, equals(sendAmount + sendAmount2),
+        reason: 'Bob should have ${sendAmount + sendAmount2} sats total');
 
     // 10. Create spending policy (limit 10k sats)
     print('10. Creating spending policy (limit 10,000 sats)');
@@ -465,6 +526,26 @@ void main() {
     final arkTxid4 = await aliceArkWallet.submit(signed4);
     print('   Send ark_txid: $arkTxid4');
     expect(arkTxid4, isNotEmpty);
+
+    // 12b. Verify final balances
+    final aliceFinal = await alice.listVtxos();
+    final totalSent = sendAmount + sendAmount2 + sendAmount3;
+    print(
+        '   Alice final: ${aliceFinal.vtxos.length} VTXOs, balance=${aliceFinal.totalBalance}');
+    expect(aliceFinal.totalBalance.toInt(),
+        equals(aliceBalanceAfterSettle - totalSent),
+        reason:
+            'Alice should have original balance minus $totalSent sats sent');
+    int bobFinalBalance = 0;
+    for (int i = 0; i < 10; i++) {
+      final resp = await bob.listVtxos();
+      bobFinalBalance = resp.totalBalance.toInt();
+      if (bobFinalBalance >= totalSent) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    print('   Bob final: balance=$bobFinalBalance');
+    expect(bobFinalBalance, equals(totalSent),
+        reason: 'Bob should have received $totalSent sats total');
 
     // 13. Clean up — delete policy
     print('13. Deleting policy');

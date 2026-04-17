@@ -610,11 +610,12 @@ const VtxoInfo$json = const {
     const {'1': 'status', '3': 6, '4': 1, '5': 9, '10': 'status'},
     const {'1': 'is_preconfirmed', '3': 7, '4': 1, '5': 8, '10': 'isPreconfirmed'},
     const {'1': 'exit_delay', '3': 8, '4': 1, '5': 13, '10': 'exitDelay'},
+    const {'1': 'script', '3': 9, '4': 1, '5': 9, '10': 'script'},
   ],
 };
 
 /// Descriptor for `VtxoInfo`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List vtxoInfoDescriptor = $convert.base64Decode('CghWdHhvSW5mbxISCgR0eGlkGAEgASgJUgR0eGlkEhIKBHZvdXQYAiABKA1SBHZvdXQSFgoGYW1vdW50GAMgASgEUgZhbW91bnQSHQoKY3JlYXRlZF9hdBgEIAEoA1IJY3JlYXRlZEF0Eh0KCmV4cGlyZXNfYXQYBSABKANSCWV4cGlyZXNBdBIWCgZzdGF0dXMYBiABKAlSBnN0YXR1cxInCg9pc19wcmVjb25maXJtZWQYByABKAhSDmlzUHJlY29uZmlybWVkEh0KCmV4aXRfZGVsYXkYCCABKA1SCWV4aXREZWxheQ==');
+final $typed_data.Uint8List vtxoInfoDescriptor = $convert.base64Decode('CghWdHhvSW5mbxISCgR0eGlkGAEgASgJUgR0eGlkEhIKBHZvdXQYAiABKA1SBHZvdXQSFgoGYW1vdW50GAMgASgEUgZhbW91bnQSHQoKY3JlYXRlZF9hdBgEIAEoA1IJY3JlYXRlZEF0Eh0KCmV4cGlyZXNfYXQYBSABKANSCWV4cGlyZXNBdBIWCgZzdGF0dXMYBiABKAlSBnN0YXR1cxInCg9pc19wcmVjb25maXJtZWQYByABKAhSDmlzUHJlY29uZmlybWVkEh0KCmV4aXRfZGVsYXkYCCABKA1SCWV4aXREZWxheRIWCgZzY3JpcHQYCSABKAlSBnNjcmlwdA==');
 @$core.Deprecated('Use listVtxosRequestDescriptor instead')
 const ListVtxosRequest$json = const {
   '1': 'ListVtxosRequest',

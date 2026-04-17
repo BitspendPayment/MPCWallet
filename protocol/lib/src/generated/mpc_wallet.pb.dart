@@ -3035,6 +3035,7 @@ class VtxoInfo extends $pb.GeneratedMessage {
     ..aOS(6, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'status')
     ..aOB(7, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'isPreconfirmed')
     ..a<$core.int>(8, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'exitDelay', $pb.PbFieldType.OU3)
+    ..aOS(9, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'script')
     ..hasRequiredFields = false
   ;
 
@@ -3048,6 +3049,7 @@ class VtxoInfo extends $pb.GeneratedMessage {
     $core.String? status,
     $core.bool? isPreconfirmed,
     $core.int? exitDelay,
+    $core.String? script,
   }) {
     final _result = create();
     if (txid != null) {
@@ -3073,6 +3075,9 @@ class VtxoInfo extends $pb.GeneratedMessage {
     }
     if (exitDelay != null) {
       _result.exitDelay = exitDelay;
+    }
+    if (script != null) {
+      _result.script = script;
     }
     return _result;
   }
@@ -3168,6 +3173,15 @@ class VtxoInfo extends $pb.GeneratedMessage {
   $core.bool hasExitDelay() => $_has(7);
   @$pb.TagNumber(8)
   void clearExitDelay() => clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.String get script => $_getSZ(8);
+  @$pb.TagNumber(9)
+  set script($core.String v) { $_setString(8, v); }
+  @$pb.TagNumber(9)
+  $core.bool hasScript() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearScript() => clearField(9);
 }
 
 class ListVtxosRequest extends $pb.GeneratedMessage {

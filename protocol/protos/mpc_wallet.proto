@@ -332,6 +332,7 @@ message VtxoInfo {
     string status = 6; // "confirmed", "pending", "spent", "expired"
     bool is_preconfirmed = 7;
     uint32 exit_delay = 8; // BIP-68 encoded exit delay for this VTXO
+    string script = 9;    // scriptPubKey hex (P2TR) — identifies the VTXO owner
 }
 
 message ListVtxosRequest {

@@ -8,7 +8,8 @@ pub mod batch;
 pub mod send;
 pub mod types;
 
-/// Re-export generated protobuf types for the arkd ArkService.
+/// Re-export generated protobuf types for the arkd ArkService and IndexerService.
+/// Both protos share `package ark.v1`, so tonic-build merges them into one file.
 pub mod proto {
     tonic::include_proto!("ark.v1");
 }
