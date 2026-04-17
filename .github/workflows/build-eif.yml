@@ -37,7 +37,7 @@ jobs:
 
       - name: Build EIF
         working-directory: server
-        run: enclave build --local
+        run: enclave build
 
       - name: Extract PCR values
         id: pcr
