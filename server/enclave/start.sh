@@ -12,14 +12,6 @@ if [ -e /dev/nsm ]; then
   dd if=/dev/nsm of=/dev/random  bs=256 count=1 2>/dev/null || true
 fi
 
-# Seed entropy pool from Nitro Security Module (NSM).
-# Without this, /dev/random blocks and WASM crypto operations hang.
-if [ -e /dev/nsm ]; then
-  dd if=/dev/nsm of=/dev/urandom bs=256 count=1 2>/dev/null || true
-  # Also seed /dev/random to unblock blocking reads
-  dd if=/dev/nsm of=/dev/random bs=256 count=1 2>/dev/null || true
-fi
-
 # Start viproxy for IMDS access before nitriding sets up full networking
 if [ "${ENCLAVE_VIPROXY_ENABLED:-true}" = "true" ]; then
   VIPROXY_IN_ADDRS="${ENCLAVE_VIPROXY_IN_ADDRS:-127.0.0.1:80}"
@@ -57,14 +49,6 @@ fi
 
 # Configure DNS to use gvproxy gateway
 echo "nameserver 192.168.127.1" > /etc/resolv.conf
-
-# Seed entropy pool from Nitro Security Module (NSM).
-# Without this, /dev/random blocks and WASM crypto operations hang.
-if [ -e /dev/nsm ]; then
-  dd if=/dev/nsm of=/dev/urandom bs=256 count=1 2>/dev/null || true
-  # Also seed /dev/random to unblock blocking reads
-  dd if=/dev/nsm of=/dev/random bs=256 count=1 2>/dev/null || true
-fi
 
 # Start nitriding in background (it will set up networking via gvproxy)
 exec /app/nitriding ${NITRIDING_ARGS} -appcmd "/app/enclave-supervisor"

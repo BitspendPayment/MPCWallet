@@ -92,7 +92,7 @@ class MpcService extends ChangeNotifier {
         _balance = await _wallet!.getBalance();
         _isConnected = true;
       } catch (e) {
-        print("Refresh failed: $e");
+        debugPrint("Refresh failed: $e");
         _isConnected = false;
       }
       notifyListeners();
@@ -136,16 +136,28 @@ class MpcService extends ChangeNotifier {
   /// The expected PCR0 (from manifest). Null if not yet fetched.
   String? get expectedPcr0 => _expectedPcr0;
 
+  /// Whether attestation was expected but unavailable.
+  bool _attestationUnavailable = false;
+  bool get attestationUnavailable => _attestationUnavailable;
+
   /// Fetch PCR0 from the deployment manifest.
   Future<void> fetchManifest() async {
     if (_manifestRepo.isEmpty) return;
     try {
       final m = await manifest.fetchManifest(_manifestRepo, tag: _manifestTag);
+      if (m.pcr0.length != 96 || !RegExp(r'^[a-f0-9]{96}$').hasMatch(m.pcr0)) {
+        debugPrint('Warning: Invalid PCR0 format (${m.pcr0.length} chars), ignoring');
+        _attestationUnavailable = true;
+        return;
+      }
       _expectedPcr0 = m.pcr0;
-      print('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
+      _attestationUnavailable = false;
+      debugPrint('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
     } catch (e) {
-      print('Warning: Could not fetch manifest: $e');
+      debugPrint('Warning: Could not fetch manifest: $e');
+      _attestationUnavailable = true;
       // Continue without attestation -- will use plain REST.
+      // UI can check attestationUnavailable to warn the user.
     }
   }
 
@@ -167,7 +179,7 @@ class MpcService extends ChangeNotifier {
       _identityBox = await Hive.openBox('mpc_service_identity');
 
       _host = _identityBox!.get('serverHost', defaultValue: '10.0.2.2');
-      print("MPC Service: Using host: $_host");
+      debugPrint("MPC Service: Using host: $_host");
 
       // Fetch deployment manifest for enclave PCR0 (non-blocking on failure).
       await fetchManifest();
@@ -183,7 +195,7 @@ class MpcService extends ChangeNotifier {
 
       _isInitialized = true;
     } catch (e) {
-      print("MPC Service Error: $e");
+      debugPrint("MPC Service Error: $e");
       rethrow;
     }
   }
@@ -195,13 +207,13 @@ class MpcService extends ChangeNotifier {
       await _hardwareSigner?.disconnect();
       _hardwareSigner = null;
     } catch (e) {
-      print("MPC Service: Error disconnecting hardware signer: $e");
+      debugPrint("MPC Service: Error disconnecting hardware signer: $e");
     }
     try {
       await _identityBox?.close();
       _identityBox = null;
     } catch (e) {
-      print("MPC Service: Error closing identity box: $e");
+      debugPrint("MPC Service: Error closing identity box: $e");
     }
     super.dispose();
   }
@@ -209,7 +221,7 @@ class MpcService extends ChangeNotifier {
   Future<void> setHost(String host) async {
     if (_host == host && _isInitialized) return;
 
-    print("MPC Service: Switching host to $host");
+    debugPrint("MPC Service: Switching host to $host");
     _host = host;
 
     await _ensurePersistenceInitialized();
@@ -231,12 +243,18 @@ class MpcService extends ChangeNotifier {
     String? storageId,
   }) async {
     if (_expectedPcr0 != null && _expectedPcr0!.isNotEmpty) {
-      return MpcClient.attested(
-        _baseUrl,
-        expectedPcr0: _expectedPcr0!,
-        hardwareSigner: hardwareSigner,
-        storageId: storageId,
-      );
+      try {
+        return await MpcClient.attested(
+          _baseUrl,
+          expectedPcr0: _expectedPcr0!,
+          hardwareSigner: hardwareSigner,
+          storageId: storageId,
+        );
+      } catch (e) {
+        debugPrint('Attested transport failed, falling back to REST: $e');
+        _attestationUnavailable = true;
+        notifyListeners();
+      }
     }
     return MpcClient.rest(
       _baseUrl,
@@ -375,7 +393,7 @@ class MpcService extends ChangeNotifier {
     try {
       await restoreSession();
     } catch (e) {
-      print("Reconnect failed: $e");
+      debugPrint("Reconnect failed: $e");
       _isConnected = false;
       notifyListeners();
     }
@@ -388,7 +406,7 @@ class MpcService extends ChangeNotifier {
       _balance = await _wallet!.getBalance();
       _isConnected = true;
     } catch (e) {
-      print("Post-sync balance update failed: $e");
+      debugPrint("Post-sync balance update failed: $e");
     }
     notifyListeners();
   }

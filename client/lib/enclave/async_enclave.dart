@@ -9,6 +9,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:isolate';
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 
 import 'native_enclave.dart';
 
@@ -89,7 +90,7 @@ class AsyncEnclaveClient {
     });
     client._isolatePort = await completer.future;
     receivePort.close();
-    print('[AsyncEnclave] Background isolate ready');
+    debugPrint('[AsyncEnclave] Background isolate ready');
 
     return client;
   }
@@ -104,13 +105,13 @@ class AsyncEnclaveClient {
         cacheTtlSecs: config.cacheTtlSecs,
       );
     } catch (e) {
-      print(
+      debugPrint(
           '[AsyncEnclave] Failed to create NativeEnclaveClient in isolate: $e');
       // Send error back -- the main isolate will get a null SendPort
       config.mainPort.send('ERROR: $e');
       return;
     }
-    print('[AsyncEnclave] NativeEnclaveClient created in background isolate');
+    debugPrint('[AsyncEnclave] NativeEnclaveClient created in background isolate');
 
     final receivePort = ReceivePort();
     config.mainPort.send(receivePort.sendPort);
@@ -118,17 +119,17 @@ class AsyncEnclaveClient {
     receivePort.listen((msg) {
       if (msg is _PostRequest) {
         try {
-          print('[AsyncEnclave] POST ${msg.path}...');
+          debugPrint('[AsyncEnclave] POST ${msg.path}...');
           final resp = client.post(msg.path, msg.body);
-          print(
-              '[AsyncEnclave] POST ${msg.path} -> ${resp.statusCode} (${resp.body.length} bytes, sig=${resp.signatureVerified}, err=${resp.error})');
+          debugPrint(
+              '[AsyncEnclave] POST ${msg.path} -> ${resp.statusCode} (${resp.body.length} bytes, sig=${resp.signatureVerified})');
           msg.replyPort.send(jsonEncode({
             'status_code': resp.statusCode,
             'body': resp.body,
             'signature_verified': resp.signatureVerified,
           }));
         } catch (e) {
-          print('[AsyncEnclave] POST ${msg.path} ERROR: $e');
+          debugPrint('[AsyncEnclave] POST ${msg.path} ERROR: $e');
           msg.replyPort.send(jsonEncode({'error': e.toString()}));
         }
       } else if (msg is _GetRequest) {
@@ -145,7 +146,7 @@ class AsyncEnclaveClient {
       } else if (msg is _StatusRequest) {
         try {
           final status = client.attestationStatus;
-          print('[AsyncEnclave] Status: verified=${status.verified}, pcr0=${status.pcr0.length}, ttl=${status.ttlRemainingSecs}, epoch=${status.verifiedAtEpochSecs}');
+          debugPrint('[AsyncEnclave] Status: verified=${status.verified}, pcr0=${status.pcr0.length}, ttl=${status.ttlRemainingSecs}, epoch=${status.verifiedAtEpochSecs}');
           msg.replyPort.send(jsonEncode({
             'verified': status.verified,
             'pcr0': status.pcr0,
