@@ -8,10 +8,15 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer' as developer;
 import 'dart:isolate';
-import 'package:flutter/foundation.dart' show debugPrint, kDebugMode;
 
 import 'native_enclave.dart';
+
+/// Debug-safe print that works in both Flutter and pure Dart (e2e tests).
+void _log(String message) {
+  developer.log(message, name: 'AsyncEnclave');
+}
 
 /// Message types for isolate communication.
 sealed class _Request {}
@@ -32,6 +37,11 @@ class _GetRequest extends _Request {
 class _StatusRequest extends _Request {
   final SendPort replyPort;
   _StatusRequest(this.replyPort);
+}
+
+class _VerifyRequest extends _Request {
+  final SendPort replyPort;
+  _VerifyRequest(this.replyPort);
 }
 
 class _DisposeRequest extends _Request {
@@ -90,7 +100,7 @@ class AsyncEnclaveClient {
     });
     client._isolatePort = await completer.future;
     receivePort.close();
-    debugPrint('[AsyncEnclave] Background isolate ready');
+    _log('[AsyncEnclave] Background isolate ready');
 
     return client;
   }
@@ -105,13 +115,13 @@ class AsyncEnclaveClient {
         cacheTtlSecs: config.cacheTtlSecs,
       );
     } catch (e) {
-      debugPrint(
+      _log(
           '[AsyncEnclave] Failed to create NativeEnclaveClient in isolate: $e');
       // Send error back -- the main isolate will get a null SendPort
       config.mainPort.send('ERROR: $e');
       return;
     }
-    debugPrint('[AsyncEnclave] NativeEnclaveClient created in background isolate');
+    _log('[AsyncEnclave] NativeEnclaveClient created in background isolate');
 
     final receivePort = ReceivePort();
     config.mainPort.send(receivePort.sendPort);
@@ -119,9 +129,9 @@ class AsyncEnclaveClient {
     receivePort.listen((msg) {
       if (msg is _PostRequest) {
         try {
-          debugPrint('[AsyncEnclave] POST ${msg.path}...');
+          _log('[AsyncEnclave] POST ${msg.path}...');
           final resp = client.post(msg.path, msg.body);
-          debugPrint(
+          _log(
               '[AsyncEnclave] POST ${msg.path} -> ${resp.statusCode} (${resp.body.length} bytes, sig=${resp.signatureVerified})');
           msg.replyPort.send(jsonEncode({
             'status_code': resp.statusCode,
@@ -129,7 +139,7 @@ class AsyncEnclaveClient {
             'signature_verified': resp.signatureVerified,
           }));
         } catch (e) {
-          debugPrint('[AsyncEnclave] POST ${msg.path} ERROR: $e');
+          _log('[AsyncEnclave] POST ${msg.path} ERROR: $e');
           msg.replyPort.send(jsonEncode({'error': e.toString()}));
         }
       } else if (msg is _GetRequest) {
@@ -146,7 +156,23 @@ class AsyncEnclaveClient {
       } else if (msg is _StatusRequest) {
         try {
           final status = client.attestationStatus;
-          debugPrint('[AsyncEnclave] Status: verified=${status.verified}, pcr0=${status.pcr0.length}, ttl=${status.ttlRemainingSecs}, epoch=${status.verifiedAtEpochSecs}');
+          _log('[AsyncEnclave] Status: verified=${status.verified}, pcr0=${status.pcr0.length}, ttl=${status.ttlRemainingSecs}, epoch=${status.verifiedAtEpochSecs}');
+          msg.replyPort.send(jsonEncode({
+            'verified': status.verified,
+            'pcr0': status.pcr0,
+            'verified_at_epoch_secs': status.verifiedAtEpochSecs,
+            'ttl_remaining_secs': status.ttlRemainingSecs,
+            'attestation_key': status.attestationKey,
+          }));
+        } catch (e) {
+          msg.replyPort.send(jsonEncode({
+            'verified': false,
+            'error': e.toString(),
+          }));
+        }
+      } else if (msg is _VerifyRequest) {
+        try {
+          final status = client.verify();
           msg.replyPort.send(jsonEncode({
             'verified': status.verified,
             'pcr0': status.pcr0,
@@ -205,6 +231,23 @@ class AsyncEnclaveClient {
     replyPort.close();
     return AttestationStatus.fromJson(
         jsonDecode(result) as Map<String, dynamic>);
+  }
+
+  /// Force attestation verification and return the result.
+  /// Throws if verification fails (PCR0 mismatch, enclave unreachable, etc.).
+  Future<AttestationStatus> verify() async {
+    _checkDisposed();
+    final replyPort = ReceivePort();
+    _isolatePort.send(_VerifyRequest(replyPort.sendPort));
+    final result = await replyPort.first as String;
+    replyPort.close();
+    final status = AttestationStatus.fromJson(
+        jsonDecode(result) as Map<String, dynamic>);
+    if (!status.verified) {
+      throw StateError(
+          'Attestation verification failed: ${status.error ?? "PCR0 mismatch or enclave unreachable"}');
+    }
+    return status;
   }
 
   /// Dispose the client and kill the background isolate.

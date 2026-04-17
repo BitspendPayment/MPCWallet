@@ -35,6 +35,11 @@ class AttestedWalletApi implements WalletApi {
       baseUrl, expectedPcr0,
       cacheTtlSecs: cacheTtlSecs,
     );
+    // Verify attestation eagerly — fail fast if enclave is unreachable
+    // or PCR0 doesn't match. This also populates the status cache so
+    // the attestation card shows immediately in the UI.
+    await enclave.verify();
+
     final inner = RestWalletApi.withPostFn(baseUrl, (path, body) async {
       // Retry once on transient errors (attestation warmup, connection reset).
       for (var attempt = 0; attempt < 2; attempt++) {

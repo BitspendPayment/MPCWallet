@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:client/ark_wallet.dart';
@@ -125,8 +124,7 @@ class MpcService extends ChangeNotifier {
   /// Cached attestation status for immediate UI access.
   AttestationStatus? _lastAttestationStatus;
 
-  /// Attestation status from the enclave client (null if not using attested transport).
-  /// Caches the result so the UI doesn't flicker on widget rebuilds.
+  /// Attestation status from the enclave client (null for local dev).
   Future<AttestationStatus?> getAttestationStatus() async {
     final status = await _client?.getAttestationStatus();
     if (status != null) _lastAttestationStatus = status;
@@ -136,29 +134,17 @@ class MpcService extends ChangeNotifier {
   /// The expected PCR0 (from manifest). Null if not yet fetched.
   String? get expectedPcr0 => _expectedPcr0;
 
-  /// Whether attestation was expected but unavailable.
-  bool _attestationUnavailable = false;
-  bool get attestationUnavailable => _attestationUnavailable;
-
   /// Fetch PCR0 from the deployment manifest.
+  /// Throws if the manifest cannot be fetched or PCR0 is invalid —
+  /// attestation is mandatory for non-local connections.
   Future<void> fetchManifest() async {
     if (_manifestRepo.isEmpty) return;
-    try {
-      final m = await manifest.fetchManifest(_manifestRepo, tag: _manifestTag);
-      if (m.pcr0.length != 96 || !RegExp(r'^[a-f0-9]{96}$').hasMatch(m.pcr0)) {
-        debugPrint('Warning: Invalid PCR0 format (${m.pcr0.length} chars), ignoring');
-        _attestationUnavailable = true;
-        return;
-      }
-      _expectedPcr0 = m.pcr0;
-      _attestationUnavailable = false;
-      debugPrint('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
-    } catch (e) {
-      debugPrint('Warning: Could not fetch manifest: $e');
-      _attestationUnavailable = true;
-      // Continue without attestation -- will use plain REST.
-      // UI can check attestationUnavailable to warn the user.
+    final m = await manifest.fetchManifest(_manifestRepo, tag: _manifestTag);
+    if (m.pcr0.length != 96 || !RegExp(r'^[a-f0-9]{96}$').hasMatch(m.pcr0)) {
+      throw StateError('Invalid PCR0 from manifest: ${m.pcr0.length} chars');
     }
+    _expectedPcr0 = m.pcr0;
+    debugPrint('Fetched manifest: pcr0=${m.pcr0.substring(0, 16)}...');
   }
 
   Future<void> _ensurePersistenceInitialized() async {
@@ -181,8 +167,15 @@ class MpcService extends ChangeNotifier {
       _host = _identityBox!.get('serverHost', defaultValue: '10.0.2.2');
       debugPrint("MPC Service: Using host: $_host");
 
-      // Fetch deployment manifest for enclave PCR0 (non-blocking on failure).
-      await fetchManifest();
+      // Fetch deployment manifest for enclave PCR0.
+      // For remote hosts this is mandatory — failure will propagate.
+      // For local dev, manifest fetch failure is non-fatal.
+      try {
+        await fetchManifest();
+      } catch (e) {
+        if (_requiresAttestation) rethrow;
+        debugPrint('Manifest fetch skipped for local dev: $e');
+      }
 
       _dkgComplete = _identityBox!.get('dkgComplete', defaultValue: false);
       _network =
@@ -235,26 +228,33 @@ class MpcService extends ChangeNotifier {
     return UsbHardwareSigner();
   }
 
+  /// Whether the current host requires attestation.
+  bool get _requiresAttestation {
+    return !(_host == '127.0.0.1' ||
+        _host == 'localhost' ||
+        _host == '10.0.2.2' ||
+        _host.startsWith('192.168.'));
+  }
+
   /// Create an MpcClient with the appropriate transport.
-  /// Uses attested transport (background isolate FFI) if PCR0 is available,
-  /// plain REST otherwise.
+  /// Local hosts use plain REST. Remote hosts MUST use attested transport —
+  /// if attestation fails, the error propagates (no silent fallback).
   Future<MpcClient> _createMpcClient({
     required HardwareSignerInterface hardwareSigner,
     String? storageId,
   }) async {
-    if (_expectedPcr0 != null && _expectedPcr0!.isNotEmpty) {
-      try {
-        return await MpcClient.attested(
-          _baseUrl,
-          expectedPcr0: _expectedPcr0!,
-          hardwareSigner: hardwareSigner,
-          storageId: storageId,
-        );
-      } catch (e) {
-        debugPrint('Attested transport failed, falling back to REST: $e');
-        _attestationUnavailable = true;
-        notifyListeners();
+    if (_requiresAttestation) {
+      if (_expectedPcr0 == null || _expectedPcr0!.isEmpty) {
+        throw StateError(
+            'Attestation required for remote host $_host but no PCR0 available. '
+            'Check network connection and retry.');
       }
+      return MpcClient.attested(
+        _baseUrl,
+        expectedPcr0: _expectedPcr0!,
+        hardwareSigner: hardwareSigner,
+        storageId: storageId,
+      );
     }
     return MpcClient.rest(
       _baseUrl,
