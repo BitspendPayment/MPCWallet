@@ -8,7 +8,6 @@ account: "043673801220"                      # AWS account ID (required)
 prefix: dev                      # Deployment prefix (stack = {prefix}Nitro{Name})
 instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
-previous_pcr0: "d7748cfe7f1e52e46cea19f160720010ad5617176ba2417e205a15a90684ea4e010126a79b3aad4f002a02927996ceaa"
 
 # SDK coordinates for the enclave supervisor binary.
 # The supervisor handles attestation, secrets, PCR extension, and signing
@@ -27,8 +26,8 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "fde5705393b8754a7ff632086faf9fd03545155f"                    # Git commit SHA (required)
-  nix_hash: "sha256-Eus3bF7VVRgRpG5oVRFMGL/n+G8jN1dWWvSKmYQA0LY="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_rev: "4db41fedf7bc39b7a8a687c628cc0bcf2ea94b4e"                    # Git commit SHA (required)
+  nix_hash: "sha256-EOYkZwcJ4YWvR5f+M4OuPzvZL00apj7DKtkUC4OZP8k="                   # Nix source hash: nix-prefetch-url --unpack (required)
   nix_vendor_hash: "sha256-QPBa326MlMDIxvxC4Zp8PMgW9hi31pdH0MRwv8+j7uc="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
