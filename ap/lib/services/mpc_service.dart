@@ -181,6 +181,11 @@ class MpcService extends ChangeNotifier {
       final defaultNetwork = _requiresAttestation ? 'signet' : 'regtest';
       _network =
           _identityBox!.get('network', defaultValue: defaultNetwork) as String;
+      // Remote hosts can never be regtest — override stale persisted values.
+      if (_requiresAttestation && _network == 'regtest') {
+        _network = 'signet';
+        await _identityBox!.put('network', _network);
+      }
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
