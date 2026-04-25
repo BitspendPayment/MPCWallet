@@ -5,6 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import '../../services/mpc_service.dart';
+import '../../widgets/recovery_password_dialog.dart';
 
 
 
@@ -26,6 +27,12 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
   }
 
   Future<void> _deletePolicy(String policyId) async {
+    // Capture all context-derived references up-front. Anything we use after
+    // an await must come from these locals, never from `context` directly,
+    // because the widget may be disposed while a dialog or RPC is in flight.
+    final mpcService = context.read<MpcService>();
+    final messenger = ScaffoldMessenger.of(context);
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
@@ -65,69 +72,82 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
 
     if (confirmed != true || !mounted) return;
 
+    String? password;
+    if (mpcService.signerKind == SignerKind.software) {
+      password = await promptRecoveryPassword(
+        context,
+        title: 'Authorize policy deletion',
+        hint: 'Your recovery key is downloaded, used to sign, then wiped.',
+      );
+      // mounted check after the second async gap.
+      if (!mounted) return;
+      if (password == null || password.isEmpty) return;
+    }
+
     setState(() => _isDeleting = true);
     try {
-      final mpcService = context.read<MpcService>();
-      await mpcService.client!.deletePolicy(policyId);
-      mpcService.policyUpdated();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Policy deleted successfully')),
-        );
+      Future<void> run() => mpcService.client!.deletePolicy(policyId);
+      if (password != null) {
+        await mpcService.withRecoverySigner(
+            password: password, action: run);
+      } else {
+        await run();
       }
+      mpcService.policyUpdated();
+      // Use the captured messenger — context may be stale by now.
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Policy deleted successfully')),
+      );
     } catch (e) {
-      if (mounted) {
-        final isHardwareError = e.toString().contains('No HW Signer device found') ||
-            e.toString().contains('USB') ||
-            e.toString().contains('transport');
-        if (isHardwareError) {
-          final retry = await showDialog<bool>(
-            context: context,
-            builder: (context) => AlertDialog(
-              backgroundColor: Colors.grey[900],
-              icon: const Icon(Icons.usb_off, color: Colors.amber, size: 48),
-              title: Text(
-                'Hardware Key Required',
-                style: GoogleFonts.inter(
-                    color: Colors.white, fontWeight: FontWeight.bold),
-              ),
-              content: Text(
-                'Connect your HW Signer via USB OTG, then tap Retry.',
-                style: GoogleFonts.inter(color: Colors.white70),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context, false),
-                  child: Text('Cancel',
-                      style: GoogleFonts.inter(color: Colors.white54)),
-                ),
-                ElevatedButton(
-                  onPressed: () => Navigator.pop(context, true),
-                  child: const Text('Retry'),
-                ),
-              ],
+      final errStr = e.toString();
+      final isHardwareError = errStr.contains('No HW Signer device found') ||
+          errStr.contains('USB') ||
+          errStr.contains('transport');
+      if (isHardwareError && mounted) {
+        final retry = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            backgroundColor: Colors.grey[900],
+            icon: const Icon(Icons.usb_off, color: Colors.amber, size: 48),
+            title: Text(
+              'Hardware Key Required',
+              style: GoogleFonts.inter(
+                  color: Colors.white, fontWeight: FontWeight.bold),
             ),
-          );
-          if (retry == true && mounted) {
-            try {
-              await context.read<MpcService>().reconnectHardwareSigner();
-              _deletePolicy(policyId);
-            } catch (_) {
-              if (mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Still unable to connect. Check your device.'),
-                    backgroundColor: Colors.red,
-                  ),
-                );
-              }
-            }
+            content: Text(
+              'Connect your HW Signer via USB OTG, then tap Retry.',
+              style: GoogleFonts.inter(color: Colors.white70),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text('Cancel',
+                    style: GoogleFonts.inter(color: Colors.white54)),
+              ),
+              ElevatedButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('Retry'),
+              ),
+            ],
+          ),
+        );
+        if (retry == true && mounted) {
+          try {
+            await mpcService.reconnectHardwareSigner();
+            if (mounted) _deletePolicy(policyId);
+          } catch (_) {
+            messenger.showSnackBar(
+              const SnackBar(
+                content: Text('Still unable to connect. Check your device.'),
+                backgroundColor: Colors.red,
+              ),
+            );
           }
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
-          );
         }
+      } else {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
       }
     } finally {
       if (mounted) setState(() => _isDeleting = false);

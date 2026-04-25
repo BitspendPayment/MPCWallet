@@ -5,6 +5,21 @@ import 'package:hive/hive.dart';
 import 'package:client/persistence/wallet_store.dart';
 import 'package:client/persistence/encryption.dart';
 
+/// Test salt and low-cost Argon2 params so tests stay fast.
+final _testSalt = List<int>.filled(16, 0x42);
+
+Future<HiveCipher> _cipherFor(String password) async {
+  final provider = Argon2PasswordKeyProvider(
+    password: password,
+    salt: _testSalt,
+    memoryKib: 8,
+    iterations: 1,
+    parallelism: 1,
+  );
+  final key = await provider.getOrCreateKey();
+  return createCipherFromKey(key);
+}
+
 void main() {
   late Directory tempDir;
 
@@ -19,27 +34,46 @@ void main() {
   });
 
   group('Encryption utilities', () {
-    test('createCipherFromPin creates valid cipher', () {
-      final cipher = createCipherFromPin('1234');
-      expect(cipher, isA<HiveAesCipher>());
-    });
-
-    test('PinDerivedKeyProvider returns 32-byte key', () async {
-      final provider = PinDerivedKeyProvider('testpin');
+    test('Argon2PasswordKeyProvider returns 32-byte key', () async {
+      final provider = Argon2PasswordKeyProvider(
+        password: 'testpin',
+        salt: _testSalt,
+        memoryKib: 8,
+        iterations: 1,
+        parallelism: 1,
+      );
       final key = await provider.getOrCreateKey();
       expect(key.length, equals(32));
     });
 
-    test('PinDerivedKeyProvider returns consistent key', () async {
-      final provider = PinDerivedKeyProvider('testpin');
+    test('Argon2PasswordKeyProvider returns consistent key', () async {
+      final provider = Argon2PasswordKeyProvider(
+        password: 'testpin',
+        salt: _testSalt,
+        memoryKib: 8,
+        iterations: 1,
+        parallelism: 1,
+      );
       final key1 = await provider.getOrCreateKey();
       final key2 = await provider.getOrCreateKey();
       expect(key1, equals(key2));
     });
 
-    test('Different PINs produce different keys', () async {
-      final provider1 = PinDerivedKeyProvider('1234');
-      final provider2 = PinDerivedKeyProvider('5678');
+    test('Different passwords produce different keys', () async {
+      final provider1 = Argon2PasswordKeyProvider(
+        password: '1234',
+        salt: _testSalt,
+        memoryKib: 8,
+        iterations: 1,
+        parallelism: 1,
+      );
+      final provider2 = Argon2PasswordKeyProvider(
+        password: '5678',
+        salt: _testSalt,
+        memoryKib: 8,
+        iterations: 1,
+        parallelism: 1,
+      );
       final key1 = await provider1.getOrCreateKey();
       final key2 = await provider2.getOrCreateKey();
       expect(key1, isNot(equals(key2)));
@@ -66,7 +100,7 @@ void main() {
     });
 
     test('initializes with encryption', () async {
-      final cipher = createCipherFromPin('testpin');
+      final cipher = await _cipherFor('testpin');
       final store = WalletStore(
         boxName: 'test_encrypted',
         cipher: cipher,
@@ -96,7 +130,7 @@ void main() {
     });
 
     test('saves and retrieves state with encryption', () async {
-      final cipher = createCipherFromPin('securepin');
+      final cipher = await _cipherFor('securepin');
       final store = WalletStore(
         boxName: 'test_encrypted_state',
         cipher: cipher,
@@ -179,9 +213,9 @@ void main() {
   });
 
   group('Encrypted storage isolation', () {
-    test('wrong PIN cannot read encrypted data', () async {
-      // Save with PIN 1
-      final cipher1 = createCipherFromPin('correctpin');
+    test('wrong password cannot read encrypted data', () async {
+      // Save with password 1
+      final cipher1 = await _cipherFor('correctpin');
       final store1 = WalletStore(
         boxName: 'test_pin_isolation',
         cipher: cipher1,
@@ -193,8 +227,8 @@ void main() {
       });
       await store1.close();
 
-      // Try to read with wrong PIN - this should fail to open or read
-      final cipher2 = createCipherFromPin('wrongpin');
+      // Try to read with wrong password - this should fail to open or read
+      final cipher2 = await _cipherFor('wrongpin');
       final store2 = WalletStore(
         boxName: 'test_pin_isolation',
         cipher: cipher2,
@@ -204,8 +238,6 @@ void main() {
       try {
         await store2.init();
         await store2.getClientState();
-        // If we get here, data should be null/corrupted due to wrong key
-        // Hive may throw or return garbage depending on implementation
         await store2.close();
       } catch (e) {
         // Expected - wrong key should cause decryption failure

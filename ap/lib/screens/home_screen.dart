@@ -38,6 +38,12 @@ class HomeScreen extends StatelessWidget {
             icon: const Icon(Icons.notifications_none),
             onPressed: () {},
           ),
+          if (mpcService.signerKind == SignerKind.software)
+            IconButton(
+              icon: const Icon(Icons.cloud_outlined),
+              tooltip: 'Drive backup',
+              onPressed: () => context.push('/settings/backup'),
+            ),
         ],
       ),
       body: SafeArea(

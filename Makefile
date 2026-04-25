@@ -4,6 +4,7 @@
 #  Primary commands:
 #    make e2e            Run E2E test (no Ark)
 #    make e2e-ark        Run Ark E2E test
+#    make software       Start regtest for software signer (no USB device, no Ark)
 #    make hardware       Start regtest for hardware device (no Ark)
 #    make hardware-ark   Start regtest for hardware device with Ark
 #    make hw-build       Build HW Signer TrustZone firmware (Secure + NS)
@@ -12,7 +13,7 @@
 #    make down           Stop everything
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark hardware hardware-ark flash down \
+.PHONY: e2e e2e-ark software hardware hardware-ark flash down \
 	ffi-build ffi-android ffi-android-all threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android enclave-ffi-build enclave-ffi-android \
 	threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32 \
 	cosigner-build server-build signer-build pico-build \
@@ -37,7 +38,7 @@ MUTINYNET_ASP_URL ?= http://localhost:7070
 SESSIONS          ?= 10
 CONCURRENCY       ?= 5
 SIGNER_PORT       ?= 9090
-SERVER            ?= 127.0.0.1:50051
+SERVER            ?= 127.0.0.1:7074
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PRIMARY COMMANDS
@@ -55,23 +56,45 @@ e2e-ark: server-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-b
 	cd e2e && dart test test/ark_e2e_test.dart
 	-pkill -f "signer-server" || true
 
-# 3) Start regtest for hardware device (no Ark) — server runs in foreground
-hardware: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-build ffi-android
-	@echo "Starting mine loop in background..."
-	@(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) &
+# 3) Start regtest for SOFTWARE signer (no USB device required) — server in foreground
+#    Identical infrastructure to `make hardware`; only difference is the banner.
+#    The Rust signer-server (port 9090) is NOT started — software signer runs
+#    in-app via threshold-ffi.
+software: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-build ffi-android
 	@echo ""
+	@echo "==> Software signer mode — no USB device required."
 	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
-	@echo "==> Server logs below (Ctrl+C to stop):"
+	@echo "==> In the app, pick 'Software Signer' (default) on the first screen."
+	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
-	export ELECTRUM_URL=127.0.0.1 && \
-	export ELECTRUM_PORT=50001 && \
-	export BITCOIN_RPC_USER=admin1 && \
-	export BITCOIN_RPC_PASSWORD=123 && \
-	cd server && cargo run --release -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-		--port 50051
+	@bash -c 'set -m; \
+		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
+		MINE_PID=$$!; \
+		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
+		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
+		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
+		cd server && cargo run --release --bin server -- \
+			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--port 7074'
 
-# 4) Start regtest for hardware device with Ark — server runs in foreground
+# 4) Start regtest for hardware device (no Ark) — server runs in foreground
+hardware: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-build ffi-android
+	@echo ""
+	@echo "==> Hardware signer mode — connect rp235x via USB OTG to phone."
+	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
+	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
+	@echo ""
+	@bash -c 'set -m; \
+		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
+		MINE_PID=$$!; \
+		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
+		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
+		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
+		cd server && cargo run --release --bin server -- \
+			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--port 7074'
+
+# 5) Start regtest for hardware device with Ark — server runs in foreground
 hardware-ark: cosigner-build server-build ffi-build ffi-android
 	@echo "=== Starting regtest + arkd ==="
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
@@ -82,23 +105,22 @@ hardware-ark: cosigner-build server-build ffi-build ffi-android
 	@echo "=== Initializing arkd ==="
 	./scripts/arkd_init.sh --fund
 	@echo "=== Setting up ADB reverse ==="
-	-adb reverse tcp:50051 tcp:50051
+	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001
 	@echo ""
-	@echo "Starting mine loop in background..."
-	@(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) &
-	@echo ""
 	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
-	@echo "==> Server logs below (Ctrl+C to stop):"
+	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
-	export ELECTRUM_URL=127.0.0.1 && \
-	export ELECTRUM_PORT=50001 && \
-	export BITCOIN_RPC_USER=admin1 && \
-	export BITCOIN_RPC_PASSWORD=123 && \
-	export ASP_URL=http://127.0.0.1:7070 && \
-	cd server && cargo run --release -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-		--port 50051
+	@bash -c 'set -m; \
+		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
+		MINE_PID=$$!; \
+		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
+		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
+		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
+		       ASP_URL=http://127.0.0.1:7070; \
+		cd server && cargo run --release --bin server -- \
+			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--port 7074'
 
 # 5) Stop everything (server, signer, mine loop, Docker)
 down:
@@ -106,7 +128,7 @@ down:
 	-pkill -f "target/release/server" || true
 	-pkill -f "signer-server" || true
 	-pkill -f "bitcoin.sh mine" || true
-	-sudo fuser -k 50051/tcp 2>/dev/null || true
+	-sudo fuser -k 7074/tcp 2>/dev/null || true
 	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down 2>/dev/null || true
 	sudo rm -rf /root/.mpc_wallet/server/db 2>/dev/null || true
 	sudo rm -rf $(DATA_DIR) 2>/dev/null || true
@@ -287,9 +309,9 @@ mine-loop:
 
 adb-reverse:
 	@echo "Setting up ADB reverse port forwarding..."
-	-adb reverse tcp:50051 tcp:50051
+	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001
-	@echo "Forwarding active: phone 127.0.0.1:50051 -> PC gRPC server"
+	@echo "Forwarding active: phone 127.0.0.1:7074 -> PC REST server"
 	@echo "Forwarding active: phone 127.0.0.1:50001 -> PC Electrs"
 
 signer-run: signer-build
@@ -304,20 +326,20 @@ signer-stop:
 	@sleep 1
 
 server-run: cosigner-build server-build
-	@echo "Starting MPC Wallet Server on port 50051..."
+	@echo "Starting MPC Wallet Server on port 7074..."
 	export ELECTRUM_URL=127.0.0.1 && \
 	export ELECTRUM_PORT=50001 && \
 	export BITCOIN_RPC_USER=admin1 && \
 	export BITCOIN_RPC_PASSWORD=123 && \
 	cd server && cargo run --release --bin server -- \
 		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-		--port 50051 &
+		--port 7074 &
 	@sleep 2
 	@echo "MPC Wallet Server running in background."
 
 server-stop:
 	@echo "Stopping MPC Wallet Server..."
-	-sudo fuser -k 50051/tcp || true
+	-sudo fuser -k 7074/tcp || true
 	-sudo pkill -9 -f "target/release/server" || true
 	-sudo pkill -9 -f "server --wasm" || true
 	-sudo pkill -9 server || true
@@ -395,7 +417,7 @@ load-test: server-stop signer-stop regtest-up bitcoin-init signer-run server-run
 
 signet-hardware-ark: cosigner-build server-build ffi-build ffi-android
 	@echo "=== Setting up ADB reverse ==="
-	-adb reverse tcp:50051 tcp:50051
+	-adb reverse tcp:7074 tcp:7074
 	@echo ""
 	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
 	@echo "==> Server logs below (Ctrl+C to stop):"
@@ -404,9 +426,9 @@ signet-hardware-ark: cosigner-build server-build ffi-build ffi-android
 	export ELECTRUM_PORT=50001 && \
 	export BITCOIN_NETWORK=signet && \
 	export ASP_URL=$(MUTINYNET_ASP_URL) && \
-	cd server && cargo run --release -- \
+	cd server && cargo run --release --bin server -- \
 		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-		--port 50051
+		--port 7074
 
 signet-down:
 	@echo "Stopping MPC server..."

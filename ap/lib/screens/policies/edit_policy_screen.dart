@@ -6,6 +6,7 @@ import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:fixnum/fixnum.dart';
 import '../../services/mpc_service.dart';
+import '../../widgets/recovery_password_dialog.dart';
 
 class EditPolicyScreen extends StatefulWidget {
   final Map<String, dynamic>? extras;
@@ -137,21 +138,46 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
   }
 
   Future<void> _updatePolicy(MpcService mpcService) async {
+    // Capture context-derived references up-front; never re-read context
+    // across the multiple awaits below or we risk touching a disposed widget.
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
+
+    // The recovery share is required for policy updates. For software mode
+    // we prompt for the password and load the signer only for the duration
+    // of this call. Hardware mode uses the already-connected USB signer.
+    String? password;
+    if (mpcService.signerKind == SignerKind.software) {
+      password = await promptRecoveryPassword(
+        context,
+        title: 'Authorize policy update',
+        hint: 'Your recovery key is downloaded, used to sign, then wiped.',
+      );
+      if (!mounted) return;
+      if (password == null || password.isEmpty) return;
+    }
+
     setState(() => _isSigning = true);
     try {
-      await mpcService.client!.updatePolicy(
-        _editingPolicyId!,
-        thresholdSats: _thresholdSats,
-        intervalSeconds: _selectedDuration.inSeconds,
-      );
+      Future<void> run() => mpcService.client!.updatePolicy(
+            _editingPolicyId!,
+            thresholdSats: _thresholdSats,
+            intervalSeconds: _selectedDuration.inSeconds,
+          );
+      if (password != null) {
+        await mpcService.withRecoverySigner(
+            password: password, action: run);
+      } else {
+        await run();
+      }
       mpcService.policyUpdated();
 
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Policy updated successfully!')),
+      );
       if (mounted) {
         setState(() => _isSigning = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Policy updated successfully!')),
-        );
-        context.pop();
+        router.pop();
       }
     } catch (e) {
       if (mounted) {

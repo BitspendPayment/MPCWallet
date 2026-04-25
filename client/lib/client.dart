@@ -65,9 +65,28 @@ class MpcClient {
 
   RecoveryPolicy? _recoveryPolicy;
 
-  // Hardware signer for recovery identity
-  HardwareSignerInterface _hardwareSigner;
-  set hardwareSigner(HardwareSignerInterface s) => _hardwareSigner = s;
+  // Recovery-identity signer (hardware or software).
+  //
+  // Nullable: normal sends + Ark ops don't touch the recovery share, so a
+  // session that isn't mid-DKG or mid-policy-op doesn't need one attached.
+  // The MpcService layer attaches a signer only for the four operations
+  // that actually need it (DKG, restore, update policy, delete policy) and
+  // detaches immediately after, keeping the recovery share out of RAM the
+  // rest of the time.
+  HardwareSignerInterface? _hardwareSigner;
+  set hardwareSigner(HardwareSignerInterface? s) => _hardwareSigner = s;
+  HardwareSignerInterface? get hardwareSigner => _hardwareSigner;
+
+  HardwareSignerInterface _requireSigner(String op) {
+    final s = _hardwareSigner;
+    if (s == null) {
+      throw StateError(
+        '$op requires the recovery signer to be attached '
+        '(call loadRecoverySigner first)',
+      );
+    }
+    return s;
+  }
 
   /// Creates a client that manages two shares (identities).
   ///
@@ -88,7 +107,7 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    required HardwareSignerInterface hardwareSigner,
+    HardwareSignerInterface? hardwareSigner,
   })  : _stub = GrpcWalletApi(channel),
         _maxSigners = maxSigners,
         _minSigners = minSigners,
@@ -107,7 +126,7 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    required HardwareSignerInterface hardwareSigner,
+    HardwareSignerInterface? hardwareSigner,
     http.Client? httpClient,
   })  : _stub = RestWalletApi(baseUrl, httpClient: httpClient),
         _maxSigners = maxSigners,
@@ -130,7 +149,7 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    required HardwareSignerInterface hardwareSigner,
+    HardwareSignerInterface? hardwareSigner,
     int cacheTtlSecs = 60,
   }) async {
     final api = await AttestedWalletApi.create(baseUrl,
@@ -151,7 +170,7 @@ class MpcClient {
     required WalletApi stub,
     required int maxSigners,
     required int minSigners,
-    required HardwareSignerInterface hardwareSigner,
+    HardwareSignerInterface? hardwareSigner,
     String? storageId,
     HiveCipher? encryptionCipher,
   })  : _stub = stub,
@@ -295,7 +314,7 @@ class MpcClient {
   /// without contributing key material. Group key = s_hw + s_server.
   Future<void> doDkg() async {
     await _store.init();
-    final signer = _hardwareSigner;
+    final signer = _requireSigner('doDkg');
 
     // 0. Quick connectivity test
     print('[DKG] Step 0: Testing signer connectivity (getInfo)...');
@@ -456,7 +475,7 @@ class MpcClient {
   /// same so the Bitcoin address (and funds) are preserved.
   Future<void> doRestore() async {
     await _store.init();
-    final signer = _hardwareSigner;
+    final signer = _requireSigner('doRestore');
 
     // 1. Hardware signer reuses stored DKG secret (same VK, same identifier)
     final restoreInit = await signer.restoreInit(_maxSigners, _minSigners);
@@ -871,7 +890,7 @@ class MpcClient {
       throw StateError("Client not initialized (DKG not run).");
     }
 
-    final signer = _hardwareSigner;
+    final signer = _requireSigner('_frostSignWithBothKeys');
     final keyPkg1 = _normalPolicy!.keyPackage;
     final recoveryId = _recoveryPolicy!.keyPackage.identifier;
     final groupPubKey = _normalPolicy!.publicKeyPackage;
