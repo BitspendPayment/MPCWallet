@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -31,10 +33,25 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
     final mpcService = context.read<MpcService>();
     final extras = GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
     final isRestore = extras['isRestore'] == true;
+    final signerKindStr = extras['signerKind'] as String? ?? 'software';
+    final signerKind = signerKindStr == 'hardware'
+        ? SignerKind.hardware
+        : SignerKind.software;
+    final password = extras['password'] as String?;
+    final blob = extras['blob'] as Uint8List?;
 
     // Wait for Init
     if (!mpcService.isInitialized) {
       await _addLog('Client init failed or slow. Retrying...');
+    }
+
+    // Record which signer backend is in use. Software signer password is
+    // passed directly to doDkg / doRestore below — never cached in the service.
+    try {
+      await mpcService.setSignerKind(signerKind);
+    } catch (e) {
+      await _addLog('Failed to set signer: $e');
+      return;
     }
 
     await _addLog('Connected to server.');
@@ -42,7 +59,7 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
 
     try {
       if (isRestore) {
-        await _addLog('Restoring wallet from hardware key...');
+        await _addLog('Restoring wallet...');
       } else {
         await _addLog('Starting Distributed Key Generation...');
       }
@@ -54,9 +71,9 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
           : 'Generating secrets and exchanging packages...');
 
       if (isRestore) {
-        await mpcService.doRestore();
+        await mpcService.doRestore(blob: blob, password: password);
       } else {
-        await mpcService.doDkg();
+        await mpcService.doDkg(password: password);
       }
 
       await _addLog(isRestore

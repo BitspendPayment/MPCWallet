@@ -1,5 +1,10 @@
+import 'dart:math';
+
 import 'package:flutter/foundation.dart';
+import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:protocol/protocol.dart';
+
 import 'package:client/ark_wallet.dart';
 import 'package:client/bitcoin.dart';
 import 'package:client/client.dart';
@@ -7,10 +12,14 @@ import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:client/enclave/manifest.dart' as manifest;
 import 'package:client/hardware_signer.dart';
 import 'package:client/policy.dart';
+import 'package:client/software_signer.dart';
+
 import '../usb/usb_hardware_signer.dart';
-import 'package:hive/hive.dart';
-import 'dart:math';
-import 'package:protocol/protocol.dart';
+import 'backup_service.dart';
+import 'backup_store.dart';
+
+/// Which backend signs for the owner share.
+enum SignerKind { software, hardware }
 
 class MpcService extends ChangeNotifier {
   MpcClient? _client;
@@ -23,7 +32,23 @@ class MpcService extends ChangeNotifier {
 
   String? _storageId;
 
+  /// Persistent hardware signer when [_signerKind] == hardware. For software
+  /// we don't keep a persistent reference — the signer is ephemeral, attached
+  /// only for the duration of an operation that needs the recovery share.
   HardwareSignerInterface? _hardwareSigner;
+
+  /// Which signer backend is in use. Persisted so cold starts know whether
+  /// to reconnect USB (hardware) or expect a per-op password (software).
+  SignerKind _signerKind = SignerKind.software;
+  SignerKind get signerKind => _signerKind;
+
+  /// The recovery-signer backup store. Google Drive in production,
+  /// [InMemoryBackupStore] in tests. Can be swapped per-instance.
+  final BackupStore _backupStore;
+  BackupStore get backupStore => _backupStore;
+
+  MpcService({BackupStore? backupStore})
+      : _backupStore = backupStore ?? BackupService();
 
   /// Future that completes when init() finishes. Await this before
   /// checking dkgComplete or calling restoreSession().
@@ -70,13 +95,29 @@ class MpcService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reconnect the hardware USB signer. Only meaningful for hardware mode —
+  /// software signer is ephemeral and attached per-operation via
+  /// [loadRecoverySigner].
   Future<void> reconnectHardwareSigner() async {
+    if (_signerKind != SignerKind.hardware) {
+      throw StateError('reconnectHardwareSigner is only valid for hardware signer');
+    }
     try {
       await _hardwareSigner?.disconnect();
     } catch (_) {}
-    _hardwareSigner = _createSigner();
+    _hardwareSigner = UsbHardwareSigner();
     await _hardwareSigner!.connect();
     _client?.hardwareSigner = _hardwareSigner!;
+  }
+
+  /// Select the signer backend. No password is taken here — for the software
+  /// signer, password is supplied per-operation at DKG, restore, and policy
+  /// actions. This keeps the recovery share out of memory when idle.
+  Future<void> setSignerKind(SignerKind kind) async {
+    _signerKind = kind;
+    if (_identityBox != null && _identityBox!.isOpen) {
+      await _identityBox!.put('signerKind', kind.name);
+    }
   }
 
   String? get receiveAddress {
@@ -100,6 +141,8 @@ class MpcService extends ChangeNotifier {
 
   // Hardcoded for now, could be configurable
   String _host = '10.0.2.2'; // Default, will be overwritten by persistence
+  // 7074 is the server binary's default REST port and what the enclave
+  // production deployment listens on. The Makefile mirrors this for dev.
   static const int _port = 7074;
 
   /// GitHub repo for fetching deployment manifest (PCR0).
@@ -181,11 +224,26 @@ class MpcService extends ChangeNotifier {
       final defaultNetwork = _requiresAttestation ? 'signet' : 'regtest';
       _network =
           _identityBox!.get('network', defaultValue: defaultNetwork) as String;
+      // Remote hosts can never be regtest — override stale persisted values.
+      if (_requiresAttestation && _network == 'regtest') {
+        _network = 'signet';
+        await _identityBox!.put('network', _network);
+      }
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
         await _identityBox!.put('storageId', _storageId);
       }
+
+      // Restore signer kind. Default to software (hardware signer is opt-in
+      // for users who own the device).
+      final kindStr =
+          _identityBox!.get('signerKind', defaultValue: SignerKind.software.name)
+              as String;
+      _signerKind = SignerKind.values.firstWhere(
+        (k) => k.name == kindStr,
+        orElse: () => SignerKind.software,
+      );
 
       _isInitialized = true;
     } catch (e) {
@@ -197,6 +255,7 @@ class MpcService extends ChangeNotifier {
   /// Closes all resources. Call this when the app is shutting down.
   @override
   Future<void> dispose() async {
+    await unloadRecoverySigner();
     try {
       await _hardwareSigner?.disconnect();
       _hardwareSigner = null;
@@ -225,7 +284,15 @@ class MpcService extends ChangeNotifier {
     await _identityBox!.put('serverHost', host);
   }
 
-  HardwareSignerInterface _createSigner() {
+  /// For hardware mode: return a live USB signer. For software mode we
+  /// never return a signer directly — callers should go through
+  /// [loadRecoverySigner]/[unloadRecoverySigner] with an explicit password.
+  Future<HardwareSignerInterface> _createHardwareSignerOrThrow() async {
+    if (_signerKind != SignerKind.hardware) {
+      throw StateError(
+        '_createHardwareSignerOrThrow called for software signer — use loadRecoverySigner instead',
+      );
+    }
     return UsbHardwareSigner();
   }
 
@@ -241,7 +308,7 @@ class MpcService extends ChangeNotifier {
   /// Local hosts use plain REST. Remote hosts MUST use attested transport —
   /// if attestation fails, the error propagates (no silent fallback).
   Future<MpcClient> _createMpcClient({
-    required HardwareSignerInterface hardwareSigner,
+    HardwareSignerInterface? hardwareSigner,
     String? storageId,
   }) async {
     if (_requiresAttestation) {
@@ -264,7 +331,11 @@ class MpcService extends ChangeNotifier {
     );
   }
 
-  Future<void> doDkg() async {
+  /// Run initial DKG. For software mode, [password] is required — a fresh
+  /// in-memory signer is created for this call, DKG runs, and the encrypted
+  /// blob is uploaded to the backup store. The signer reference is then
+  /// cleared so the recovery share doesn't linger in RAM.
+  Future<void> doDkg({String? password}) async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
 
     if (_dkgComplete) {
@@ -273,83 +344,153 @@ class MpcService extends ChangeNotifier {
 
     final storageId = _storageId ?? 'mpc_wallet_state_default';
 
-    // Connect hardware signer based on type
-    _hardwareSigner = _createSigner();
-    await _hardwareSigner!.connect();
+    HardwareSignerInterface signer;
+    SoftwareSigner? softwareSigner;
+    if (_signerKind == SignerKind.hardware) {
+      signer = await _createHardwareSignerOrThrow();
+      _hardwareSigner = signer;
+    } else {
+      if (password == null || password.isEmpty) {
+        throw ArgumentError('software signer requires a password for doDkg');
+      }
+      softwareSigner = SoftwareSigner();
+      signer = softwareSigner;
+    }
+    await signer.connect();
 
-    _client = await _createMpcClient(
-      hardwareSigner: _hardwareSigner!,
-      storageId: storageId,
-    );
-    _wallet =
-        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
-    _wallet!.onSyncComplete = _onWalletSyncComplete;
+    try {
+      _client = await _createMpcClient(
+        hardwareSigner: signer,
+        storageId: storageId,
+      );
+      _wallet = MpcBitcoinWallet(_client!,
+          networkName: _network, storageId: storageId);
+      _wallet!.onSyncComplete = _onWalletSyncComplete;
 
-    await _wallet!.init();
-    _balance = await _wallet!.getBalance();
+      await _wallet!.init();
+      _balance = await _wallet!.getBalance();
 
-    _dkgComplete = true;
-    _isConnected = true;
-    await _identityBox!.put('dkgComplete', true);
+      _dkgComplete = true;
+      _isConnected = true;
+      await _identityBox!.put('dkgComplete', true);
 
-    await initArk();
-    notifyListeners();
+      // For software: export the (now-populated) signer state and upload.
+      // Uploads are best-effort — failure here doesn't roll back the DKG.
+      if (softwareSigner != null && _backupStore.isSignedIn) {
+        try {
+          final blob = await softwareSigner.exportEncryptedBackup(password!);
+          await _backupStore.upload(blob);
+          debugPrint('BackupStore: uploaded ${blob.length} bytes post-DKG');
+        } catch (e) {
+          debugPrint('BackupStore: post-DKG upload failed: $e');
+        }
+      }
+
+      await initArk();
+      notifyListeners();
+    } finally {
+      // Drop the recovery signer so the share doesn't sit in RAM after DKG.
+      if (softwareSigner != null) {
+        await softwareSigner.wipe();
+        _client?.hardwareSigner = null;
+      }
+    }
   }
 
-  /// Restore wallet via re-DKG using the hardware signer's stored secrets.
-  /// The group public key (and Bitcoin address) is preserved.
-  Future<void> doRestore() async {
+  /// Restore wallet via re-DKG using the recovery signer.
+  /// For software mode: pass [blob] + [password] (downloaded from the backup
+  /// store). For hardware mode: both params are ignored and the USB signer
+  /// is used. The group public key is preserved across restore.
+  Future<void> doRestore({Uint8List? blob, String? password}) async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
 
     final storageId = _storageId ?? 'mpc_wallet_state_default';
 
-    debugPrint("[RESTORE] Connecting hardware signer...");
-    _hardwareSigner = _createSigner();
-    await _hardwareSigner!.connect();
-    debugPrint("[RESTORE] Hardware signer connected.");
+    HardwareSignerInterface signer;
+    SoftwareSigner? softwareSigner;
+    if (_signerKind == SignerKind.hardware) {
+      debugPrint("[RESTORE] Connecting hardware signer...");
+      signer = await _createHardwareSignerOrThrow();
+      _hardwareSigner = signer;
+    } else {
+      if (blob == null || password == null || password.isEmpty) {
+        throw ArgumentError(
+            'software restore requires both blob and password');
+      }
+      debugPrint("[RESTORE] Hydrating software signer from backup blob...");
+      softwareSigner = await SoftwareSigner.fromEncryptedBackup(
+        blob: blob,
+        password: password,
+      );
+      signer = softwareSigner;
+    }
+    await signer.connect();
+    debugPrint("[RESTORE] Signer connected.");
 
-    _client = await _createMpcClient(
-      hardwareSigner: _hardwareSigner!,
-      storageId: storageId,
-    );
+    try {
+      _client = await _createMpcClient(
+        hardwareSigner: signer,
+        storageId: storageId,
+      );
 
-    debugPrint("[RESTORE] Starting re-DKG...");
-    // Re-DKG: derive new shares from existing secrets on HW + server
-    await _client!.doRestore().timeout(
-          const Duration(seconds: 30),
-          onTimeout: () => throw StateError(
-              'Restore timed out. Check that the server is running and ADB reverse is set up.'),
-        );
-    debugPrint("[RESTORE] Re-DKG complete.");
+      debugPrint("[RESTORE] Starting re-DKG...");
+      await _client!.doRestore().timeout(
+            const Duration(seconds: 30),
+            onTimeout: () => throw StateError(
+                'Restore timed out. Check that the server is running and ADB reverse is set up.'),
+          );
+      debugPrint("[RESTORE] Re-DKG complete.");
 
-    _wallet =
-        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
-    _wallet!.onSyncComplete = _onWalletSyncComplete;
+      _wallet = MpcBitcoinWallet(_client!,
+          networkName: _network, storageId: storageId);
+      _wallet!.onSyncComplete = _onWalletSyncComplete;
 
-    // init() will find restored state and skip DKG, then sync
-    await _wallet!.init();
-    _balance = await _wallet!.getBalance();
+      await _wallet!.init();
+      _balance = await _wallet!.getBalance();
 
-    _dkgComplete = true;
-    _isConnected = true;
-    await _identityBox!.put('dkgComplete', true);
+      _dkgComplete = true;
+      _isConnected = true;
+      await _identityBox!.put('dkgComplete', true);
 
-    await initArk();
-    notifyListeners();
+      // The re-DKG produced a fresh participant share; re-upload so Drive
+      // reflects current state.
+      if (softwareSigner != null && _backupStore.isSignedIn) {
+        try {
+          final fresh = await softwareSigner.exportEncryptedBackup(password!);
+          await _backupStore.upload(fresh);
+          debugPrint('BackupStore: re-uploaded ${fresh.length} bytes '
+              'after restore');
+        } catch (e) {
+          debugPrint('BackupStore: post-restore upload failed: $e');
+        }
+      }
+
+      await initArk();
+      notifyListeners();
+    } finally {
+      if (softwareSigner != null) {
+        await softwareSigner.wipe();
+        _client?.hardwareSigner = null;
+      }
+    }
   }
 
   /// Restores a previously completed session without re-running DKG.
   /// Creates gRPC channel + MpcClient + MpcBitcoinWallet, then calls
   /// wallet.init() which restores keys from Hive persistence.
+  ///
+  /// Recovery signer is NOT attached here — normal sends / Ark ops don't
+  /// need it. Policy ops must call [loadRecoverySigner] just before use.
   Future<void> restoreSession() async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
     if (!_dkgComplete) throw StateError("DKG not completed. Cannot restore.");
 
     final storageId = _storageId ?? 'mpc_wallet_state_default';
 
-    // Reconnect hardware signer (non-fatal if device not plugged in yet)
-    if (_hardwareSigner == null) {
-      _hardwareSigner = _createSigner();
+    // Hardware signer stays persistent (USB is stateful). Software signer is
+    // deliberately not connected here.
+    if (_signerKind == SignerKind.hardware && _hardwareSigner == null) {
+      _hardwareSigner = await _createHardwareSignerOrThrow();
       try {
         await _hardwareSigner!.connect();
       } catch (e) {
@@ -358,7 +499,7 @@ class MpcService extends ChangeNotifier {
     }
 
     _client = await _createMpcClient(
-      hardwareSigner: _hardwareSigner!,
+      hardwareSigner: _hardwareSigner, // null for software mode — that's fine
       storageId: storageId,
     );
     _wallet =
@@ -497,5 +638,96 @@ class MpcService extends ChangeNotifier {
     final r = Random.secure();
     return List.generate(
         16, (index) => r.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Recovery signer lifecycle (software mode)
+  // ---------------------------------------------------------------------------
+
+  /// The currently-attached software signer, if any. Lives only for the
+  /// duration of a policy op.
+  SoftwareSigner? _loadedRecoverySigner;
+
+  /// Whether a recovery signer is currently attached to the client.
+  bool get hasRecoverySignerLoaded => _loadedRecoverySigner != null;
+
+  /// Download the encrypted backup from the store, decrypt with [password],
+  /// and attach the resulting in-memory software signer to [_client].
+  /// Call immediately before a policy op and always pair with
+  /// [unloadRecoverySigner] via try/finally, or use [withRecoverySigner].
+  ///
+  /// Hardware mode: no-op.
+  Future<void> loadRecoverySigner({required String password}) async {
+    if (_signerKind == SignerKind.hardware) return;
+    if (_loadedRecoverySigner != null) return; // already loaded
+
+    // The in-memory sign-in session evaporates on hot-restart or a fresh
+    // app launch, but Google caches the OAuth credential on the device.
+    // Try to resume silently before giving up.
+    if (!_backupStore.isSignedIn) {
+      await _backupStore.signInSilently();
+    }
+    if (!_backupStore.isSignedIn) {
+      throw StateError(
+        'Not signed in to Google Drive. Open Settings → Drive Backup to '
+        'sign in, then retry.',
+      );
+    }
+
+    final blob = await _backupStore.download();
+    if (blob == null) {
+      throw StateError(
+        'No backup found in Drive — cannot load recovery signer. Did you '
+        'skip backup at onboarding?',
+      );
+    }
+    final signer = await SoftwareSigner.fromEncryptedBackup(
+      blob: blob,
+      password: password,
+    );
+    await signer.connect();
+    _loadedRecoverySigner = signer;
+    _client?.hardwareSigner = signer;
+  }
+
+  /// Detach and wipe the currently-loaded recovery signer. Safe to call
+  /// multiple times; no-op in hardware mode.
+  Future<void> unloadRecoverySigner() async {
+    final signer = _loadedRecoverySigner;
+    if (signer == null) return;
+    _loadedRecoverySigner = null;
+    _client?.hardwareSigner = null;
+    await signer.wipe();
+  }
+
+  /// Run [action] with the recovery signer loaded; always unload on exit.
+  Future<T> withRecoverySigner<T>({
+    required String password,
+    required Future<T> Function() action,
+  }) async {
+    await loadRecoverySigner(password: password);
+    try {
+      return await action();
+    } finally {
+      await unloadRecoverySigner();
+    }
+  }
+
+  /// Refresh the Drive blob. Downloads the current blob (to verify the
+  /// password), re-encrypts with fresh salt/nonce, uploads the result.
+  /// loadRecoverySigner handles silent sign-in if the in-memory session
+  /// is stale, so we don't double-check here.
+  Future<void> uploadBackupNow({required String password}) async {
+    if (_signerKind != SignerKind.software) {
+      throw StateError('backup is only used with the software signer');
+    }
+    await loadRecoverySigner(password: password);
+    try {
+      final signer = _loadedRecoverySigner!;
+      final blob = await signer.exportEncryptedBackup(password);
+      await _backupStore.upload(blob);
+    } finally {
+      await unloadRecoverySigner();
+    }
   }
 }
