@@ -66,7 +66,10 @@ services:
 
   # arkd wallet service
   arkd-wallet:
-    image: ghcr.io/arkade-os/arkd-wallet:latest
+    # Pinned to the digest known to work (2026-03-26 build). Upstream `:latest`
+    # started failing CI around 2026-04-25 — re-pin only after manually
+    # verifying a newer digest works end-to-end.
+    image: ghcr.io/arkade-os/arkd-wallet@sha256:28eb458866cb586e07ae37b31d44516001af9b9d96afa7bc7778ff430409ae36
     container_name: mpc_arkd_wallet
     depends_on:
       - nbxplorer
@@ -83,7 +86,10 @@ services:
 
   # arkd — Ark Service Provider
   arkd:
-    image: ghcr.io/arkade-os/arkd:latest
+    # Pinned to the digest known to work (2026-03-26 build). Upstream `:latest`
+    # started failing CI around 2026-04-25 — re-pin only after manually
+    # verifying a newer digest works end-to-end.
+    image: ghcr.io/arkade-os/arkd@sha256:d9ade391ab6eb7b1c07082a04c5b1a186e9ef59dcf9f303d0dcf88180c4ee578
     container_name: mpc_arkd
     depends_on:
       - arkd-wallet
