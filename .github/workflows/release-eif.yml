@@ -4,9 +4,12 @@ on:
   push:
     branches: [master, main]
     paths:
-      - 'enclave/**'
-      - 'flake.nix'
-      - 'flake.lock'
+      - 'server/enclave/**'
+      - 'server/flake.nix'
+      - 'server/flake.lock'
+      - 'server/src/**'
+      - 'server/Cargo.toml'
+      - 'server/Cargo.lock'
   workflow_dispatch:
 
 permissions:
@@ -19,23 +22,27 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-25.11
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
       - uses: actions/setup-go@v5
         with:
           go-version: stable
 
       - name: Install enclave CLI
-        run: go install github.com/ArkLabsHQ/introspector-enclave/cmd/enclave@latest
-
-      - name: Pull Nix Docker image
-        run: docker pull nixos/nix:2.24.9
+        run: go install github.com/ArkLabsHQ/introspector-enclave/cli/cmd/enclave@latest
 
       - name: Build EIF
+        working-directory: server
         run: enclave build
 
       - name: Extract PCR values
         id: pcr
         run: |
-          PCR0=$(jq -r '.PCR0 // .pcr0' enclave/artifacts/pcr.json)
+          PCR0=$(jq -r '.PCR0 // .pcr0' server/.enclave/artifacts/pcr.json)
           echo "pcr0=${PCR0}" >> "$GITHUB_OUTPUT"
           echo "PCR0: ${PCR0:0:32}..."
 
@@ -44,10 +51,9 @@ jobs:
         with:
           name: enclave-eif
           path: |
-            enclave/artifacts/image.eif
-            enclave/artifacts/pcr.json
-            enclave/artifacts/enclave-mgmt
-            enclave/artifacts/gvproxy
+            server/.enclave/artifacts/image.eif
+            server/.enclave/artifacts/pcr.json
+            server/.enclave/artifacts/supervisor
           retention-days: 7
 
       - name: Upload to latest release
@@ -63,21 +69,20 @@ jobs:
             --notes "Auto-built EIF from commit ${COMMIT_SHA::8}
           PCR0: ${PCR0}" \
             --prerelease \
-            enclave/artifacts/image.eif \
-            enclave/artifacts/pcr.json \
-            enclave/artifacts/enclave-mgmt \
-            enclave/artifacts/gvproxy
+            server/.enclave/artifacts/image.eif \
+            server/.enclave/artifacts/pcr.json \
+            server/.enclave/artifacts/supervisor
 
-      - name: Publish build manifest
+      - name: Publish deployment manifest
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           COMMIT_SHA: ${{ github.sha }}
         run: |
-          PCR0=$(jq -r '.PCR0 // .pcr0' enclave/artifacts/pcr.json)
-          PCR1=$(jq -r '.PCR1 // .pcr1' enclave/artifacts/pcr.json)
-          PCR2=$(jq -r '.PCR2 // .pcr2' enclave/artifacts/pcr.json)
+          PCR0=$(jq -r '.PCR0 // .pcr0' server/.enclave/artifacts/pcr.json)
+          PCR1=$(jq -r '.PCR1 // .pcr1' server/.enclave/artifacts/pcr.json)
+          PCR2=$(jq -r '.PCR2 // .pcr2' server/.enclave/artifacts/pcr.json)
           TIMESTAMP=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           TAG="build-$(date -u +%Y%m%d-%H%M%S)"
 
@@ -97,16 +102,5 @@ jobs:
             --notes "Build manifest from commit ${COMMIT_SHA::8}
           **PCR0:** ${PCR0}"
 
-          # Update the 'latest' release so the verify workflow can find it.
-          # Only update if no deploy manifest exists yet (deploy takes precedence).
-          if ! gh release view latest --json assets -q '.assets[].name' 2>/dev/null | grep -q deployment.json; then
-            gh release delete latest --yes 2>/dev/null || true
-            git push origin :refs/tags/latest 2>/dev/null || true
-            gh release create latest deployment.json \
-              --title "Latest Build" \
-              --notes "Build manifest (no deploy yet). Updated by each build.
-
-          **PCR0:** ${PCR0}
-          **Built:** ${TIMESTAMP}
-          **Commit:** ${COMMIT_SHA}"
-          fi
+          # Update the eif-latest release with the deployment manifest too.
+          gh release upload eif-latest deployment.json --clobber

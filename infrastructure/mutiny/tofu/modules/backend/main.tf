@@ -57,3 +57,36 @@ resource "aws_dynamodb_table" "lock" {
     type = "S"
   }
 }
+
+# =============================================================================
+# Variables
+# =============================================================================
+
+variable "bucket_name" {
+  description = "S3 bucket name for OpenTofu state storage."
+  type        = string
+}
+
+variable "table_name" {
+  description = "DynamoDB table name for state locking."
+  type        = string
+}
+
+variable "region" {
+  description = "AWS region."
+  type        = string
+}
+
+# =============================================================================
+# Outputs
+# =============================================================================
+
+output "bucket_name" {
+  description = "S3 bucket name for state storage."
+  value       = aws_s3_bucket.state.id
+}
+
+output "table_name" {
+  description = "DynamoDB table name for state locking."
+  value       = aws_dynamodb_table.lock.name
+}

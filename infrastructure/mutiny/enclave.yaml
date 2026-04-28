@@ -30,6 +30,7 @@ app:
     - "."
   nix_subdir: "server"                 # Subdirectory for monorepo (e.g. "server")
   binary_name: ""                # Output binary name (defaults to 'name')
+  release_tag: "eif-latest"
 
   # Extra nixpkgs attrs added to the build sandbox.
   nix_build_inputs: ["openssl"]

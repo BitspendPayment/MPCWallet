@@ -16,40 +16,44 @@
         nitro = aws-nitro-util.lib.x86_64-linux;
 
         configPath = let p = builtins.getEnv "BUILD_CONFIG_PATH"; in
-          if p != "" then p else "./enclave/build-config.json";
+          if p != "" then p else "../.enclave/build-config.json";
         buildCfg = builtins.fromJSON (builtins.readFile configPath);
         appCfg = buildCfg.app;
-        sdkCfg = buildCfg.sdk;
+        runtimeCfg = buildCfg.runtime;
 
         version = buildCfg.version;
         region = buildCfg.region;
         deployment = buildCfg.prefix;
 
-        # Enclave supervisor — built from the SDK repo.
-        enclave-supervisor = eifPkgs.buildGoModule {
-          pname = "enclave-supervisor";
+        # Resolve user-supplied package names from enclave.yaml
+        # (nix_build_inputs / nix_native_build_inputs) against nixpkgs.
+        resolveInputs = names: map (n: eifPkgs.${n}) names;
+
+        # Enclave supervisor — built from the runtime repo.
+        runtime = eifPkgs.buildGoModule {
+          pname = "runtime";
           version = buildCfg.version;
 
           src = eifPkgs.fetchFromGitHub {
             owner = "ArkLabsHQ";
             repo = "introspector-enclave";
-            rev = sdkCfg.rev;
-            hash = sdkCfg.hash;
+            rev = runtimeCfg.rev;
+            hash = runtimeCfg.hash;
           };
 
-          sourceRoot = "source/sdk";
-          vendorHash = sdkCfg.vendor_hash;
-          subPackages = [ "cmd/enclave-supervisor" ];
+          sourceRoot = "source/runtime";
+          vendorHash = runtimeCfg.vendor_hash;
+          subPackages = [ "cmd/runtime" ];
           env.CGO_ENABLED = "0";
           ldflags = [
-            "-X" "github.com/ArkLabsHQ/introspector-enclave/sdk.Version=${version}"
+            "-X" "github.com/ArkLabsHQ/introspector-enclave/runtime.Version=${version}"
           ];
           buildFlags = [ "-trimpath" ];
           tags = [ "netgo" ];
           doCheck = false;
         };
 
-        # User's Rust app — fetched from GitHub. No SDK dependency needed.
+        # User's Rust app — fetched from GitHub. No runtime dependency needed.
         upstream-app = eifPkgs.rustPlatform.buildRustPackage ({
           pname = appCfg.binary_name;
           version = buildCfg.version;
@@ -65,11 +69,8 @@
 
           doCheck = false;
 
-          buildNoDefaultFeatures = true;
-          buildFeatures = [ "enclave-backend" ];
-
-          nativeBuildInputs = [ eifPkgs.pkg-config eifPkgs.protobuf ];
-          buildInputs = [ eifPkgs.openssl ];
+          nativeBuildInputs = resolveInputs (appCfg.nix_native_build_inputs or []);
+          buildInputs = resolveInputs (appCfg.nix_build_inputs or []);
 
           postInstall = ''
             # Rename whatever was built to the configured binary name.
@@ -85,56 +86,13 @@
           buildAndTestSubdir = appCfg.nix_subdir;
         } else {}));
 
-        nitriding = eifPkgs.buildGoModule {
-          pname = "nitriding-daemon";
-          version = "unstable-2024-01-01";
-
-          src = eifPkgs.fetchFromGitHub {
-            owner = "brave";
-            repo = "nitriding-daemon";
-            rev = "c8cb7248843c82a5d72ff6cdde90f4a4cf68c87f";
-            hash = "sha256-0ww8ZcoUh3UgRJyhfEVwmjxk3tZv7exCw0VmftdnM7U=";
-          };
-
-          vendorHash = "sha256-B/1tbPfId6qgvaMwPF5w4gFkkkeoI+5k+x0jEvJxQus=";
-
-          env.CGO_ENABLED = "0";
-          buildFlags = [ "-trimpath" ];
-          doCheck = false;
-
-          postInstall = ''
-            mv $out/bin/nitriding-daemon $out/bin/nitriding
-          '';
-        };
-
-        viproxy = eifPkgs.buildGoModule {
-          pname = "viproxy";
-          version = "0.1.2";
-
-          src = eifPkgs.fetchFromGitHub {
-            owner = "brave";
-            repo = "viproxy";
-            rev = "v0.1.2";
-            hash = "sha256-xcQCvl+/d7a3fdqDMEEIyP3c49l1bu7ptCG+RZ94Xws=";
-          };
-
-          vendorHash = "sha256-WOzeqHo1cG8USbGUm3OAEUgh3yKTamCaIL3FpsshnjI=";
-
-          subPackages = [ "example" ];
-          env.CGO_ENABLED = "0";
-
-          postInstall = ''
-            mv $out/bin/example $out/bin/proxy
-          '';
-        };
+        # Nitriding and viproxy are vendored into the runtime binary — no
+        # separate derivations needed.
 
         appDir = eifPkgs.runCommand "enclave-app" { } ''
           mkdir -p $out/app/data
           cp ${upstream-app}/bin/${appCfg.binary_name} $out/app/${appCfg.binary_name}
-          cp ${enclave-supervisor}/bin/enclave-supervisor $out/app/enclave-supervisor
-          cp ${nitriding}/bin/nitriding $out/app/nitriding
-          cp ${viproxy}/bin/proxy $out/app/proxy
-          install -m 0755 ${./enclave/start.sh} $out/app/start.sh
+          cp ${runtime}/bin/runtime $out/app/runtime
         '';
 
         enclaveRootfs = eifPkgs.buildEnv {
@@ -161,6 +119,7 @@
           ENCLAVE_SECRETS_CONFIG=${secretsCfgJson}
           ENCLAVE_MIGRATION_COOLDOWN=${buildCfg.migration_cooldown or "0s"}
           ENCLAVE_PREVIOUS_PCR0=${buildCfg.previous_pcr0 or "genesis"}
+          ENCLAVE_KMS_KEY_LOCKED=${if buildCfg.is_kms_key_locked or false then "true" else "false"}
           ENCLAVE_DEPLOYMENT=${deployment}
           ${appEnvLines}
         '';
@@ -175,7 +134,7 @@
           nsmKo = nitro.blobs.x86_64.nsmKo;
 
           copyToRoot = enclaveRootfs;
-          entrypoint = "/app/start.sh";
+          entrypoint = "/app/runtime";
           env = enclaveEnv;
         };
 
@@ -192,11 +151,8 @@
           cargoHash = "";
           doCheck = false;
 
-          buildNoDefaultFeatures = true;
-          buildFeatures = [ "enclave-backend" ];
-
-          nativeBuildInputs = [ eifPkgs.pkg-config eifPkgs.protobuf ];
-          buildInputs = [ eifPkgs.openssl ];
+          nativeBuildInputs = resolveInputs (appCfg.nix_native_build_inputs or []);
+          buildInputs = resolveInputs (appCfg.nix_build_inputs or []);
         } // (if (appCfg.nix_subdir or "") != "" then {
           sourceRoot = "source";
           cargoRoot = appCfg.nix_subdir;
@@ -206,7 +162,7 @@
       in
       {
         packages = {
-          inherit upstream-app enclave-supervisor nitriding viproxy eif vendor-hash-check;
+          inherit upstream-app runtime eif vendor-hash-check;
           default = eif;
         };
       }
