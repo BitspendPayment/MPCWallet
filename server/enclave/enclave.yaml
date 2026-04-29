@@ -10,8 +10,8 @@ instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
 
 runtime:
-  rev: "v0.0.71"
-  hash: "sha256-4WQaXyPCVg0ysUHqhnHTBVTPlhNFlPplJqtzVp1ZHV4="
+  rev: "v0.0.73"
+  hash: "sha256-IP9DprZ9BTdtrsJQHEMLhc5saMYB27OlizSixOuI8XI="
   vendor_hash: "sha256-2ZX9x2voIwVkUsmrZvhJssAQqnCh8/HLwopL5HpiaOg="
 
 app:
@@ -23,8 +23,8 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "837f13fceb0c4d8cbc80ab62b19eef3e8eb1ab85"                    # Git commit SHA (required)
-  nix_hash: "sha256-0FDKZejHW02Kn4IByuMlbIAwXkDAOAVchnV1o8/z6eo="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_rev: "bcfd8a023dd334219fb8c644a490e7f40ada19e7"                    # Git commit SHA (required)
+  nix_hash: "sha256-BdnGw4uo5NVkXiH0GKFLN5ZIic24pdIrKzN6/6yoI9w="                   # Nix source hash: nix-prefetch-url --unpack (required)
   nix_vendor_hash: "sha256-QPBa326MlMDIxvxC4Zp8PMgW9hi31pdH0MRwv8+j7uc="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
