@@ -14,14 +14,16 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .PHONY: e2e e2e-ark software hardware hardware-ark flash down \
-	ffi-build ffi-android ffi-android-all threshold-ffi-build threshold-ffi-android ark-ffi-build ark-ffi-android enclave-ffi-build enclave-ffi-android \
+	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
+	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
+	threshold-ffi-android ark-ffi-android enclave-ffi-android \
 	threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32 \
 	cosigner-build server-build signer-build pico-build \
 	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	signer-run signer-stop server-run server-stop \
 	arkd-up arkd-down arkd-init \
-	proto threshold-test threshold-ffi-test \
+	proto threshold-test \
 	flutter flutter-run ark-newaddress crypto-bench \
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
@@ -63,7 +65,7 @@ e2e-ark: server-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-b
 software: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-build ffi-android
 	@echo ""
 	@echo "==> Software signer mode — no USB device required."
-	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
+	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
 	@echo "==> In the app, pick 'Software Signer' (default) on the first screen."
 	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
@@ -81,7 +83,7 @@ software: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-bu
 hardware: regtest-up bitcoin-init adb-reverse cosigner-build server-build ffi-build ffi-android
 	@echo ""
 	@echo "==> Hardware signer mode — connect rp235x via USB OTG to phone."
-	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
+	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
 	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
 	@bash -c 'set -m; \
@@ -108,7 +110,7 @@ hardware-ark: cosigner-build server-build ffi-build ffi-android
 	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001
 	@echo ""
-	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
+	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
 	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
 	@bash -c 'set -m; \
@@ -191,89 +193,44 @@ hw-test:
 #  BUILD TARGETS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Combined FFI builds
-ffi-build: threshold-ffi-build ark-ffi-build enclave-ffi-build
+# Merged FFI: ark + threshold + enclave bindings build into one libmpcwallet_ffi.so
+ffi-build:
+	@echo "Building merged FFI (ark + threshold + enclave)..."
+	cargo build --release --manifest-path ffi/Cargo.toml
+	@echo "Built: ffi/target/release/libmpcwallet_ffi.so"
 
-ffi-android: threshold-ffi-android ark-ffi-android enclave-ffi-android              # arm64 only
-ffi-android-all: ffi-android threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32  # arm64 + arm32
-
-# Individual FFI builds (host)
-threshold-ffi-build:
-	@echo "Building threshold-ffi..."
-	cd threshold-ffi && cargo build --release
-	@echo "Built: threshold-ffi/target/release/libthreshold_ffi.so"
-
-ark-ffi-build:
-	@echo "Building ark-ffi..."
-	cd ark-ffi && cargo build --release
-	@echo "Built: ark-ffi/target/release/libark_ffi.so"
-
-# Android arm64 (aarch64)
-threshold-ffi-android:
-	@echo "Building threshold-ffi for Android arm64..."
+ffi-android: ## Build merged FFI for Android arm64
+	@echo "Building merged FFI for Android arm64..."
 	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
-	cd threshold-ffi && cargo build --release --target aarch64-linux-android
-	mkdir -p ap/android/app/src/main/jniLibs/arm64-v8a
-	cp threshold-ffi/target/aarch64-linux-android/release/libthreshold_ffi.so \
-		ap/android/app/src/main/jniLibs/arm64-v8a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/arm64-v8a/libthreshold_ffi.so"
+	cargo build --release --manifest-path ffi/Cargo.toml --target aarch64-linux-android
+	mkdir -p app/android/app/src/main/jniLibs/arm64-v8a
+	cp ffi/target/aarch64-linux-android/release/libmpcwallet_ffi.so \
+		app/android/app/src/main/jniLibs/arm64-v8a/
+	@echo "Installed: app/android/app/src/main/jniLibs/arm64-v8a/libmpcwallet_ffi.so"
 
-ark-ffi-android:
-	@echo "Building ark-ffi for Android arm64..."
-	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
-	cd ark-ffi && cargo build --release --target aarch64-linux-android
-	mkdir -p ap/android/app/src/main/jniLibs/arm64-v8a
-	cp ark-ffi/target/aarch64-linux-android/release/libark_ffi.so \
-		ap/android/app/src/main/jniLibs/arm64-v8a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/arm64-v8a/libark_ffi.so"
-
-enclave-ffi-build:
-	@echo "Building enclave-ffi..."
-	cd enclave-ffi && cargo build --release
-	@echo "Built: enclave-ffi/target/release/libenclave_ffi.so"
-
-enclave-ffi-android:
-	@echo "Building enclave-ffi for Android arm64..."
-	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
-	cd enclave-ffi && cargo build --release --target aarch64-linux-android
-	mkdir -p ap/android/app/src/main/jniLibs/arm64-v8a
-	cp enclave-ffi/target/aarch64-linux-android/release/libenclave_ffi.so \
-		ap/android/app/src/main/jniLibs/arm64-v8a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/arm64-v8a/libenclave_ffi.so"
-
-# Android arm32 (armv7) — for 32-bit devices
-threshold-ffi-android-32:
-	@echo "Building threshold-ffi for Android arm32..."
+ffi-android-arm32: ## Build merged FFI for Android arm32 (armv7)
+	@echo "Building merged FFI for Android arm32..."
 	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
 	export CC_armv7_linux_androideabi=armv7a-linux-androideabi21-clang && \
 	export AR_armv7_linux_androideabi=llvm-ar && \
-	cd threshold-ffi && cargo build --release --target armv7-linux-androideabi
-	mkdir -p ap/android/app/src/main/jniLibs/armeabi-v7a
-	cp threshold-ffi/target/armv7-linux-androideabi/release/libthreshold_ffi.so \
-		ap/android/app/src/main/jniLibs/armeabi-v7a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/armeabi-v7a/libthreshold_ffi.so"
+	cargo build --release --manifest-path ffi/Cargo.toml --target armv7-linux-androideabi
+	mkdir -p app/android/app/src/main/jniLibs/armeabi-v7a
+	cp ffi/target/armv7-linux-androideabi/release/libmpcwallet_ffi.so \
+		app/android/app/src/main/jniLibs/armeabi-v7a/
+	@echo "Installed: app/android/app/src/main/jniLibs/armeabi-v7a/libmpcwallet_ffi.so"
 
-enclave-ffi-android-32:
-	@echo "Building enclave-ffi for Android arm32..."
-	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
-	export CC_armv7_linux_androideabi=armv7a-linux-androideabi21-clang && \
-	export AR_armv7_linux_androideabi=llvm-ar && \
-	cd enclave-ffi && cargo build --release --target armv7-linux-androideabi
-	mkdir -p ap/android/app/src/main/jniLibs/armeabi-v7a
-	cp enclave-ffi/target/armv7-linux-androideabi/release/libenclave_ffi.so \
-		ap/android/app/src/main/jniLibs/armeabi-v7a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/armeabi-v7a/libenclave_ffi.so"
+ffi-android-all: ffi-android ffi-android-arm32   # arm64 + arm32
 
-ark-ffi-android-32:
-	@echo "Building ark-ffi for Android arm32..."
-	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
-	export CC_armv7_linux_androideabi=armv7a-linux-androideabi21-clang && \
-	export AR_armv7_linux_androideabi=llvm-ar && \
-	cd ark-ffi && cargo build --release --target armv7-linux-androideabi
-	mkdir -p ap/android/app/src/main/jniLibs/armeabi-v7a
-	cp ark-ffi/target/armv7-linux-androideabi/release/libark_ffi.so \
-		ap/android/app/src/main/jniLibs/armeabi-v7a/
-	@echo "Installed: ap/android/app/src/main/jniLibs/armeabi-v7a/libark_ffi.so"
+ffi-test:
+	@echo "Running merged FFI tests..."
+	cargo test --release --manifest-path ffi/Cargo.toml
+
+# DEPRECATED aliases — point at the merged ffi-build/ffi-android. Kept for one
+# release cycle so muscle memory and any out-of-tree scripts keep working.
+threshold-ffi-build ark-ffi-build enclave-ffi-build: ffi-build
+threshold-ffi-android ark-ffi-android enclave-ffi-android: ffi-android
+threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32: ffi-android-arm32
+threshold-ffi-test: ffi-test
 
 # Server & cosigner
 cosigner-build:
@@ -370,24 +327,20 @@ proto:
 
 threshold-test:
 	@echo "Running threshold tests..."
-	cd threshold && cargo test --features std
-
-threshold-ffi-test:
-	@echo "Running threshold-ffi tests..."
-	cd threshold-ffi && cargo test
+	cd crates/threshold && cargo test --features std
 
 flutter: ffi-android
-	cd ap && flutter run
+	cd app && flutter run
 
 flutter-32: ffi-android-all
-	cd ap && flutter run
+	cd app && flutter run
 
 ark-newaddress:
 	@cd e2e && dart run bin/ark_newaddress.dart
 
 crypto-bench:
 	@echo "Running Rust cryptography benchmarks..."
-	cd threshold && cargo bench
+	cd crates/threshold && cargo bench
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  STRESS / LOAD TESTING
@@ -419,7 +372,7 @@ signet-hardware-ark: cosigner-build server-build ffi-build ffi-android
 	@echo "=== Setting up ADB reverse ==="
 	-adb reverse tcp:7074 tcp:7074
 	@echo ""
-	@echo "==> Run Flutter in a separate terminal:  cd ap && flutter run"
+	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
 	@echo "==> Server logs below (Ctrl+C to stop):"
 	@echo ""
 	export ELECTRUM_URL=electrum.mutinynet.com && \

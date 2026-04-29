@@ -37,15 +37,18 @@ Any 2-of-3 can produce a valid Taproot (BIP-340) signature. The server alone can
 
 ```
 MPCWallet/
-+-- ap/                  Flutter mobile app (Merlin Wallet)
++-- app/                 Flutter mobile app (Merlin Wallet)
 +-- client/              Dart client library (DKG, signing, UTXO management, FFI wrapper)
-+-- threshold/           FROST & DKG cryptography (Rust, no_std, secp256k1)
-+-- threshold-ffi/       C-ABI shared library wrapping threshold for Dart FFI
++-- crates/              Rust support libraries (path deps for ffi/cosigner/server/hwsigner)
+|   +-- ark/             Ark protocol primitives (taproot, VTXOs, send paths)
+|   +-- threshold/       FROST & DKG cryptography (no_std, secp256k1)
+|   +-- enclave-client/  AWS Nitro Enclave HTTP client (attestation + signed responses)
+|   +-- embassy-rp-fork/ Forked embassy-rp with TrustZone NS support (init_ns)
++-- ffi/                 Merged C-ABI shared library (ark + threshold + enclave) for Dart FFI
 +-- server/              Rust gRPC coordination server (Wasmtime + cosigner WASM)
 +-- cosigner/            WASI cosigner component (server-side threshold crypto)
 +-- hwsigner/            Non-Secure world firmware (Embassy USB HID, RP2350)
 +-- hwsigner-secure/     Secure world firmware (crypto, key storage, TRNG)
-+-- embassy-rp-fork/     Forked embassy-rp with TrustZone NS support (init_ns)
 +-- protocol/            gRPC stubs and proto definitions
 +-- e2e/                 End-to-end integration tests (includes signer-server)
 +-- keys/                Secure Boot signing keys (gitignored)
@@ -129,7 +132,7 @@ make hw-test          # Smoke test over USB HID
 11. **BLXNS** → transitions CPU to Non-Secure state
 12. **NS world** runs cortex-m-rt Reset handler → `embassy_rp::init_ns()` → Embassy executor → USB HID
 
-### Embassy Fork (`embassy-rp-fork/`)
+### Embassy Fork (`crates/embassy-rp-fork/`)
 
 A minimal fork of `embassy-rp` 0.9.0 that adds TrustZone Non-Secure support:
 
@@ -155,7 +158,7 @@ The NS world keeps its own buffers in NS RAM and passes pointers to the Secure w
 
 ## Other Components
 
-### Flutter App (`ap/`)
+### Flutter App (`app/`)
 
 Android wallet UI built with Provider state management and GoRouter navigation. Onboarding flow guides the user through server connection, hardware signer pairing, and DKG key generation. Supports sending/receiving Bitcoin, spending policies, and QR codes.
 
@@ -163,7 +166,7 @@ Android wallet UI built with Provider state management and GoRouter navigation. 
 
 High-level Dart API that orchestrates the full MPC protocol. Manages two local identities (signing + recovery), communicates with the coordination server over gRPC, drives the hardware signer over USB HID, and handles Taproot address derivation, UTXO tracking, coin selection, and PSBT construction.
 
-### Threshold Library (`threshold/`)
+### Threshold Library (`crates/threshold/`)
 
 `#![no_std]` Rust implementation of FROST over secp256k1 using the `k256` crate. Includes the full 3-round DKG protocol, Pedersen VSS, nonce commitment generation, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native, `wasm32-wasip1` (cosigner), `thumbv8m.main-none-eabihf` (hwsigner), and Dart FFI.
 
@@ -337,7 +340,7 @@ picotool otp set CRIT1 0x11    # SECURE_BOOT_ENABLE + GLITCH_DETECTOR_ENABLE
 adb pair <ip>:<pairing-port>     # Pair once (wireless debugging)
 adb connect <ip>:<connect-port>
 make adb-reverse                  # Forward ports to PC
-cd ap && flutter run              # Select "Hardware Signer (USB)" in onboarding
+cd app && flutter run             # Select "Hardware Signer (USB)" in onboarding
 ```
 
 Connect the signer to the phone via USB OTG adapter. The app will auto-discover it.
@@ -368,7 +371,7 @@ Channel `0x0101`, command `0x05` (MSG). Sequence numbers are big-endian `u16`. L
 
 ```bash
 make threshold-test               # Threshold library unit tests (Rust)
-make threshold-ffi-test           # Threshold FFI tests
+make ffi-test                     # Merged FFI tests (ark + threshold + enclave)
 make e2e                          # Full E2E test (builds all deps, starts Docker)
 make e2e-ark                      # Ark E2E test
 make hw-test ARGS="--full-dkg"    # HW Signer firmware over USB HID
@@ -394,8 +397,9 @@ make stress-test                  # Multi-user E2E stress test
 | **Build** | |
 | `server-build` | Build the Rust gRPC server |
 | `cosigner-build` | Build WASM cosigner component |
-| `ffi-build` | Build threshold + ark FFI shared libraries |
-| `ffi-android` | Build FFI for Android arm64 |
+| `ffi-build` | Build merged FFI shared library (`libmpcwallet_ffi.so`: ark + threshold + enclave) |
+| `ffi-android` | Build merged FFI for Android arm64 |
+| `ffi-android-arm32` | Build merged FFI for Android arm32 |
 | **Infrastructure** | |
 | `regtest-up` | Start bitcoind + electrs via Docker Compose |
 | `server-run` | Build and run server on :50051 |

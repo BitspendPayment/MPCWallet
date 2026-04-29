@@ -33,18 +33,16 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            threshold-ffi/target
-            ark-ffi/target
+            ffi/target
             cosigner/target
             server/target
             e2e/signer-server/target
-          key: e2e-rust-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: e2e-rust-
+          key: e2e-rust-merged-ffi-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: e2e-rust-merged-ffi-
 
       - name: Build all
         run: |
-          cargo build --release --manifest-path threshold-ffi/Cargo.toml
-          cargo build --release --manifest-path ark-ffi/Cargo.toml
+          cargo build --release --manifest-path ffi/Cargo.toml
           (cd cosigner && cargo component build --release)
           cargo build --release --manifest-path server/Cargo.toml
           cargo build --release --manifest-path e2e/signer-server/Cargo.toml
@@ -55,8 +53,7 @@ jobs:
           name: e2e-binaries
           retention-days: 1
           path: |
-            threshold-ffi/target/release/libthreshold_ffi.so
-            ark-ffi/target/release/libark_ffi.so
+            ffi/target/release/libmpcwallet_ffi.so
             cosigner/target/wasm32-wasip1/release/cosigner.wasm
             server/target/release/server
             e2e/signer-server/target/release/signer-server

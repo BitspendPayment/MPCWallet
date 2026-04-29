@@ -19,8 +19,8 @@ DynamicLibrary _loadLibrary() {
   }
 
   final libName = Platform.isMacOS
-      ? 'libthreshold_ffi.dylib'
-      : 'libthreshold_ffi.so';
+      ? 'libmpcwallet_ffi.dylib'
+      : 'libmpcwallet_ffi.so';
 
   if (Platform.isAndroid) {
     return DynamicLibrary.open(libName);
@@ -35,10 +35,10 @@ DynamicLibrary _loadLibrary() {
     return DynamicLibrary.open(libName);
   } catch (_) {}
 
-  // Walk up from cwd looking for threshold-ffi/target/release/.
+  // Walk up from cwd looking for ffi/target/release/.
   var dir = Directory.current;
   for (var i = 0; i < 5; i++) {
-    final candidate = '${dir.path}/threshold-ffi/target/release/$libName';
+    final candidate = '${dir.path}/ffi/target/release/$libName';
     if (File(candidate).existsSync()) {
       return DynamicLibrary.open(candidate);
     }
@@ -49,7 +49,7 @@ DynamicLibrary _loadLibrary() {
 
   throw StateError(
     'Could not find $libName. '
-    'Build it with: cd threshold-ffi && cargo build --release\n'
+    'Build it with: cd ffi && cargo build --release\n'
     'Or set THRESHOLD_FFI_LIB environment variable.',
   );
 }

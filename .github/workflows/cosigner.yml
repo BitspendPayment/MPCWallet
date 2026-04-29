@@ -5,13 +5,13 @@ on:
     branches: [main]
     paths:
       - 'cosigner/**'
-      - 'threshold/**'
-      - 'ark/**'
+      - 'crates/threshold/**'
+      - 'crates/ark/**'
   pull_request:
     paths:
       - 'cosigner/**'
-      - 'threshold/**'
-      - 'ark/**'
+      - 'crates/threshold/**'
+      - 'crates/ark/**'
   workflow_dispatch:
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             cosigner/target
-          key: cosigner-${{ hashFiles('cosigner/Cargo.lock', 'threshold/Cargo.toml', 'ark/Cargo.toml') }}
+          key: cosigner-${{ hashFiles('cosigner/Cargo.lock', 'crates/threshold/Cargo.toml', 'crates/ark/Cargo.toml') }}
 
       - name: Build cosigner WASM
         run: cd cosigner && cargo component build --release
