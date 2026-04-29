@@ -53,6 +53,16 @@
           doCheck = false;
         };
 
+        # Cosigner WASM — pinned by URL+hash so its bytes contribute to PCR0/1/2.
+        # To bump: change url, then run
+        #   nix store prefetch-file --hash-type sha256 <new-url>
+        # and paste the resulting `sha256-…` SRI string below.
+        cosignerWasm = eifPkgs.fetchurl {
+          name = "cosigner.wasm";
+          url = "https://github.com/BitspendPayment/MPCWallet/releases/download/cosigner-8c631a813dff4f34080b83631ce10ebdc8829d26/cosigner.wasm";
+          hash = "sha256-0+n22l4k+6wXC+p2N05kZMvGC7N8vSIr2BJWrhi8xxU=";
+        };
+
         # User's Rust app — fetched from GitHub. No runtime dependency needed.
         upstream-app = eifPkgs.rustPlatform.buildRustPackage ({
           pname = appCfg.binary_name;
@@ -93,6 +103,7 @@
           mkdir -p $out/app/data
           cp ${upstream-app}/bin/${appCfg.binary_name} $out/app/${appCfg.binary_name}
           cp ${runtime}/bin/runtime $out/app/runtime
+          cp ${cosignerWasm} $out/app/cosigner.wasm
         '';
 
         enclaveRootfs = eifPkgs.buildEnv {

@@ -83,25 +83,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Load WASM component: CLI --wasm > COSIGNER_WASM_PATH env > default
     let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
-    let wasm_path = if wasm_source.starts_with("http://") || wasm_source.starts_with("https://") {
-        tracing::info!("Downloading WASM component from: {}", wasm_source);
-        let wasm_dir = std::path::Path::new(&cfg.data_dir).join("wasm");
-        std::fs::create_dir_all(&wasm_dir)?;
-        let local_path = wasm_dir.join("cosigner.wasm");
-        let bytes = reqwest::get(&wasm_source)
-            .await?
-            .error_for_status()
-            .map_err(|e| format!("Failed to download WASM: {e}"))?
-            .bytes()
-            .await?;
-        std::fs::write(&local_path, &bytes)?;
-        tracing::info!("Downloaded {} bytes to {}", bytes.len(), local_path.display());
-        local_path.to_string_lossy().into_owned()
-    } else {
-        wasm_source
-    };
-    tracing::info!("Loading WASM component from: {}", wasm_path);
-    let manager = wasm_manager::WasmManager::new(&wasm_path)?;
+
+    tracing::info!("Loading WASM component from: {}", wasm_source);
+    let manager = wasm_manager::WasmManager::new(&wasm_source)?;
 
     // Initialize Bitcoin services
     let bitcoin_rpc = Arc::new(bitcoin::BitcoinRpcClient::new(

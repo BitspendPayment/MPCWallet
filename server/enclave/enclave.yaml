@@ -39,7 +39,7 @@ app:
   # Template vars: {{region}}, {{prefix}}, {{version}}
   env:
       PORT: "7074"
-      COSIGNER_WASM_PATH: "https://github.com/BitspendPayment/MPCWallet/releases/download/cosigner-8c631a813dff4f34080b83631ce10ebdc8829d26/cosigner.wasm"
+      COSIGNER_WASM_PATH: "/app/cosigner.wasm"
       BITCOIN_NETWORK: "signet"
       ELECTRUM_URL: "electrum.mutinynet.com"
       ELECTRUM_PORT: "50001"
