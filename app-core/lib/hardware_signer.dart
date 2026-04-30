@@ -1,45 +1,195 @@
-/// USB hardware signer implementation using HID transport.
-///
-/// Implements [HardwareSignerInterface] by communicating with a Pico 2
-/// signer device over USB HID. Uses the same JSON command protocol as
-/// [TcpHardwareSigner] but over chunked HID reports instead of TCP.
-library;
-
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:convert/convert.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:app_core/threshold/core/dkg.dart';
 import 'package:app_core/threshold/core/identifier.dart';
 import 'package:app_core/threshold/core/utils.dart';
 import 'package:app_core/threshold/frost/commitment.dart' as frost_comm;
 
-import 'usb_hid_transport.dart';
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
 
-class UsbHardwareSigner implements HardwareSignerInterface {
-  final UsbHidTransport _transport = UsbHidTransport();
+class DkgInitResult {
+  final Round1Package round1Package;
+  final List<int> verifyingKeyBytes;
+  final Identifier identifier;
+
+  DkgInitResult({
+    required this.round1Package,
+    required this.verifyingKeyBytes,
+    required this.identifier,
+  });
+}
+
+class DkgFinalResult {
+  final Identifier identifier;
+  final String publicKeyHex;
+
+  DkgFinalResult({
+    required this.identifier,
+    required this.publicKeyHex,
+  });
+}
+
+class SignerInfo {
+  final bool hasKeyPackage;
+  final bool hasPendingNonce;
+  final String? identifierHex;
+
+  SignerInfo({
+    required this.hasKeyPackage,
+    required this.hasPendingNonce,
+    this.identifierHex,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Abstract interface
+// ---------------------------------------------------------------------------
+
+abstract class HardwareSignerInterface {
+  Future<void> connect();
+  Future<void> disconnect();
+
+  /// DKG round 1: generate secret on device, return Round1Package + identifier.
+  Future<DkgInitResult> dkgInit(int maxSigners, int minSigners);
+
+  /// Restore round 1: reuse stored DKG secret, generate fresh coefficients.
+  /// Returns same verifying key/identifier as original DKG but different R1 package.
+  Future<DkgInitResult> restoreInit(int maxSigners, int minSigners);
+
+  /// DKG round 2: verify others' Round1Packages, compute shares.
+  /// [receiverIdentifiers] are passive participants who get shares but
+  /// don't contribute a secret polynomial.
+  Future<Map<Identifier, Round2Package>> dkgRound2(
+    Map<Identifier, Round1Package> othersRound1, {
+    List<Identifier> receiverIdentifiers = const [],
+  });
+
+  /// DKG round 3: verify received shares, compute final key package on device.
+  /// [receiverIdentifiers] are passive participants included in the PKP.
+  Future<DkgFinalResult> dkgRound3(
+    Map<Identifier, Round1Package> round1Pkgs,
+    Map<Identifier, Round2Package> round2Pkgs, {
+    List<Identifier> receiverIdentifiers = const [],
+  });
+
+  /// Generate a signing nonce (one-time use).
+  Future<frost_comm.SigningCommitments> generateNonce();
+
+  /// Produce a signature share for the given message.
+  Future<BigInt> sign({
+    required Uint8List message,
+    required Map<Identifier, frost_comm.SigningCommitments> commitments,
+    required bool applyTweak,
+    List<int>? merkleRoot,
+  });
+
+  /// Query signer status.
+  Future<SignerInfo> getInfo();
+}
+
+// ---------------------------------------------------------------------------
+// TCP implementation (for E2E testing with signer-server)
+// ---------------------------------------------------------------------------
+
+class TcpHardwareSigner implements HardwareSignerInterface {
+  final String host;
+  final int port;
+  Socket? _socket;
+  StreamSubscription<Uint8List>? _subscription;
+  final _buffer = BytesBuilder(copy: false);
+  Completer<void>? _dataCompleter;
+
+  TcpHardwareSigner({required this.host, required this.port});
 
   @override
   Future<void> connect() async {
-    final devices = await _transport.enumerate();
-    if (devices.isEmpty) {
-      throw StateError('No HW Signer device found. '
-          'Connect the device via USB OTG and try again.');
-    }
-    await _transport.open();
+    _socket = await Socket.connect(host, port);
+    _subscription = _socket!.listen(
+      (data) {
+        _buffer.add(data);
+        _dataCompleter?.complete();
+        _dataCompleter = null;
+      },
+      onError: (error) {
+        _dataCompleter?.completeError(error);
+        _dataCompleter = null;
+      },
+      onDone: () {
+        _dataCompleter?.completeError(
+          Exception('Connection closed unexpectedly'),
+        );
+        _dataCompleter = null;
+      },
+    );
   }
 
   @override
   Future<void> disconnect() async {
-    if (_transport.isConnected) {
-      await _transport.close();
+    await _subscription?.cancel();
+    _subscription = null;
+    await _socket?.close();
+    _socket = null;
+  }
+
+  /// Send a JSON command and receive the JSON response.
+  /// Protocol: 4-byte BE length prefix + JSON payload.
+  Future<Map<String, dynamic>> _sendCommand(Map<String, dynamic> cmd) async {
+    final socket = _socket;
+    if (socket == null) {
+      throw StateError('Not connected to hardware signer');
     }
+
+    final jsonBytes = utf8.encode(jsonEncode(cmd));
+    final lenBytes = ByteData(4)..setUint32(0, jsonBytes.length, Endian.big);
+
+    socket.add(lenBytes.buffer.asUint8List());
+    socket.add(jsonBytes);
+    await socket.flush();
+
+    // Read 4-byte length prefix
+    final respLenBytes = await _readExact(4);
+    final respLen =
+        ByteData.sublistView(respLenBytes).getUint32(0, Endian.big);
+
+    // Read JSON payload
+    final respBytes = await _readExact(respLen);
+    final respJson =
+        jsonDecode(utf8.decode(respBytes)) as Map<String, dynamic>;
+
+    if (respJson.containsKey('error')) {
+      throw Exception('Signer error: ${respJson['error']}');
+    }
+
+    return respJson;
+  }
+
+  /// Read exactly [count] bytes from the buffered stream.
+  Future<Uint8List> _readExact(int count) async {
+    while (_buffer.length < count) {
+      _dataCompleter = Completer<void>();
+      await _dataCompleter!.future;
+    }
+
+    final allBytes = _buffer.takeBytes();
+    final result = Uint8List.fromList(allBytes.sublist(0, count));
+
+    // Put remaining bytes back into the buffer
+    if (allBytes.length > count) {
+      _buffer.add(allBytes.sublist(count));
+    }
+
+    return result;
   }
 
   @override
   Future<DkgInitResult> dkgInit(int maxSigners, int minSigners) async {
-    final resp = await _transport.sendCommand({
+    final resp = await _sendCommand({
       'cmd': 'dkg_init',
       'max_signers': maxSigners,
       'min_signers': minSigners,
@@ -64,7 +214,7 @@ class UsbHardwareSigner implements HardwareSignerInterface {
 
   @override
   Future<DkgInitResult> restoreInit(int maxSigners, int minSigners) async {
-    final resp = await _transport.sendCommand({
+    final resp = await _sendCommand({
       'cmd': 'restore_init',
       'max_signers': maxSigners,
       'min_signers': minSigners,
@@ -108,7 +258,7 @@ class UsbHardwareSigner implements HardwareSignerInterface {
           .toList();
     }
 
-    final resp = await _transport.sendCommand(cmd);
+    final resp = await _sendCommand(cmd);
 
     final r2Map = resp['round2_packages'] as Map<String, dynamic>;
     final result = <Identifier, Round2Package>{};
@@ -156,7 +306,7 @@ class UsbHardwareSigner implements HardwareSignerInterface {
           .toList();
     }
 
-    final resp = await _transport.sendCommand(cmd);
+    final resp = await _sendCommand(cmd);
 
     final idHex = resp['identifier_hex'] as String;
     final idBytes = Uint8List.fromList(hex.decode(idHex));
@@ -170,7 +320,7 @@ class UsbHardwareSigner implements HardwareSignerInterface {
 
   @override
   Future<frost_comm.SigningCommitments> generateNonce() async {
-    final resp = await _transport.sendCommand({'cmd': 'generate_nonce'});
+    final resp = await _sendCommand({'cmd': 'generate_nonce'});
 
     final hidingHex = resp['hiding_hex'] as String;
     final bindingHex = resp['binding_hex'] as String;
@@ -212,14 +362,14 @@ class UsbHardwareSigner implements HardwareSignerInterface {
       cmd['merkle_root_hex'] = hex.encode(merkleRoot);
     }
 
-    final resp = await _transport.sendCommand(cmd);
+    final resp = await _sendCommand(cmd);
     final shareHex = resp['share_hex'] as String;
     return bytesToBigInt(Uint8List.fromList(hex.decode(shareHex)));
   }
 
   @override
   Future<SignerInfo> getInfo() async {
-    final resp = await _transport.sendCommand({'cmd': 'get_info'});
+    final resp = await _sendCommand({'cmd': 'get_info'});
     return SignerInfo(
       hasKeyPackage: resp['has_key_package'] as bool,
       hasPendingNonce: resp['has_pending_nonce'] as bool,
@@ -227,3 +377,4 @@ class UsbHardwareSigner implements HardwareSignerInterface {
     );
   }
 }
+

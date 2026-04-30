@@ -1,9 +1,9 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:test/test.dart';
-import 'package:client/client.dart';
-import 'package:client/bitcoin.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/bitcoin.dart';
+import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';

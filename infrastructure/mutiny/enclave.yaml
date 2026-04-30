@@ -28,7 +28,7 @@ app:
   nix_vendor_hash: "sha256-QPBa326MlMDIxvxC4Zp8PMgW9hi31pdH0MRwv8+j7uc="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
-  nix_subdir: "server"                 # Subdirectory for monorepo (e.g. "server")
+  nix_subdir: "cosigner-runtime"                 # Subdirectory for monorepo (e.g. "server")
   binary_name: ""                # Output binary name (defaults to 'name')
   release_tag: "eif-latest"
 

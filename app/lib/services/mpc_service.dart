@@ -5,14 +5,14 @@ import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:protocol/protocol.dart';
 
-import 'package:client/ark_wallet.dart';
-import 'package:client/bitcoin.dart';
-import 'package:client/client.dart';
-import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
-import 'package:client/enclave/manifest.dart' as manifest;
-import 'package:client/hardware_signer.dart';
-import 'package:client/policy.dart';
-import 'package:client/software_signer.dart';
+import 'package:app_core/ark_wallet.dart';
+import 'package:app_core/bitcoin.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
+import 'package:app_core/enclave/manifest.dart' as manifest;
+import 'package:app_core/hardware_signer.dart';
+import 'package:app_core/policy.dart';
+import 'package:app_core/software_signer.dart';
 
 import '../usb/usb_hardware_signer.dart';
 import 'backup_service.dart';

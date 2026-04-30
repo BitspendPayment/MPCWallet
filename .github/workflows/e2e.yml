@@ -35,8 +35,8 @@ jobs:
             ~/.cargo/git
             ffi/target
             cosigner/target
-            server/target
-            e2e/signer-server/target
+            cosigner-runtime/target
+            e2e/signer-cosigner-runtime/target
           key: e2e-rust-merged-ffi-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: e2e-rust-merged-ffi-
 
@@ -44,8 +44,8 @@ jobs:
         run: |
           cargo build --release --manifest-path ffi/Cargo.toml
           (cd cosigner && cargo component build --release)
-          cargo build --release --manifest-path server/Cargo.toml
-          cargo build --release --manifest-path e2e/signer-server/Cargo.toml
+          cargo build --release --manifest-path cosigner-runtime/Cargo.toml
+          cargo build --release --manifest-path e2e/signer-cosigner-runtime/Cargo.toml
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
@@ -55,8 +55,8 @@ jobs:
           path: |
             ffi/target/release/libmpcwallet_ffi.so
             cosigner/target/wasm32-wasip1/release/cosigner.wasm
-            server/target/release/server
-            e2e/signer-server/target/release/signer-server
+            cosigner-runtime/target/release/cosigner-runtime
+            e2e/signer-cosigner-runtime/target/release/signer-server
 
   bitcoin-e2e:
     name: Bitcoin E2E (regtest)
@@ -73,8 +73,8 @@ jobs:
 
       - name: Make binaries executable
         run: |
-          chmod +x server/target/release/server
-          chmod +x e2e/signer-server/target/release/signer-server
+          chmod +x cosigner-runtime/target/release/cosigner-runtime
+          chmod +x e2e/signer-cosigner-runtime/target/release/signer-server
 
       - name: Setup Dart
         uses: dart-lang/setup-dart@v1
@@ -86,7 +86,7 @@ jobs:
 
       - name: Start signer-server
         run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
+          e2e/signer-cosigner-runtime/target/release/signer-server --port 9090 &
           sleep 1
 
       - name: Run Bitcoin E2E test
@@ -113,8 +113,8 @@ jobs:
 
       - name: Make binaries executable
         run: |
-          chmod +x server/target/release/server
-          chmod +x e2e/signer-server/target/release/signer-server
+          chmod +x cosigner-runtime/target/release/cosigner-runtime
+          chmod +x e2e/signer-cosigner-runtime/target/release/signer-server
 
       - name: Setup Dart
         uses: dart-lang/setup-dart@v1
@@ -138,7 +138,7 @@ jobs:
 
       - name: Start signer-server
         run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
+          e2e/signer-cosigner-runtime/target/release/signer-server --port 9090 &
           sleep 1
 
       - name: Run Ark E2E test

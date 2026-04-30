@@ -4,8 +4,8 @@
 import 'dart:io';
 import 'package:grpc/grpc.dart';
 import 'package:hive/hive.dart';
-import 'package:client/client.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/hardware_signer.dart';
 
 Future<void> main(List<String> args) async {
   final hostPort = args.isNotEmpty ? args[0] : '127.0.0.1:50051';

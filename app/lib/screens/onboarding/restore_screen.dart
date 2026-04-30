@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-import 'package:client/backup/backup_codec.dart';
+import 'package:app_core/backup/backup_codec.dart';
 
 import '../../services/mpc_service.dart';
 

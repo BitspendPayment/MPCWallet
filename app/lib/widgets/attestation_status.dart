@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
-import 'package:client/enclave/native_enclave.dart' show AttestationStatus;
+import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 
 /// Displays the enclave attestation verification status.
 ///

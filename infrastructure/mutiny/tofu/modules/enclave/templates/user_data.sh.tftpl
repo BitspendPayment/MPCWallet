@@ -41,8 +41,8 @@ systemctl enable --now nitro-enclaves-allocator.service
 
 cd /home/ec2-user
 
-if [[ ! -d ./app/server ]]; then
-  mkdir -p ./app/server
+if [[ ! -d ./app/cosigner-runtime ]]; then
+  mkdir -p ./app/cosigner-runtime
   chown -R ec2-user:ec2-user ./app
 fi
 
@@ -50,12 +50,12 @@ fi
 # The inline policy depends on the KMS key, so it may be created after the
 # EC2 instance boots. IAM is eventually consistent — retry until it works.
 for attempt in 1 2 3 4 5 6; do
-  aws s3 cp ${eif_s3_url} /home/ec2-user/app/server/enclave.eif && break
+  aws s3 cp ${eif_s3_url} /home/ec2-user/app/cosigner-runtime/enclave.eif && break
   echo "S3 download failed (attempt $attempt), waiting for IAM propagation..."
   sleep 10
 done
-chmod 644 /home/ec2-user/app/server/enclave.eif
-chown ec2-user:ec2-user /home/ec2-user/app/server/enclave.eif
+chmod 644 /home/ec2-user/app/cosigner-runtime/enclave.eif
+chown ec2-user:ec2-user /home/ec2-user/app/cosigner-runtime/enclave.eif
 
 # Download supervisor binary. The supervisor owns the enclave lifecycle,
 # the gvproxy virtual network, and the IMDS AF_VSOCK forwarder in-process
@@ -93,7 +93,7 @@ UNIT_EOF
 
 cat <<EOF >> /etc/environment
 ENCLAVE_APP_NAME=${app_name}
-EIF_PATH=/home/ec2-user/app/server/enclave.eif
+EIF_PATH=/home/ec2-user/app/cosigner-runtime/enclave.eif
 ENCLAVE_NITRIDING_ENABLED=true
 ENCLAVE_NITRIDING_FQDN=example.com
 ENCLAVE_KMS_KEY_ID=${kms_key_id}

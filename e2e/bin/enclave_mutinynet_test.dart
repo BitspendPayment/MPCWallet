@@ -11,9 +11,9 @@ library;
 import 'dart:async';
 import 'dart:io';
 
-import 'package:client/client.dart';
-import 'package:client/bitcoin.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/bitcoin.dart';
+import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:hive/hive.dart';
 

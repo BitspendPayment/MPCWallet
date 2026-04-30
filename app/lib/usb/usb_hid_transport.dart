@@ -6,7 +6,7 @@ library;
 
 import 'dart:convert';
 import 'package:flutter/services.dart';
-import 'package:client/usb/hid_chunking.dart';
+import 'package:app_core/usb/hid_chunking.dart';
 
 class UsbHidTransport {
   static const _channel = MethodChannel('com.mpcwallet.ap/usb_hid');

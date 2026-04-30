@@ -1,8 +1,8 @@
 import 'dart:typed_data';
 
 import 'package:app/services/backup_store.dart';
-import 'package:client/backup/backup_codec.dart';
-import 'package:client/software_signer.dart';
+import 'package:app_core/backup/backup_codec.dart';
+import 'package:app_core/software_signer.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// End-to-end style tests for the ephemeral-recovery-share flow. The real
