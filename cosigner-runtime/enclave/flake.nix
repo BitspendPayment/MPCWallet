@@ -79,17 +79,10 @@
 
           doCheck = false;
 
+          cargoBuildFlags = [ "--bin" appCfg.binary_name ];
+
           nativeBuildInputs = resolveInputs (appCfg.nix_native_build_inputs or []);
           buildInputs = resolveInputs (appCfg.nix_build_inputs or []);
-
-          postInstall = ''
-            # Rename whatever was built to the configured binary name.
-            for f in $out/bin/*; do
-              if [ "$(basename "$f")" != "${appCfg.binary_name}" ]; then
-                mv "$f" "$out/bin/${appCfg.binary_name}"
-              fi
-            done
-          '';
         } // (if (appCfg.nix_subdir or "") != "" then {
           sourceRoot = "source";
           cargoRoot = appCfg.nix_subdir;

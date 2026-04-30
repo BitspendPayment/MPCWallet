@@ -5,3 +5,5 @@ terraform.tfstate
 terraform.tfstate.backup
 .terraform/
 backend.tf
+.terraform.lock.hcl
+.artifacts/
