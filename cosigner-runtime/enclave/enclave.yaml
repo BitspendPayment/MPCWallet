@@ -10,8 +10,8 @@ instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
 
 runtime:
-  rev: "v0.0.73"
-  hash: "sha256-IP9DprZ9BTdtrsJQHEMLhc5saMYB27OlizSixOuI8XI="
+  rev: "v0.0.74"
+  hash: "sha256-9cXFGEcexHZr1JEqU004Okxs55kQdvb7fm4221qgWMU="
   vendor_hash: "sha256-2ZX9x2voIwVkUsmrZvhJssAQqnCh8/HLwopL5HpiaOg="
 
 app:
