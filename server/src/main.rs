@@ -1,13 +1,8 @@
-// All module logic lives in the library target (`src/lib.rs`). This binary is
-// the thin REST-server entrypoint that wires everything together.
-// `wallet_service.rs` was removed in the actor-model cutover; its logic now
-// lives across `server::user::handlers::*` and `server::vtxo_stream`.
-
 use std::sync::Arc;
 
 use clap::Parser;
 
-use server::{bitcoin, config, persistence, rest_api, shared, telemetry, user, vtxo_stream};
+use server::{bitcoin, config, cosigner, persistence, rest_api, shared, telemetry, vtxo_stream};
 
 #[derive(Parser)]
 #[command(
@@ -118,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WASM source: CLI > env > config default.
     let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
     tracing::info!("Loading WASM component from: {}", wasm_source);
-    let registry = user::registry::UserRegistry::new(&wasm_source, shared.clone())?;
+    let registry = cosigner::CosignerRegistry::new(&wasm_source, shared.clone())?;
 
     // Populate cross-user secondary indices from persistence so restore /
     // VTXO-stream lookups don't need to wake any actor.

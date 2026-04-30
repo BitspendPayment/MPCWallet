@@ -1,23 +1,23 @@
-//! `UserHandle` is the dispatcher's view of an actor: a typed mpsc sender plus
+//! `CosignerHandle` is the dispatcher's view of an actor: a typed mpsc sender plus
 //! a JoinHandle for graceful shutdown.
 
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
-use super::command::UserCommand;
+use super::command::CosignerCommand;
 
 #[derive(Clone)]
-pub struct UserHandle {
-    tx: mpsc::Sender<UserCommand>,
+pub struct CosignerHandle {
+    tx: mpsc::Sender<CosignerCommand>,
 }
 
-impl UserHandle {
-    pub(crate) fn new(tx: mpsc::Sender<UserCommand>) -> Self {
+impl CosignerHandle {
+    pub(crate) fn new(tx: mpsc::Sender<CosignerCommand>) -> Self {
         Self { tx }
     }
 
     /// Send a command to the actor. Returns `Err` if the actor has shut down.
-    pub async fn send(&self, cmd: UserCommand) -> Result<(), mpsc::error::SendError<UserCommand>> {
+    pub async fn send(&self, cmd: CosignerCommand) -> Result<(), mpsc::error::SendError<CosignerCommand>> {
         self.tx.send(cmd).await
     }
 
@@ -25,8 +25,8 @@ impl UserHandle {
     /// producer when one actor is slow.
     pub fn try_send(
         &self,
-        cmd: UserCommand,
-    ) -> Result<(), mpsc::error::TrySendError<UserCommand>> {
+        cmd: CosignerCommand,
+    ) -> Result<(), mpsc::error::TrySendError<CosignerCommand>> {
         self.tx.try_send(cmd)
     }
 }
@@ -34,6 +34,6 @@ impl UserHandle {
 /// Owned by the registry; tracked alongside the sender so we can join the task
 /// during shutdown or eviction.
 pub(crate) struct OwnedHandle {
-    pub handle: UserHandle,
+    pub handle: CosignerHandle,
     pub join: JoinHandle<()>,
 }

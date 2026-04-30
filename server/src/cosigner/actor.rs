@@ -1,4 +1,4 @@
-//! User actor: a tokio task that owns one user's `UserInstance` + `UserState`
+//! User actor: a tokio task that owns one user's `CosignerInstance` + `CosignerState`
 //! and processes commands serially. Per-command WASM work runs inside
 //! `spawn_blocking` so the actor task stays light — millions of idle actors fit
 //! in memory; only currently-executing WASM consumes a blocking-pool thread.
@@ -9,23 +9,23 @@ use tokio::sync::mpsc;
 use tonic::Status;
 
 use crate::shared::SharedServices;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::wasm::CosignerInstance;
 
-use super::command::UserCommand;
+use super::command::CosignerCommand;
 use super::handlers;
-use super::registry::UserRegistry;
-use super::state::UserState;
+use super::registry::CosignerRegistry;
+use super::state::CosignerState;
 
 /// Move `(user, state)` into a blocking closure, run `f`, reclaim ownership.
 /// `f` returns the response payload; the user/state pair is paired back via
 /// the spawn_blocking return tuple.
 async fn run_blocking<F, T>(
-    user: UserInstance,
-    state: UserState,
+    user: CosignerInstance,
+    state: CosignerState,
     f: F,
-) -> (UserInstance, UserState, Result<T, Status>)
+) -> (CosignerInstance, CosignerState, Result<T, Status>)
 where
-    F: FnOnce(&mut UserInstance, &mut UserState) -> Result<T, Status> + Send + 'static,
+    F: FnOnce(&mut CosignerInstance, &mut CosignerState) -> Result<T, Status> + Send + 'static,
     T: Send + 'static,
 {
     tokio::task::spawn_blocking(move || {
@@ -58,7 +58,7 @@ macro_rules! dispatch {
 }
 
 /// Rendezvous dispatch: handler owns the reply sender so it can fire inline or
-/// stash it in `UserState.pending_*`. Used by multi-participant flows (DKG).
+/// stash it in `CosignerState.pending_*`. Used by multi-participant flows (DKG).
 macro_rules! dispatch_rendezvous {
     ($user:ident, $state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
@@ -79,18 +79,18 @@ macro_rules! dispatch_rendezvous {
 }
 
 pub async fn run_actor(
-    mut user: UserInstance,
-    mut state: UserState,
-    mut rx: mpsc::Receiver<UserCommand>,
+    mut user: CosignerInstance,
+    mut state: CosignerState,
+    mut rx: mpsc::Receiver<CosignerCommand>,
     shared: Arc<SharedServices>,
-    registry: Arc<UserRegistry>,
+    registry: Arc<CosignerRegistry>,
 ) {
     while let Some(cmd) = rx.recv().await {
         match cmd {
-            UserCommand::Shutdown => break,
+            CosignerCommand::Shutdown => break,
 
             // -------- Policy --------
-            UserCommand::CreateSpendingPolicy { req, reply } => {
+            CosignerCommand::CreateSpendingPolicy { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -101,7 +101,7 @@ pub async fn run_actor(
                     handlers::policy::create_spending_policy
                 );
             }
-            UserCommand::GetPolicyId { req, reply } => {
+            CosignerCommand::GetPolicyId { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -112,7 +112,7 @@ pub async fn run_actor(
                     handlers::policy::get_policy_id
                 );
             }
-            UserCommand::UpdatePolicy { req, reply } => {
+            CosignerCommand::UpdatePolicy { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -123,7 +123,7 @@ pub async fn run_actor(
                     handlers::policy::update_policy
                 );
             }
-            UserCommand::DeletePolicy { req, reply } => {
+            CosignerCommand::DeletePolicy { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -136,37 +136,37 @@ pub async fn run_actor(
             }
 
             // -------- DKG (rendezvous) --------
-            UserCommand::DkgStep1 { req, reply } => {
+            CosignerCommand::DkgStep1 { req, reply } => {
                 dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step1);
             }
-            UserCommand::DkgStep2 { req, reply } => {
+            CosignerCommand::DkgStep2 { req, reply } => {
                 dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step2);
             }
-            UserCommand::DkgStep3 { req, reply } => {
+            CosignerCommand::DkgStep3 { req, reply } => {
                 dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step3);
             }
 
             // -------- Signing --------
-            UserCommand::SignStep1 { req, reply } => {
+            CosignerCommand::SignStep1 { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::sign::sign_step1);
             }
-            UserCommand::SignStep2 { req, reply } => {
+            CosignerCommand::SignStep2 { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::sign::sign_step2);
             }
 
             // -------- Refresh --------
-            UserCommand::RefreshStep1 { req, reply } => {
+            CosignerCommand::RefreshStep1 { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step1);
             }
-            UserCommand::RefreshStep2 { req, reply } => {
+            CosignerCommand::RefreshStep2 { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step2);
             }
-            UserCommand::RefreshStep3 { req, reply } => {
+            CosignerCommand::RefreshStep3 { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step3);
             }
 
             // -------- Transactions --------
-            UserCommand::BroadcastTransaction { req, reply } => {
+            CosignerCommand::BroadcastTransaction { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -177,7 +177,7 @@ pub async fn run_actor(
                     handlers::tx::broadcast_transaction
                 );
             }
-            UserCommand::FetchHistory { req, reply } => {
+            CosignerCommand::FetchHistory { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -188,7 +188,7 @@ pub async fn run_actor(
                     handlers::tx::fetch_history
                 );
             }
-            UserCommand::FetchRecentTransactions { req, reply } => {
+            CosignerCommand::FetchRecentTransactions { req, reply } => {
                 dispatch!(
                     user,
                     state,
@@ -201,42 +201,42 @@ pub async fn run_actor(
             }
 
             // -------- Ark (lookups) --------
-            UserCommand::GetArkInfo { req, reply } => {
+            CosignerCommand::GetArkInfo { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_ark_info);
             }
-            UserCommand::GetArkAddress { req, reply } => {
+            CosignerCommand::GetArkAddress { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_ark_address);
             }
-            UserCommand::GetBoardingAddress { req, reply } => {
+            CosignerCommand::GetBoardingAddress { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_boarding_address);
             }
-            UserCommand::CheckBoardingBalance { req, reply } => {
+            CosignerCommand::CheckBoardingBalance { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::check_boarding_balance);
             }
-            UserCommand::ListVtxos { req, reply } => {
+            CosignerCommand::ListVtxos { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::list_vtxos);
             }
-            UserCommand::ListArkTransactions { req, reply } => {
+            CosignerCommand::ListArkTransactions { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark::list_ark_transactions);
             }
-            UserCommand::SendVtxo { req, reply } => {
+            CosignerCommand::SendVtxo { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::send_vtxo);
             }
-            UserCommand::RedeemVtxo { req, reply } => {
+            CosignerCommand::RedeemVtxo { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::redeem_vtxo);
             }
-            UserCommand::Settle { req, reply } => {
+            CosignerCommand::Settle { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::settle);
             }
-            UserCommand::SettleDelegate { req, reply } => {
+            CosignerCommand::SettleDelegate { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::settle_delegate);
             }
-            UserCommand::SubmitArkSend { req, reply } => {
+            CosignerCommand::SubmitArkSend { req, reply } => {
                 dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::submit_ark_send);
             }
 
             // -------- Stream fan-in (no reply) --------
-            UserCommand::VtxoStreamUpdate {
+            CosignerCommand::VtxoStreamUpdate {
                 user_id_hex,
                 spent,
                 spendable,
@@ -260,7 +260,7 @@ pub async fn run_actor(
                 user = u;
                 state = st;
             }
-            UserCommand::IndexerUpdate {
+            CosignerCommand::IndexerUpdate {
                 user_id_hex,
                 new_vtxos,
                 spent_vtxos,

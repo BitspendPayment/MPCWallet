@@ -11,13 +11,13 @@ use crate::auth::message::{
     OP_LIST_ARK_TXS, OP_LIST_VTXOS,
 };
 use crate::shared::SharedServices;
-use crate::user::command::UserCommand;
-use crate::user::handle::UserHandle;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::command::CosignerCommand;
+use crate::cosigner::handle::CosignerHandle;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{auth_check, get_user_xonly_pubkey};
 
@@ -49,10 +49,10 @@ fn fetch_asp_info(
 
 #[tracing::instrument(skip_all, name = "actor::get_ark_info", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_ark_info(
-    _user: &mut UserInstance,
-    state: &mut UserState,
+    _user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: GetArkInfoRequest,
 ) -> Result<GetArkInfoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -83,8 +83,8 @@ pub fn get_ark_info(
 
 fn register_user_scripts(
     shared: &SharedServices,
-    registry: &Arc<UserRegistry>,
-    state: &mut UserState,
+    registry: &Arc<CosignerRegistry>,
+    state: &mut CosignerState,
     user_id_hex: &str,
     owner_pk_hex: &str,
     info: &ark::client::types::ArkInfo,
@@ -167,7 +167,7 @@ async fn run_indexer_subscription(
     subscription_id: String,
     asp_url: String,
     info: ark::client::types::ArkInfo,
-    user_handle: UserHandle,
+    user_handle: CosignerHandle,
 ) {
     let mut stream_client = match ark::client::AspClient::connect(&asp_url).await {
         Ok(c) => c,
@@ -190,7 +190,7 @@ async fn run_indexer_subscription(
         if let Some(data) = event.data {
             match data {
                 Data::Event(e) => {
-                    let cmd = UserCommand::IndexerUpdate {
+                    let cmd = CosignerCommand::IndexerUpdate {
                         user_id_hex: user_id_hex.clone(),
                         new_vtxos: e.new_vtxos.into_iter().map(indexer_to_vtxo).collect(),
                         spent_vtxos: e.spent_vtxos.into_iter().map(indexer_to_vtxo).collect(),
@@ -234,10 +234,10 @@ fn indexer_to_vtxo(v: ark::client::proto::IndexerVtxo) -> ark::client::proto::Vt
 
 #[tracing::instrument(skip_all, name = "actor::get_ark_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_ark_address(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &Arc<UserRegistry>,
+    registry: &Arc<CosignerRegistry>,
     req: GetArkAddressRequest,
 ) -> Result<GetArkAddressResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -275,10 +275,10 @@ pub fn get_ark_address(
 
 #[tracing::instrument(skip_all, name = "actor::get_boarding_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_boarding_address(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &Arc<UserRegistry>,
+    registry: &Arc<CosignerRegistry>,
     req: GetBoardingAddressRequest,
 ) -> Result<GetBoardingAddressResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -312,10 +312,10 @@ pub fn get_boarding_address(
 
 #[tracing::instrument(skip_all, name = "actor::check_boarding_balance", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn check_boarding_balance(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: CheckBoardingBalanceRequest,
 ) -> Result<CheckBoardingBalanceResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -373,10 +373,10 @@ pub fn check_boarding_balance(
 
 #[tracing::instrument(skip_all, name = "actor::list_vtxos", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn list_vtxos(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: ListVtxosRequest,
 ) -> Result<ListVtxosResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -435,10 +435,10 @@ pub fn list_vtxos(
 
 #[tracing::instrument(skip_all, name = "actor::list_ark_transactions", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn list_ark_transactions(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: ListArkTransactionsRequest,
 ) -> Result<ListArkTransactionsResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);

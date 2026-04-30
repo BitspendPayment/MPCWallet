@@ -6,20 +6,20 @@ use tonic::Status;
 use crate::auth::message::{OP_FETCH_HISTORY, OP_FETCH_RECENT_TXS};
 use crate::crypto_ops;
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{auth_check, ensure_policy_loaded};
 
 #[tracing::instrument(skip_all, name = "actor::broadcast_transaction", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn broadcast_transaction(
-    _user: &mut UserInstance,
-    _state: &mut UserState,
+    _user: &mut CosignerInstance,
+    _state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: BroadcastTransactionRequest,
 ) -> Result<BroadcastTransactionResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -37,10 +37,10 @@ pub fn broadcast_transaction(
 
 #[tracing::instrument(skip_all, name = "actor::fetch_history", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn fetch_history(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: FetchHistoryRequest,
 ) -> Result<FetchHistoryResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -94,10 +94,10 @@ pub fn fetch_history(
 
 #[tracing::instrument(skip_all, name = "actor::fetch_recent_transactions", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn fetch_recent_transactions(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: FetchRecentTransactionsRequest,
 ) -> Result<FetchRecentTransactionsResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -153,7 +153,7 @@ pub fn fetch_recent_transactions(
 }
 
 fn build_tweaked_map(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
 ) -> Result<(crate::policy::PolicyState, HashMap<String, String>), Status> {
     let ps = user
         .policy_state

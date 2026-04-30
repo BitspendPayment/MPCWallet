@@ -1,5 +1,5 @@
 //! Shared helpers for actor command handlers. Each function takes plain
-//! references to `UserInstance`, `UserState`, and shared services so handlers
+//! references to `CosignerInstance`, `CosignerState`, and shared services so handlers
 //! can compose without locking.
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,17 +11,17 @@ use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
+use crate::cosigner::wasm::CosignerInstance;
 
 const NONCE_CACHE_CAP: usize = 10_000;
 
 /// Per-user Schnorr-auth check. Replaces the global `AuthVerifier` for cases
 /// that carry a single-key signature.
 pub fn auth_check(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     user_id_bytes: &[u8],
     signature: &[u8],
     timestamp_ms: i64,
@@ -64,7 +64,7 @@ pub fn auth_check(
 /// (update_policy, delete_policy) where the signature is verified separately
 /// against the user's group verifying key.
 pub fn timestamp_check(
-    state: &mut UserState,
+    state: &mut CosignerState,
     timestamp_ms: i64,
     user_id_hex: &str,
     operation: &str,
@@ -99,7 +99,7 @@ pub fn timestamp_check(
 /// verifying-share key. This lets the actor for the owner pubkey find its
 /// policy on respawn, and lets clients use either identity in the URL.
 pub fn ensure_policy_loaded(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
@@ -126,7 +126,7 @@ pub fn ensure_policy_loaded(
 /// Try to load a policy under the given key. Returns Ok(true) on hit,
 /// Ok(false) on miss; bubble parse errors as warnings, treated as miss.
 fn try_load_policy(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     key: &str,
@@ -156,7 +156,7 @@ fn try_load_policy(
 /// flows can find this policy without restarting the process.
 pub fn persist_policy(
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     user_id_hex: &str,
     policy: &PolicyState,
 ) -> Result<(), Status> {
@@ -199,7 +199,7 @@ pub fn persist_policy(
 /// Fetch the user's group x-only pubkey (64 hex chars) for Ark address derivation.
 /// The compressed key from the policy is 33 bytes (66 hex); strip the parity byte.
 pub fn get_user_xonly_pubkey(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
@@ -209,7 +209,7 @@ pub fn get_user_xonly_pubkey(
         .policy_state
         .as_ref()
         .ok_or_else(|| Status::not_found("no policy state"))?;
-    let vk_hex = crate::user::handlers::parsers::extract_verifying_key(
+    let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(
         &ps.normal_policy.public_key_package_json,
     )?;
     if vk_hex.len() == 66 {
@@ -226,7 +226,7 @@ pub fn get_user_xonly_pubkey(
 
 /// Return `(xonly_owner_pk_hex, server_dkg_secret_hex)` from the user's policy.
 pub fn get_user_ark_keys(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
@@ -236,7 +236,7 @@ pub fn get_user_ark_keys(
         .policy_state
         .as_ref()
         .ok_or_else(|| Status::not_found("no policy state"))?;
-    let vk_hex = crate::user::handlers::parsers::extract_verifying_key(
+    let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(
         &ps.normal_policy.public_key_package_json,
     )?;
     let xonly = if vk_hex.len() == 66 {
@@ -273,7 +273,7 @@ pub fn save_user_vtxos(
 pub fn save_user_ark_history(
     persistence: &dyn KvStore,
     user_id_hex: &str,
-    entries: &[crate::user::types::ArkTxEntry],
+    entries: &[crate::cosigner::types::ArkTxEntry],
 ) {
     if let Ok(json) = serde_json::to_string(entries) {
         if let Err(e) = persistence.put("ark_tx_history", user_id_hex, &json) {
@@ -292,7 +292,7 @@ pub fn now_secs() -> i64 {
 
 /// Calculate spent amount from a transaction (PSBT or raw tx) for policy eval.
 pub fn calculate_spent_amount(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     full_tx: &[u8],
     pkp_json: &str,
 ) -> Result<i64, Status> {
@@ -330,7 +330,7 @@ pub fn calculate_spent_amount(
     }
     let tweaked_pkp_json = crypto_ops::pub_key_package_tweak(user, pkp_json, None)
         .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
-    let vk_hex = crate::user::handlers::parsers::extract_verifying_key(&tweaked_pkp_json)?;
+    let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(&tweaked_pkp_json)?;
     let script_hex = crate::bitcoin::tx_parser::derive_p2tr_script_hex(&vk_hex)
         .map_err(|e| Status::internal(format!("P2TR derivation: {e}")))?;
     let spent = crate::bitcoin::tx_parser::calculate_spent_amount(

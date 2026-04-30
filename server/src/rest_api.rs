@@ -1,5 +1,5 @@
-//! REST/JSON API: extracts `user_id` from the URL path, builds a `UserCommand`,
-//! and dispatches via the per-user actor through `UserRegistry`.
+//! REST/JSON API: extracts `user_id` from the URL path, builds a `CosignerCommand`,
+//! and dispatches via the per-user actor through `CosignerRegistry`.
 
 use std::sync::Arc;
 
@@ -11,11 +11,11 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use tonic::Status;
 
-use crate::user::command::UserCommand;
-use crate::user::registry::UserRegistry;
+use crate::cosigner::command::CosignerCommand;
+use crate::cosigner::registry::CosignerRegistry;
 use crate::wallet_proto::{self};
 
-type AppState = Arc<UserRegistry>;
+type AppState = Arc<CosignerRegistry>;
 
 /// Build the axum router. All authenticated routes are nested under
 /// `/u/{user_id}/...` so the dispatcher can route directly to the actor.
@@ -151,7 +151,7 @@ macro_rules! dispatch_json {
     ($reg:ident, $user_id:ident, $variant:ident, $req:expr) => {{
         let req = $req;
         match $reg
-            .dispatch(&$user_id, move |reply| UserCommand::$variant { req, reply })
+            .dispatch(&$user_id, move |reply| CosignerCommand::$variant { req, reply })
             .await
         {
             Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
@@ -233,7 +233,7 @@ async fn sign_step1(
         script_path_spend: bool_field(&body, "script_path_spend"),
     };
     match reg
-        .dispatch(&user_id, move |reply| UserCommand::SignStep1 { req, reply })
+        .dispatch(&user_id, move |reply| CosignerCommand::SignStep1 { req, reply })
         .await
     {
         Ok(r) => {
@@ -271,7 +271,7 @@ async fn sign_step2(
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
     match reg
-        .dispatch(&user_id, move |reply| UserCommand::SignStep2 { req, reply })
+        .dispatch(&user_id, move |reply| CosignerCommand::SignStep2 { req, reply })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -535,7 +535,7 @@ async fn send_vtxo(
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
     match reg
-        .dispatch(&user_id, move |reply| UserCommand::SendVtxo { req, reply })
+        .dispatch(&user_id, move |reply| CosignerCommand::SendVtxo { req, reply })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -578,7 +578,7 @@ async fn settle(
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
     match reg
-        .dispatch(&user_id, move |reply| UserCommand::Settle { req, reply })
+        .dispatch(&user_id, move |reply| CosignerCommand::Settle { req, reply })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -605,7 +605,7 @@ async fn settle_delegate(
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
     match reg
-        .dispatch(&user_id, move |reply| UserCommand::SettleDelegate { req, reply })
+        .dispatch(&user_id, move |reply| CosignerCommand::SettleDelegate { req, reply })
         .await
     {
         Ok(r) => Ok(Json(json!({

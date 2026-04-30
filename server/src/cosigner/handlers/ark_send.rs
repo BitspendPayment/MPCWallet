@@ -9,12 +9,12 @@ use crate::auth::message::{
     OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE,
 };
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::user::types::ArkTxEntry;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::types::ArkTxEntry;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{
     auth_check, get_user_ark_keys, get_user_xonly_pubkey, now_secs, save_user_ark_history,
@@ -69,10 +69,10 @@ fn parse_signatures(messages: &[Vec<u8>]) -> Result<Vec<[u8; 64]>, Status> {
 
 #[tracing::instrument(skip_all, name = "actor::send_vtxo", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn send_vtxo(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: SendVtxoRequest,
 ) -> Result<SendVtxoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -254,10 +254,10 @@ pub fn send_vtxo(
 
 #[tracing::instrument(skip_all, name = "actor::redeem_vtxo", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn redeem_vtxo(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: RedeemVtxoRequest,
 ) -> Result<RedeemVtxoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -284,10 +284,10 @@ pub fn redeem_vtxo(
 
 #[tracing::instrument(skip_all, name = "actor::settle", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn settle(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: SettleRequest,
 ) -> Result<SettleResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -523,10 +523,10 @@ enum SettleOutcome {
 
 #[tracing::instrument(skip_all, name = "actor::settle_delegate", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn settle_delegate(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: SettleDelegateRequest,
 ) -> Result<SettleDelegateResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -690,10 +690,10 @@ pub fn settle_delegate(
 
 #[tracing::instrument(skip_all, name = "actor::submit_ark_send", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn submit_ark_send(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: SubmitArkSendRequest,
 ) -> Result<SubmitArkSendResponse, Status> {
     use bitcoin::base64::{self, Engine as _};

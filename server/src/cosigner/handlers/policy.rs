@@ -7,11 +7,11 @@ use crate::auth::message::{
 use crate::crypto_ops;
 use crate::policy::ProtectedPolicy;
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{
     auth_check, calculate_spent_amount, ensure_policy_loaded, persist_policy, timestamp_check,
@@ -19,10 +19,10 @@ use super::helpers::{
 
 #[tracing::instrument(skip_all, name = "actor::create_spending_policy", err)]
 pub fn create_spending_policy(
-    _user: &mut UserInstance,
-    _state: &mut UserState,
+    _user: &mut CosignerInstance,
+    _state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     _req: CreateSpendingPolicyRequest,
 ) -> Result<CreateSpendingPolicyResponse, Status> {
     Err(Status::unimplemented(
@@ -32,10 +32,10 @@ pub fn create_spending_policy(
 
 #[tracing::instrument(skip_all, name = "actor::get_policy_id", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_policy_id(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: GetPolicyIdRequest,
 ) -> Result<GetPolicyIdResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -76,10 +76,10 @@ pub fn get_policy_id(
 
 #[tracing::instrument(skip_all, name = "actor::update_policy", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn update_policy(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     req: UpdatePolicyRequest,
 ) -> Result<UpdatePolicyResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -147,10 +147,10 @@ pub fn update_policy(
 
 #[tracing::instrument(skip_all, name = "actor::delete_policy", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn delete_policy(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     req: DeletePolicyRequest,
 ) -> Result<DeletePolicyResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);

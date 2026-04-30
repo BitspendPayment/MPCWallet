@@ -9,7 +9,7 @@ use crate::wallet_proto::*;
 /// Reply channel for an actor command.
 pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
-pub enum UserCommand {
+pub enum CosignerCommand {
     // --- DKG ---
     DkgStep1 { req: DkgStep1Request, reply: Reply<DkgStep1Response> },
     DkgStep2 { req: DkgStep2Request, reply: Reply<DkgStep2Response> },

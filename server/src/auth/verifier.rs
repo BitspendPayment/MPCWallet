@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::Status;
 
 use super::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::wasm::CosignerInstance;
 
 /// Server-side authentication verifier.
 /// Mirrors `AuthVerifier` from `server/lib/auth_verifier.dart`.
@@ -28,7 +28,7 @@ impl AuthVerifier {
     /// The signature is verified via the WASM instance's verify_schnorr_signature function.
     pub fn verify_auth(
         &self,
-        user: &mut UserInstance,
+        user: &mut CosignerInstance,
         public_key_compressed_hex: &str,
         signature_hex: &str,
         operation: &str,

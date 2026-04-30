@@ -8,11 +8,11 @@ use crate::auth::message::{OP_REFRESH_STEP1, OP_REFRESH_STEP2, OP_REFRESH_STEP3}
 use crate::crypto_ops;
 use crate::policy::ProtectedPolicy;
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{auth_check, ensure_policy_loaded, persist_policy};
 
@@ -26,10 +26,10 @@ fn random_base64(bytes: usize) -> String {
 
 #[tracing::instrument(skip_all, name = "actor::refresh_step1", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn refresh_step1(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: RefreshStep1Request,
 ) -> Result<RefreshStep1Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -178,10 +178,10 @@ pub fn refresh_step1(
 
 #[tracing::instrument(skip_all, name = "actor::refresh_step2", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn refresh_step2(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: RefreshStep2Request,
 ) -> Result<RefreshStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -246,10 +246,10 @@ pub fn refresh_step2(
 
 #[tracing::instrument(skip_all, name = "actor::refresh_step3", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn refresh_step3(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     req: RefreshStep3Request,
 ) -> Result<RefreshStep3Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);

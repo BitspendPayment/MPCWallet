@@ -1,5 +1,5 @@
 //! 3-participant FROST DKG. Callers whose round isn't yet complete have their
-//! reply oneshot stashed in `UserState.pending_dkg_*`; the participant whose
+//! reply oneshot stashed in `CosignerState.pending_dkg_*`; the participant whose
 //! arrival completes the round fulfils every stashed sender.
 
 use std::collections::HashMap;
@@ -11,11 +11,11 @@ use tonic::Status;
 use crate::crypto_ops;
 use crate::policy::{NormalPolicy, PolicyState};
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::persist_policy;
 
@@ -28,10 +28,10 @@ const THRESHOLD_COUNT: u32 = 2;
 
 #[tracing::instrument(skip_all, name = "actor::dkg_step1", fields(user_id = %parsers::user_id_hex(&req.user_id)))]
 pub fn dkg_step1(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: DkgStep1Request,
     reply: oneshot::Sender<Result<DkgStep1Response, Status>>,
 ) {
@@ -92,7 +92,7 @@ pub fn dkg_step1(
 }
 
 fn step1_register(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     user_id_hex: &str,
     identifier_hex: &str,
     req: &DkgStep1Request,
@@ -137,7 +137,7 @@ fn step1_register(
 }
 
 fn step1_server_init(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     shared: &SharedServices,
     user_id_hex: &str,
     is_restore: bool,
@@ -197,7 +197,7 @@ fn step1_server_init(
 }
 
 fn step1_build_response(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     dkg_h: wasmtime::component::ResourceAny,
 ) -> Result<DkgStep1Response, Status> {
     let round1_json = crypto_ops::dkg_session_get_round1_packages_json(user, dkg_h)
@@ -218,10 +218,10 @@ fn step1_build_response(
 
 #[tracing::instrument(skip_all, name = "actor::dkg_step2", fields(user_id = %parsers::user_id_hex(&req.user_id)))]
 pub fn dkg_step2(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: DkgStep2Request,
     reply: oneshot::Sender<Result<DkgStep2Response, Status>>,
 ) {
@@ -273,7 +273,7 @@ pub fn dkg_step2(
 }
 
 fn step2_compute(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     dkg_h: wasmtime::component::ResourceAny,
     user_id_hex: &str,
 ) -> Result<(), Status> {
@@ -316,7 +316,7 @@ fn step2_compute(
 }
 
 fn step2_build_response(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     dkg_h: wasmtime::component::ResourceAny,
 ) -> Result<DkgStep2Response, Status> {
     let round1_json = crypto_ops::dkg_session_get_round1_packages_json(user, dkg_h)
@@ -337,10 +337,10 @@ fn step2_build_response(
 
 #[tracing::instrument(skip_all, name = "actor::dkg_step3", fields(user_id = %parsers::user_id_hex(&req.user_id)))]
 pub fn dkg_step3(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     req: DkgStep3Request,
     reply: oneshot::Sender<Result<DkgStep3Response, Status>>,
 ) {
@@ -426,7 +426,7 @@ pub fn dkg_step3(
 }
 
 fn step3_register(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     req: &DkgStep3Request,
     sender_identifier_hex: &str,
 ) -> Result<String, Status> {
@@ -469,9 +469,9 @@ fn step3_register(
 }
 
 fn step3_finalize_server_key(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     user_id_hex: &str,
 ) -> Result<(), Status> {
     tracing::info!("[{user_id_hex}] DKGStep3: Server computing KeyPackage");
@@ -623,7 +623,7 @@ fn step3_finalize_server_key(
 }
 
 fn step3_build_response(
-    user: &mut UserInstance,
+    user: &mut CosignerInstance,
     dkg_h: wasmtime::component::ResourceAny,
     sender_identifier_hex: &str,
 ) -> Result<DkgStep3Response, Status> {

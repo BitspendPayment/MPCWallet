@@ -10,21 +10,21 @@ use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
 use crate::shared::SharedServices;
-use crate::wasm_manager::{ThresholdWorld, UserInstance, UserWasiView};
+use crate::cosigner::wasm::{ThresholdWorld, CosignerInstance, CosignerWasiView};
 
 use super::actor::run_actor;
-use super::command::UserCommand;
-use super::handle::{OwnedHandle, UserHandle};
-use super::state::UserState;
+use super::command::CosignerCommand;
+use super::handle::{OwnedHandle, CosignerHandle};
+use super::state::CosignerState;
 
 /// Per-actor mailbox depth. Sized for normal request bursts plus a margin for
 /// stream fan-in (VTXO updates, indexer events).
 const MAILBOX_CAPACITY: usize = 256;
 
-pub struct UserRegistry {
+pub struct CosignerRegistry {
     engine: Engine,
     component: Component,
-    linker: Linker<UserWasiView>,
+    linker: Linker<CosignerWasiView>,
     shared: Arc<SharedServices>,
     /// Active actors keyed by user_id_hex.
     actors: DashMap<String, OwnedHandle>,
@@ -37,7 +37,7 @@ pub struct UserRegistry {
     script_idx: DashMap<String, String>,
 }
 
-impl UserRegistry {
+impl CosignerRegistry {
     pub fn new(
         wasm_path: &str,
         shared: Arc<SharedServices>,
@@ -66,20 +66,20 @@ impl UserRegistry {
 
     /// Get the existing actor handle for `user_id`, or spawn a new one.
     /// Cheap fast path when the actor already exists (DashMap read).
-    pub fn get_or_spawn(self: &Arc<Self>, user_id: &str) -> Result<UserHandle, Status> {
+    pub fn get_or_spawn(self: &Arc<Self>, user_id: &str) -> Result<CosignerHandle, Status> {
         if let Some(entry) = self.actors.get(user_id) {
             return Ok(entry.handle.clone());
         }
         // Slow path: instantiate WASM and spawn the actor task.
-        let (tx, rx) = mpsc::channel::<UserCommand>(MAILBOX_CAPACITY);
+        let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
         let user = self
             .new_user_instance()
             .map_err(|e| Status::internal(format!("WASM init error: {e}")))?;
-        let state = UserState::new();
+        let state = CosignerState::new();
         let shared = self.shared.clone();
         let registry = self.clone();
         let join = tokio::spawn(run_actor(user, state, rx, shared, registry));
-        let handle = UserHandle::new(tx);
+        let handle = CosignerHandle::new(tx);
         let owned = OwnedHandle {
             handle: handle.clone(),
             join,
@@ -100,17 +100,17 @@ impl UserRegistry {
         }
     }
 
-    /// Build a fresh `UserInstance` from the cached engine/component/linker.
-    fn new_user_instance(&self) -> Result<UserInstance, Box<dyn std::error::Error>> {
+    /// Build a fresh `CosignerInstance` from the cached engine/component/linker.
+    fn new_user_instance(&self) -> Result<CosignerInstance, Box<dyn std::error::Error>> {
         use wasmtime::Store;
         use wasmtime_wasi::{ResourceTable, WasiCtxBuilder};
         let wasi_ctx = WasiCtxBuilder::new().inherit_stdio().build();
-        let view = UserWasiView::new(ResourceTable::new(), wasi_ctx);
+        let view = CosignerWasiView::new(ResourceTable::new(), wasi_ctx);
         let mut store = Store::new(&self.engine, view);
         let bindings = ThresholdWorld::instantiate(&mut store, &self.component, &self.linker)?;
         let iface = bindings.component_threshold_types();
         let session = iface.threshold_session().call_constructor(&mut store)?;
-        Ok(UserInstance {
+        Ok(CosignerInstance {
             store,
             bindings,
             session: Some(session),
@@ -120,9 +120,6 @@ impl UserRegistry {
             dkg_session: None,
             signing_session: None,
             refresh_session: None,
-            dkg_sync: None,
-            signing_sync: None,
-            refresh_sync: None,
             script_path_spend: false,
             policy_state: None,
             utxo_state: None,
@@ -133,7 +130,7 @@ impl UserRegistry {
     /// `make_cmd` receives the reply oneshot sender and returns the command to send.
     pub async fn dispatch<T, F>(self: &Arc<Self>, user_id: &str, make_cmd: F) -> Result<T, Status>
     where
-        F: FnOnce(oneshot::Sender<Result<T, Status>>) -> UserCommand,
+        F: FnOnce(oneshot::Sender<Result<T, Status>>) -> CosignerCommand,
     {
         let handle = self.get_or_spawn(user_id)?;
         let (reply_tx, reply_rx) = oneshot::channel();

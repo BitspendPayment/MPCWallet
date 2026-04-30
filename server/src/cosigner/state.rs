@@ -6,9 +6,9 @@ use tokio::sync::oneshot;
 use tonic::Status;
 
 use crate::wallet_proto::*;
-use crate::user::types::ArkTxEntry;
+use crate::cosigner::types::ArkTxEntry;
 
-pub struct UserState {
+pub struct CosignerState {
     /// Schnorr-auth replay cache. Bounded LRU; keyed by `timestamp_ms` since
     /// the auth verifier already binds the signature to (timestamp, op, user).
     pub used_nonces: HashSet<i64>,
@@ -41,7 +41,7 @@ pub struct UserState {
     pub pending_refresh_step3: Vec<oneshot::Sender<Result<RefreshStep3Response, Status>>>,
 }
 
-impl UserState {
+impl CosignerState {
     pub fn new() -> Self {
         Self {
             used_nonces: HashSet::new(),
@@ -73,7 +73,7 @@ impl UserState {
     }
 }
 
-impl Default for UserState {
+impl Default for CosignerState {
     fn default() -> Self {
         Self::new()
     }

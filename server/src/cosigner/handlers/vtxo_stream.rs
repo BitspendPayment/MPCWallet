@@ -4,10 +4,10 @@
 use tonic::Status;
 
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
-use crate::user::types::ArkTxEntry;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
+use crate::cosigner::types::ArkTxEntry;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{
     get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos,
@@ -42,8 +42,8 @@ fn resolve_exit_delay(
 /// persists, and appends a "receive" history entry when no active settle/send
 /// session is in flight.
 pub fn apply_stream_update(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
     user_id_hex: &str,
     spent: Vec<ark::client::proto::Vtxo>,

@@ -6,11 +6,11 @@ use crate::auth::message::{OP_SIGN_STEP1, OP_SIGN_STEP2};
 use crate::crypto_ops;
 use crate::policy::SpendingEntry;
 use crate::shared::SharedServices;
-use crate::user::registry::UserRegistry;
-use crate::user::state::UserState;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
-use crate::user::handlers::parsers;
-use crate::wasm_manager::UserInstance;
+use crate::cosigner::handlers::parsers;
+use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{
     auth_check, calculate_spent_amount, ensure_policy_loaded, persist_policy,
@@ -20,10 +20,10 @@ const THRESHOLD_COUNT: u32 = 2;
 
 #[tracing::instrument(skip_all, name = "actor::sign_step1", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn sign_step1(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &UserRegistry,
+    _registry: &CosignerRegistry,
     req: SignStep1Request,
 ) -> Result<SignStep1Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -222,10 +222,10 @@ pub fn sign_step1(
 
 #[tracing::instrument(skip_all, name = "actor::sign_step2", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn sign_step2(
-    user: &mut UserInstance,
-    state: &mut UserState,
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &UserRegistry,
+    registry: &CosignerRegistry,
     req: SignStep2Request,
 ) -> Result<SignStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);

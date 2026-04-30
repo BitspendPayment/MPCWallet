@@ -10,8 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use server::shared::SharedServices;
-use server::user::registry::UserRegistry;
-use server::user::UserCommand;
+use server::cosigner::registry::CosignerRegistry;
+use server::cosigner::CosignerCommand;
 use server::wallet_proto;
 
 fn wasm_path() -> PathBuf {
@@ -54,7 +54,7 @@ async fn two_users_dispatch_concurrently_without_cross_talk() {
     }
 
     let shared = build_shared();
-    let registry = UserRegistry::new(path.to_str().unwrap(), shared).expect("registry");
+    let registry = CosignerRegistry::new(path.to_str().unwrap(), shared).expect("registry");
 
     let user_a = "a".repeat(66);
     let user_b = "b".repeat(66);
@@ -62,8 +62,8 @@ async fn two_users_dispatch_concurrently_without_cross_talk() {
     // CreateSpendingPolicy is implemented as `Status::unimplemented(...)` —
     // it's a fast path that exercises the full actor pipeline (mailbox →
     // spawn_blocking → reply oneshot) without needing policy state setup.
-    let dispatch_one = |reg: Arc<UserRegistry>, user_id: String| async move {
-        reg.dispatch(&user_id, |reply| UserCommand::CreateSpendingPolicy {
+    let dispatch_one = |reg: Arc<CosignerRegistry>, user_id: String| async move {
+        reg.dispatch(&user_id, |reply| CosignerCommand::CreateSpendingPolicy {
             req: wallet_proto::CreateSpendingPolicyRequest {
                 user_id: hex::decode(&user_id).unwrap_or_default(),
                 threshold_sats: 0,
@@ -101,7 +101,7 @@ async fn two_users_dispatch_concurrently_without_cross_talk() {
     );
 
     // Sanity: two concurrent dispatches against fresh actors should complete
-    // well under a second (instantiating two `UserInstance`s + two mailbox
+    // well under a second (instantiating two `CosignerInstance`s + two mailbox
     // round-trips on commodity hardware is ~100ms territory).
     assert!(
         elapsed < Duration::from_secs(5),

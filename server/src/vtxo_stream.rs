@@ -1,16 +1,16 @@
 //! Global ASP transaction-stream task. One connection to arkd's
 //! `GetTransactionsStream` for the whole server; events get fanned out to the
 //! per-user actor via `registry.user_for_script()` lookup +
-//! `UserCommand::VtxoStreamUpdate`.
+//! `CosignerCommand::VtxoStreamUpdate`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::shared::SharedServices;
-use crate::user::command::UserCommand;
-use crate::user::registry::UserRegistry;
+use crate::cosigner::command::CosignerCommand;
+use crate::cosigner::registry::CosignerRegistry;
 
-pub async fn run_vtxo_stream(registry: Arc<UserRegistry>, shared: Arc<SharedServices>) {
+pub async fn run_vtxo_stream(registry: Arc<CosignerRegistry>, shared: Arc<SharedServices>) {
     if shared.asp_client.is_none() {
         tracing::info!("VTXO stream: ASP not configured, task exiting");
         return;
@@ -27,7 +27,7 @@ pub async fn run_vtxo_stream(registry: Arc<UserRegistry>, shared: Arc<SharedServ
 }
 
 async fn connect_and_stream(
-    registry: &Arc<UserRegistry>,
+    registry: &Arc<CosignerRegistry>,
     shared: &Arc<SharedServices>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let asp_url = std::env::var("ASP_URL").map_err(|_| "ASP_URL env var not set")?;
@@ -52,7 +52,7 @@ async fn connect_and_stream(
 }
 
 async fn process_notification(
-    registry: &Arc<UserRegistry>,
+    registry: &Arc<CosignerRegistry>,
     shared: &Arc<SharedServices>,
     notif: &ark::client::proto::TxNotification,
 ) {
@@ -99,7 +99,7 @@ async fn process_notification(
                 continue;
             }
         };
-        let cmd = UserCommand::VtxoStreamUpdate {
+        let cmd = CosignerCommand::VtxoStreamUpdate {
             user_id_hex: user_id_hex.clone(),
             spent,
             spendable,
