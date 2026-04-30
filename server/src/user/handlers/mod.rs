@@ -1,0 +1,18 @@
+//! Per-RPC handler functions invoked by the user actor.
+//!
+//! Each handler takes `&mut UserInstance + &mut UserState + &SharedServices +
+//! &UserRegistry + request`, runs synchronously inside `spawn_blocking`, and
+//! returns `Result<Response, Status>`. Async I/O (ASP gRPC, persistence in
+//! some backends) goes via `tokio::runtime::Handle::block_on` from inside the
+//! blocking task, which is the safe pattern for tokio's blocking pool.
+
+pub mod ark;
+pub mod ark_send;
+pub mod dkg;
+pub mod helpers;
+pub mod parsers;
+pub mod policy;
+pub mod refresh;
+pub mod sign;
+pub mod tx;
+pub mod vtxo_stream;

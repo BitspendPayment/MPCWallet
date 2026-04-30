@@ -21,6 +21,12 @@ pub struct UserWasiView {
     ctx: WasiCtx,
 }
 
+impl UserWasiView {
+    pub fn new(table: ResourceTable, ctx: WasiCtx) -> Self {
+        Self { table, ctx }
+    }
+}
+
 impl WasiView for UserWasiView {
     fn table(&mut self) -> &mut ResourceTable {
         &mut self.table
@@ -92,15 +98,19 @@ pub struct UserInstance {
     pub utxo_state: Option<UtxoState>,
 }
 
-/// Manages per-user WASM instances with Wasmtime.
-pub struct WasmManager {
+/// Registry of per-user WASM instances backed by Wasmtime.
+///
+/// Today this is a `HashMap` behind a global `Mutex`; the migration plan replaces
+/// the map with a concurrent structure and per-user actors. The public surface
+/// (`new`, `get_or_create_user`, `iter_users`) stays stable across that work.
+pub struct UserRegistry {
     engine: Engine,
     component: Component,
     linker: Linker<UserWasiView>,
     users: HashMap<String, UserInstance>,
 }
 
-impl WasmManager {
+impl UserRegistry {
     pub fn new(wasm_path: &str) -> Result<Arc<Mutex<Self>>, Box<dyn std::error::Error>> {
         let mut config = Config::new();
         config.wasm_component_model(true);

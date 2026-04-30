@@ -1,72 +1,66 @@
-//! REST/JSON API layer over the existing WalletService.
-//!
-//! Each route is a thin wrapper that:
-//! 1. Extracts JSON fields from the request body
-//! 2. Constructs the protobuf request type
-//! 3. Calls the corresponding WalletService method via the MpcWallet trait
-//! 4. Converts the response to JSON
-//!
-//! Byte fields are hex-encoded strings in JSON.
+//! REST/JSON API: extracts `user_id` from the URL path, builds a `UserCommand`,
+//! and dispatches via the per-user actor through `UserRegistry`.
 
 use std::sync::Arc;
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tonic::Status;
 
-use crate::wallet_proto::mpc_wallet_server::MpcWallet;
-use crate::wallet_service::WalletService;
+use crate::user::command::UserCommand;
+use crate::user::registry::UserRegistry;
+use crate::wallet_proto::{self};
 
-type AppState = Arc<WalletService>;
+type AppState = Arc<UserRegistry>;
 
-/// Build the axum router with all REST endpoints.
-pub fn routes(service: AppState) -> Router {
+/// Build the axum router. All authenticated routes are nested under
+/// `/u/{user_id}/...` so the dispatcher can route directly to the actor.
+pub fn routes(registry: AppState) -> Router {
     Router::new()
-        // Health
         .route("/health", get(health))
         // DKG
-        .route("/dkg/step1", post(dkg_step1))
-        .route("/dkg/step2", post(dkg_step2))
-        .route("/dkg/step3", post(dkg_step3))
+        .route("/u/{user_id}/dkg/step1", post(dkg_step1))
+        .route("/u/{user_id}/dkg/step2", post(dkg_step2))
+        .route("/u/{user_id}/dkg/step3", post(dkg_step3))
         // Signing
-        .route("/sign/step1", post(sign_step1))
-        .route("/sign/step2", post(sign_step2))
+        .route("/u/{user_id}/sign/step1", post(sign_step1))
+        .route("/u/{user_id}/sign/step2", post(sign_step2))
         // Refresh
-        .route("/refresh/step1", post(refresh_step1))
-        .route("/refresh/step2", post(refresh_step2))
-        .route("/refresh/step3", post(refresh_step3))
+        .route("/u/{user_id}/refresh/step1", post(refresh_step1))
+        .route("/u/{user_id}/refresh/step2", post(refresh_step2))
+        .route("/u/{user_id}/refresh/step3", post(refresh_step3))
         // Policy
-        .route("/policy/create", post(create_spending_policy))
-        .route("/policy/get-id", post(get_policy_id))
-        .route("/policy/update", post(update_policy))
-        .route("/policy/delete", post(delete_policy))
+        .route("/u/{user_id}/policy/create", post(create_spending_policy))
+        .route("/u/{user_id}/policy/get-id", post(get_policy_id))
+        .route("/u/{user_id}/policy/update", post(update_policy))
+        .route("/u/{user_id}/policy/delete", post(delete_policy))
         // Transactions
-        .route("/tx/broadcast", post(broadcast_transaction))
-        .route("/tx/history", post(fetch_history))
-        .route("/tx/recent", post(fetch_recent_transactions))
+        .route("/u/{user_id}/tx/broadcast", post(broadcast_transaction))
+        .route("/u/{user_id}/tx/history", post(fetch_history))
+        .route("/u/{user_id}/tx/recent", post(fetch_recent_transactions))
         // Ark
-        .route("/ark/info", post(get_ark_info))
-        .route("/ark/address", post(get_ark_address))
-        .route("/ark/boarding-address", post(get_boarding_address))
-        .route("/ark/boarding-balance", post(check_boarding_balance))
-        .route("/ark/vtxos", post(list_vtxos))
-        .route("/ark/transactions", post(list_ark_transactions))
-        .route("/ark/send", post(send_vtxo))
-        .route("/ark/redeem", post(redeem_vtxo))
-        .route("/ark/settle", post(settle))
-        .route("/ark/settle-delegate", post(settle_delegate))
-        .route("/ark/submit-send", post(submit_ark_send))
-        .with_state(service)
+        .route("/u/{user_id}/ark/info", post(get_ark_info))
+        .route("/u/{user_id}/ark/address", post(get_ark_address))
+        .route("/u/{user_id}/ark/boarding-address", post(get_boarding_address))
+        .route("/u/{user_id}/ark/boarding-balance", post(check_boarding_balance))
+        .route("/u/{user_id}/ark/vtxos", post(list_vtxos))
+        .route("/u/{user_id}/ark/transactions", post(list_ark_transactions))
+        .route("/u/{user_id}/ark/send", post(send_vtxo))
+        .route("/u/{user_id}/ark/redeem", post(redeem_vtxo))
+        .route("/u/{user_id}/ark/settle", post(settle))
+        .route("/u/{user_id}/ark/settle-delegate", post(settle_delegate))
+        .route("/u/{user_id}/ark/submit-send", post(submit_ark_send))
+        .with_state(registry)
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Field extractors
 // ---------------------------------------------------------------------------
 
-/// Convert a hex string to bytes. Returns empty vec if field is missing/empty.
 fn hex_field(v: &Value, key: &str) -> Vec<u8> {
     v.get(key)
         .and_then(|s| s.as_str())
@@ -74,7 +68,6 @@ fn hex_field(v: &Value, key: &str) -> Vec<u8> {
         .unwrap_or_default()
 }
 
-/// Get a string field, defaulting to empty string.
 fn str_field(v: &Value, key: &str) -> String {
     v.get(key)
         .and_then(|s| s.as_str())
@@ -82,22 +75,18 @@ fn str_field(v: &Value, key: &str) -> String {
         .to_string()
 }
 
-/// Get an i64 field.
 fn i64_field(v: &Value, key: &str) -> i64 {
     v.get(key).and_then(|n| n.as_i64()).unwrap_or(0)
 }
 
-/// Get a u64 field.
 fn u64_field(v: &Value, key: &str) -> u64 {
     v.get(key).and_then(|n| n.as_u64()).unwrap_or(0)
 }
 
-/// Get a bool field.
 fn bool_field(v: &Value, key: &str) -> bool {
     v.get(key).and_then(|b| b.as_bool()).unwrap_or(false)
 }
 
-/// Get a map<string,string> field.
 fn map_field(v: &Value, key: &str) -> std::collections::HashMap<String, String> {
     v.get(key)
         .and_then(|m| m.as_object())
@@ -109,7 +98,6 @@ fn map_field(v: &Value, key: &str) -> std::collections::HashMap<String, String> 
         .unwrap_or_default()
 }
 
-/// Get a repeated hex-encoded bytes field.
 fn hex_array_field(v: &Value, key: &str) -> Vec<Vec<u8>> {
     v.get(key)
         .and_then(|a| a.as_array())
@@ -121,7 +109,6 @@ fn hex_array_field(v: &Value, key: &str) -> Vec<Vec<u8>> {
         .unwrap_or_default()
 }
 
-/// Get a repeated string field.
 fn str_array_field(v: &Value, key: &str) -> Vec<String> {
     v.get(key)
         .and_then(|a| a.as_array())
@@ -133,13 +120,15 @@ fn str_array_field(v: &Value, key: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Convert bytes to hex for JSON response.
 fn to_hex(bytes: &[u8]) -> String {
     hex::encode(bytes)
 }
 
-/// Convert a tonic Status error to an axum JSON error response.
-fn status_to_response(status: tonic::Status) -> (StatusCode, Json<Value>) {
+fn user_id_bytes(path: &str) -> Vec<u8> {
+    hex::decode(path).unwrap_or_default()
+}
+
+fn status_to_response(status: Status) -> (StatusCode, Json<Value>) {
     let http_code = match status.code() {
         tonic::Code::NotFound => StatusCode::NOT_FOUND,
         tonic::Code::InvalidArgument => StatusCode::BAD_REQUEST,
@@ -157,11 +146,15 @@ fn status_to_response(status: tonic::Status) -> (StatusCode, Json<Value>) {
     )
 }
 
-/// Wrap a tonic gRPC call: build request, call service, return JSON.
-macro_rules! rpc_handler {
-    ($service:expr, $method:ident, $req:expr) => {{
-        match $service.$method(tonic::Request::new($req)).await {
-            Ok(resp) => Ok(Json(serde_json::to_value(resp.into_inner()).unwrap_or(json!({})))),
+/// Dispatch a command and serialize the response with `serde`.
+macro_rules! dispatch_json {
+    ($reg:ident, $user_id:ident, $variant:ident, $req:expr) => {{
+        let req = $req;
+        match $reg
+            .dispatch(&$user_id, move |reply| UserCommand::$variant { req, reply })
+            .await
+        {
+            Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
             Err(status) => Err(status_to_response(status)),
         }
     }};
@@ -171,7 +164,6 @@ macro_rules! rpc_handler {
 // Health
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::health")]
 async fn health() -> impl IntoResponse {
     Json(json!({"status": "ok"}))
 }
@@ -180,59 +172,58 @@ async fn health() -> impl IntoResponse {
 // DKG
 // ---------------------------------------------------------------------------
 
-use crate::wallet_proto;
-
-#[tracing::instrument(skip_all, name = "rest::dkg_step1")]
+#[tracing::instrument(skip_all, name = "rest::dkg_step1", fields(user_id = %user_id))]
 async fn dkg_step1(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::DkgStep1Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, DkgStep1, wallet_proto::DkgStep1Request {
+        user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
         is_restore: bool_field(&body, "is_restore"),
-    };
-    rpc_handler!(svc, dkg_step1, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::dkg_step2")]
+#[tracing::instrument(skip_all, name = "rest::dkg_step2", fields(user_id = %user_id))]
 async fn dkg_step2(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::DkgStep2Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, DkgStep2, wallet_proto::DkgStep2Request {
+        user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
-    };
-    rpc_handler!(svc, dkg_step2, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::dkg_step3")]
+#[tracing::instrument(skip_all, name = "rest::dkg_step3", fields(user_id = %user_id))]
 async fn dkg_step3(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::DkgStep3Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, DkgStep3, wallet_proto::DkgStep3Request {
+        user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
-    };
-    rpc_handler!(svc, dkg_step3, req)
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Signing
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::sign_step1")]
+#[tracing::instrument(skip_all, name = "rest::sign_step1", fields(user_id = %user_id))]
 async fn sign_step1(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let req = wallet_proto::SignStep1Request {
-        user_id: hex_field(&body, "user_id"),
+        user_id: user_id_bytes(&user_id),
         hiding_commitment: hex_field(&body, "hiding_commitment"),
         binding_commitment: hex_field(&body, "binding_commitment"),
         message_to_sign: hex_field(&body, "message_to_sign"),
@@ -241,10 +232,11 @@ async fn sign_step1(
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         script_path_spend: bool_field(&body, "script_path_spend"),
     };
-    // Custom response: commitments map has nested bytes → hex
-    match svc.sign_step1(tonic::Request::new(req)).await {
-        Ok(resp) => {
-            let r = resp.into_inner();
+    match reg
+        .dispatch(&user_id, move |reply| UserCommand::SignStep1 { req, reply })
+        .await
+    {
+        Ok(r) => {
             let comms: Value = r
                 .commitments
                 .iter()
@@ -266,25 +258,26 @@ async fn sign_step1(
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::sign_step2")]
+#[tracing::instrument(skip_all, name = "rest::sign_step2", fields(user_id = %user_id))]
 async fn sign_step2(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let req = wallet_proto::SignStep2Request {
-        user_id: hex_field(&body, "user_id"),
+        user_id: user_id_bytes(&user_id),
         signature_share: hex_field(&body, "signature_share"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
-    match svc.sign_step2(tonic::Request::new(req)).await {
-        Ok(resp) => {
-            let r = resp.into_inner();
-            Ok(Json(json!({
-                "r_point": to_hex(&r.r_point),
-                "z_scalar": to_hex(&r.z_scalar),
-            })))
-        }
+    match reg
+        .dispatch(&user_id, move |reply| UserCommand::SignStep2 { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({
+            "r_point": to_hex(&r.r_point),
+            "z_scalar": to_hex(&r.z_scalar),
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }
@@ -293,348 +286,351 @@ async fn sign_step2(
 // Refresh
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::refresh_step1")]
+#[tracing::instrument(skip_all, name = "rest::refresh_step1", fields(user_id = %user_id))]
 async fn refresh_step1(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::RefreshStep1Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, RefreshStep1, wallet_proto::RefreshStep1Request {
+        user_id: user_id_bytes(&user_id),
         round1_package: str_field(&body, "round1_package"),
         threshold_amount: i64_field(&body, "threshold_amount"),
         interval: i64_field(&body, "interval"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, refresh_step1, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::refresh_step2")]
+#[tracing::instrument(skip_all, name = "rest::refresh_step2", fields(user_id = %user_id))]
 async fn refresh_step2(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::RefreshStep2Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, RefreshStep2, wallet_proto::RefreshStep2Request {
+        user_id: user_id_bytes(&user_id),
         round1_package: str_field(&body, "round1_package"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, refresh_step2, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::refresh_step3")]
+#[tracing::instrument(skip_all, name = "rest::refresh_step3", fields(user_id = %user_id))]
 async fn refresh_step3(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::RefreshStep3Request {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, RefreshStep3, wallet_proto::RefreshStep3Request {
+        user_id: user_id_bytes(&user_id),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, refresh_step3, req)
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Policy
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::create_spending_policy")]
+#[tracing::instrument(skip_all, name = "rest::create_spending_policy", fields(user_id = %user_id))]
 async fn create_spending_policy(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::CreateSpendingPolicyRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, CreateSpendingPolicy, wallet_proto::CreateSpendingPolicyRequest {
+        user_id: user_id_bytes(&user_id),
         threshold_sats: i64_field(&body, "threshold_sats"),
         start_time: i64_field(&body, "start_time"),
         interval_seconds: i64_field(&body, "interval_seconds"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, create_spending_policy, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::get_policy_id")]
+#[tracing::instrument(skip_all, name = "rest::get_policy_id", fields(user_id = %user_id))]
 async fn get_policy_id(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::GetPolicyIdRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, GetPolicyId, wallet_proto::GetPolicyIdRequest {
+        user_id: user_id_bytes(&user_id),
         tx_message: hex_field(&body, "tx_message"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, get_policy_id, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::update_policy")]
+#[tracing::instrument(skip_all, name = "rest::update_policy", fields(user_id = %user_id))]
 async fn update_policy(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::UpdatePolicyRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, UpdatePolicy, wallet_proto::UpdatePolicyRequest {
+        user_id: user_id_bytes(&user_id),
         policy_id: str_field(&body, "policy_id"),
         threshold_sats: i64_field(&body, "threshold_sats"),
         interval_seconds: i64_field(&body, "interval_seconds"),
         frost_signature_r: hex_field(&body, "frost_signature_r"),
         frost_signature_z: hex_field(&body, "frost_signature_z"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, update_policy, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::delete_policy")]
+#[tracing::instrument(skip_all, name = "rest::delete_policy", fields(user_id = %user_id))]
 async fn delete_policy(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::DeletePolicyRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, DeletePolicy, wallet_proto::DeletePolicyRequest {
+        user_id: user_id_bytes(&user_id),
         policy_id: str_field(&body, "policy_id"),
         frost_signature_r: hex_field(&body, "frost_signature_r"),
         frost_signature_z: hex_field(&body, "frost_signature_z"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, delete_policy, req)
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Transactions
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::broadcast_transaction")]
+#[tracing::instrument(skip_all, name = "rest::broadcast_transaction", fields(user_id = %user_id))]
 async fn broadcast_transaction(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::BroadcastTransactionRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, BroadcastTransaction, wallet_proto::BroadcastTransactionRequest {
+        user_id: user_id_bytes(&user_id),
         tx_hex: str_field(&body, "tx_hex"),
-    };
-    rpc_handler!(svc, broadcast_transaction, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::fetch_history")]
+#[tracing::instrument(skip_all, name = "rest::fetch_history", fields(user_id = %user_id))]
 async fn fetch_history(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::FetchHistoryRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, FetchHistory, wallet_proto::FetchHistoryRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, fetch_history, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions")]
+#[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions", fields(user_id = %user_id))]
 async fn fetch_recent_transactions(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::FetchRecentTransactionsRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, FetchRecentTransactions, wallet_proto::FetchRecentTransactionsRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, fetch_recent_transactions, req)
+    })
 }
 
 // ---------------------------------------------------------------------------
-// Ark Protocol
+// Ark
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::get_ark_info")]
+#[tracing::instrument(skip_all, name = "rest::get_ark_info", fields(user_id = %user_id))]
 async fn get_ark_info(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::GetArkInfoRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, GetArkInfo, wallet_proto::GetArkInfoRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, get_ark_info, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::get_ark_address")]
+#[tracing::instrument(skip_all, name = "rest::get_ark_address", fields(user_id = %user_id))]
 async fn get_ark_address(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::GetArkAddressRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, GetArkAddress, wallet_proto::GetArkAddressRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, get_ark_address, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::get_boarding_address")]
+#[tracing::instrument(skip_all, name = "rest::get_boarding_address", fields(user_id = %user_id))]
 async fn get_boarding_address(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::GetBoardingAddressRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, GetBoardingAddress, wallet_proto::GetBoardingAddressRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, get_boarding_address, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::check_boarding_balance")]
+#[tracing::instrument(skip_all, name = "rest::check_boarding_balance", fields(user_id = %user_id))]
 async fn check_boarding_balance(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::CheckBoardingBalanceRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, CheckBoardingBalance, wallet_proto::CheckBoardingBalanceRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, check_boarding_balance, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::list_vtxos")]
+#[tracing::instrument(skip_all, name = "rest::list_vtxos", fields(user_id = %user_id))]
 async fn list_vtxos(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ListVtxosRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, ListVtxos, wallet_proto::ListVtxosRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, list_vtxos, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::list_ark_transactions")]
+#[tracing::instrument(skip_all, name = "rest::list_ark_transactions", fields(user_id = %user_id))]
 async fn list_ark_transactions(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ListArkTransactionsRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, ListArkTransactions, wallet_proto::ListArkTransactionsRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, list_ark_transactions, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::send_vtxo")]
+#[tracing::instrument(skip_all, name = "rest::send_vtxo", fields(user_id = %user_id))]
 async fn send_vtxo(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let req = wallet_proto::SendVtxoRequest {
-        user_id: hex_field(&body, "user_id"),
+        user_id: user_id_bytes(&user_id),
         recipient_ark_address: str_field(&body, "recipient_ark_address"),
         amount: u64_field(&body, "amount"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
-    match svc.send_vtxo(tonic::Request::new(req)).await {
-        Ok(resp) => {
-            let r = resp.into_inner();
-            Ok(Json(json!({
-                "status": r.status,
-                "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
-                "script_path_spend": r.script_path_spend,
-                "ark_txid": r.ark_txid,
-                "error_message": r.error_message,
-                "policy_id": r.policy_id,
-            })))
-        }
+    match reg
+        .dispatch(&user_id, move |reply| UserCommand::SendVtxo { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({
+            "status": r.status,
+            "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
+            "script_path_spend": r.script_path_spend,
+            "ark_txid": r.ark_txid,
+            "error_message": r.error_message,
+            "policy_id": r.policy_id,
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::redeem_vtxo")]
+#[tracing::instrument(skip_all, name = "rest::redeem_vtxo", fields(user_id = %user_id))]
 async fn redeem_vtxo(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::RedeemVtxoRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, RedeemVtxo, wallet_proto::RedeemVtxoRequest {
+        user_id: user_id_bytes(&user_id),
         on_chain_address: str_field(&body, "on_chain_address"),
         amount: u64_field(&body, "amount"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    rpc_handler!(svc, redeem_vtxo, req)
+    })
 }
 
-#[tracing::instrument(skip_all, name = "rest::settle")]
+#[tracing::instrument(skip_all, name = "rest::settle", fields(user_id = %user_id))]
 async fn settle(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let req = wallet_proto::SettleRequest {
-        user_id: hex_field(&body, "user_id"),
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
-    match svc.settle(tonic::Request::new(req)).await {
-        Ok(resp) => {
-            let r = resp.into_inner();
-            Ok(Json(json!({
-                "status": r.status,
-                "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
-                "script_path_spend": r.script_path_spend,
-                "commitment_txid": r.commitment_txid,
-                "error_message": r.error_message,
-            })))
-        }
+    match reg
+        .dispatch(&user_id, move |reply| UserCommand::Settle { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({
+            "status": r.status,
+            "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
+            "script_path_spend": r.script_path_spend,
+            "commitment_txid": r.commitment_txid,
+            "error_message": r.error_message,
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::settle_delegate")]
+#[tracing::instrument(skip_all, name = "rest::settle_delegate", fields(user_id = %user_id))]
 async fn settle_delegate(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let req = wallet_proto::SettleDelegateRequest {
-        user_id: hex_field(&body, "user_id"),
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
-    match svc.settle_delegate(tonic::Request::new(req)).await {
-        Ok(resp) => {
-            let r = resp.into_inner();
-            Ok(Json(json!({
-                "status": r.status,
-                "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
-                "script_path_spend": r.script_path_spend,
-                "commitment_txid": r.commitment_txid,
-                "error_message": r.error_message,
-            })))
-        }
+    match reg
+        .dispatch(&user_id, move |reply| UserCommand::SettleDelegate { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({
+            "status": r.status,
+            "messages_to_sign": r.messages_to_sign.iter().map(|m| to_hex(m)).collect::<Vec<_>>(),
+            "script_path_spend": r.script_path_spend,
+            "commitment_txid": r.commitment_txid,
+            "error_message": r.error_message,
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::submit_ark_send")]
+#[tracing::instrument(skip_all, name = "rest::submit_ark_send", fields(user_id = %user_id))]
 async fn submit_ark_send(
-    State(svc): State<AppState>,
+    State(reg): State<AppState>,
+    Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::SubmitArkSendRequest {
-        user_id: hex_field(&body, "user_id"),
+    dispatch_json!(reg, user_id, SubmitArkSend, wallet_proto::SubmitArkSendRequest {
+        user_id: user_id_bytes(&user_id),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_ark_tx_b64: str_field(&body, "signed_ark_tx_b64"),
         signed_checkpoint_txs_b64: str_array_field(&body, "signed_checkpoint_txs_b64"),
         spent_outpoints: str_array_field(&body, "spent_outpoints"),
-    };
-    rpc_handler!(svc, submit_ark_send, req)
+    })
 }

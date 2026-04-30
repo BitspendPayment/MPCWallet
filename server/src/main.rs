@@ -1,23 +1,13 @@
-mod auth;
-mod bitcoin;
-mod config;
-mod crypto_ops;
-mod persistence;
-mod policy;
-mod rest_api;
-mod telemetry;
-mod wallet_service;
-mod wasm_manager;
+// All module logic lives in the library target (`src/lib.rs`). This binary is
+// the thin REST-server entrypoint that wires everything together.
+// `wallet_service.rs` was removed in the actor-model cutover; its logic now
+// lives across `server::user::handlers::*` and `server::vtxo_stream`.
 
 use std::sync::Arc;
 
 use clap::Parser;
-use tonic::transport::Server;
 
-// Client-facing wallet API
-pub mod wallet_proto {
-    tonic::include_proto!("mpc_wallet");
-}
+use server::{bitcoin, config, persistence, rest_api, shared, telemetry, user, vtxo_stream};
 
 #[derive(Parser)]
 #[command(
@@ -30,10 +20,6 @@ struct Args {
     #[arg(long)]
     wasm: Option<String>,
 
-    /// gRPC listen port (legacy, optional). If not set, gRPC is disabled.
-    #[arg(long)]
-    grpc_port: Option<u16>,
-
     /// REST/JSON listen port (HTTP/1.1). Defaults to PORT env var or 7074.
     #[arg(long)]
     port: Option<u16>,
@@ -45,7 +31,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    // Load config from environment
     let cfg = config::ServerConfig::from_environment();
     tracing::info!(
         "Config: bitcoin_rpc={}, electrum={}:{}, network={}",
@@ -55,52 +40,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.bitcoin_network
     );
 
-    // Initialize persistence backend
-    let (persistence, secret_store): (Arc<dyn persistence::KvStore>, Arc<dyn persistence::SecretStore>) =
-        match cfg.persistence_backend.as_str() {
-            #[cfg(feature = "enclave-backend")]
-            "enclave" => {
-                tracing::info!("Persistence: enclave supervisor at {}", cfg.supervisor_url);
-                let store = Arc::new(persistence::EnclaveStore::new(
-                    cfg.supervisor_url.clone(),
-                    cfg.enclave_mgmt_token.clone(),
-                ));
-                (store.clone(), store)
-            }
-            #[cfg(feature = "sled-backend")]
-            _ => {
-                let data_dir = std::path::Path::new(&cfg.data_dir);
-                std::fs::create_dir_all(data_dir)?;
-                tracing::info!("Persistence: Sled at {}", cfg.data_dir);
-                let store = Arc::new(persistence::SledStore::open(data_dir)?);
-                (store.clone(), store)
-            }
-            #[cfg(not(feature = "sled-backend"))]
-            other => {
-                panic!("Unknown persistence backend: {other}");
-            }
-        };
+    // Persistence backend.
+    let (persistence, secret_store): (
+        Arc<dyn persistence::KvStore>,
+        Arc<dyn persistence::SecretStore>,
+    ) = match cfg.persistence_backend.as_str() {
+        #[cfg(feature = "enclave-backend")]
+        "enclave" => {
+            tracing::info!("Persistence: enclave supervisor at {}", cfg.supervisor_url);
+            let store = Arc::new(persistence::EnclaveStore::new(
+                cfg.supervisor_url.clone(),
+                cfg.enclave_mgmt_token.clone(),
+            ));
+            (store.clone(), store)
+        }
+        #[cfg(feature = "sled-backend")]
+        _ => {
+            let data_dir = std::path::Path::new(&cfg.data_dir);
+            std::fs::create_dir_all(data_dir)?;
+            tracing::info!("Persistence: Sled at {}", cfg.data_dir);
+            let store = Arc::new(persistence::SledStore::open(data_dir)?);
+            (store.clone(), store)
+        }
+        #[cfg(not(feature = "sled-backend"))]
+        other => {
+            panic!("Unknown persistence backend: {other}");
+        }
+    };
 
-    // Load WASM component: CLI --wasm > COSIGNER_WASM_PATH env > default
-    let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
-
-    tracing::info!("Loading WASM component from: {}", wasm_source);
-    let manager = wasm_manager::WasmManager::new(&wasm_source)?;
-
-    // Initialize Bitcoin services
+    // Bitcoin services.
     let bitcoin_rpc = Arc::new(bitcoin::BitcoinRpcClient::new(
         &cfg.bitcoin_rpc_url,
         &cfg.bitcoin_rpc_user,
         &cfg.bitcoin_rpc_password,
     ));
 
-    let electrum_client =
-        bitcoin::ElectrumClient::new(&cfg.electrum_url, cfg.electrum_port);
+    let electrum_client = bitcoin::ElectrumClient::new(&cfg.electrum_url, cfg.electrum_port);
     let bitcoin_history = Arc::new(tokio::sync::Mutex::new(
         bitcoin::BitcoinHistoryService::new(electrum_client),
     ));
 
-    // Initialize Electrum connection in background
+    // Initialize Electrum connection in background.
     let bh = bitcoin_history.clone();
     tokio::spawn(async move {
         let service = bh.lock().await;
@@ -109,10 +89,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    // Create auth verifier
-    let auth_verifier = Arc::new(auth::AuthVerifier::new());
-
-    // Connect to ASP (Ark Service Provider) if configured
+    // Optional ASP connection.
     let asp_client = if !cfg.asp_url.is_empty() {
         tracing::info!("Connecting to ASP at {}", cfg.asp_url);
         match ark::client::AspClient::connect(&cfg.asp_url).await {
@@ -130,10 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // Create wallet service
-    let service = std::sync::Arc::new(wallet_service::WalletService::new(
-        manager,
-        auth_verifier,
+    let shared = Arc::new(shared::SharedServices::new(
         persistence,
         secret_store,
         bitcoin_rpc,
@@ -141,37 +115,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asp_client,
     ));
 
-    // Load persisted Ark state and validate ASP key
-    service.load_ark_state().await;
+    // WASM source: CLI > env > config default.
+    let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
+    tracing::info!("Loading WASM component from: {}", wasm_source);
+    let registry = user::registry::UserRegistry::new(&wasm_source, shared.clone())?;
 
-    // Spawn background VTXO stream sync if ASP is configured
-    if service.asp_client.is_some() {
-        let svc = service.clone();
+    // Populate cross-user secondary indices from persistence so restore /
+    // VTXO-stream lookups don't need to wake any actor.
+    if let Err(e) = registry.load_indices_from_persistence() {
+        tracing::warn!("Failed to load registry indices from persistence: {e}");
+    }
+
+    // Spawn the global VTXO stream task if ASP is configured.
+    if shared.asp_client.is_some() {
+        let registry_clone = registry.clone();
+        let shared_clone = shared.clone();
         tokio::spawn(async move {
-            svc.run_vtxo_stream().await;
+            vtxo_stream::run_vtxo_stream(registry_clone, shared_clone).await;
         });
     }
 
-    // Start legacy gRPC server if --grpc-port is set
-    if let Some(grpc_port) = args.grpc_port {
-        let grpc_addr = format!("0.0.0.0:{grpc_port}").parse()?;
-        tracing::info!("gRPC server listening on {grpc_addr}");
-        let grpc_service = service.clone();
-        tokio::spawn(async move {
-            if let Err(e) = Server::builder()
-                .accept_http1(true)
-                .add_service(tonic_web::enable(
-                    wallet_proto::mpc_wallet_server::MpcWalletServer::from_arc(grpc_service),
-                ))
-                .serve(grpc_addr)
-                .await
-            {
-                tracing::error!("gRPC server error: {e}");
-            }
-        });
-    }
-
-    // REST API (primary)
+    // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
         std::env::var("PORT")
             .ok()
@@ -179,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap_or(7074)
     });
     let rest_app = axum::Router::new()
-        .nest("/api", rest_api::routes(service.clone()))
+        .nest("/api", rest_api::routes(registry.clone()))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::cors::CorsLayer::permissive());
     let rest_addr = format!("0.0.0.0:{rest_port}");
@@ -189,7 +153,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await;
 
-    // Flush OTEL batches before process exit.
     telemetry_guard.shutdown();
     serve_result?;
     Ok(())

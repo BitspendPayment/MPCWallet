@@ -824,6 +824,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dashmap"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5041cc499144891f3790297212f32a74fb938e5136a14943f338ef9e0ae276cf"
+dependencies = [
+ "cfg-if",
+ "crossbeam-utils",
+ "hashbrown 0.14.5",
+ "lock_api",
+ "once_cell",
+ "parking_lot_core 0.9.12",
+]
+
+[[package]]
 name = "debugid"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2863,6 +2877,7 @@ dependencies = [
  "base64 0.22.1",
  "bitcoin",
  "clap",
+ "dashmap",
  "hex",
  "opentelemetry",
  "opentelemetry-appender-tracing",
@@ -2876,6 +2891,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sled",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tokio-util",

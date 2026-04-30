@@ -79,7 +79,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep1Response> dKGStep1(DKGStep1Request r) async {
-    final resp = await _post('/api/dkg/step1', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step1', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
@@ -93,7 +93,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep2Response> dKGStep2(DKGStep2Request r) async {
-    final resp = await _post('/api/dkg/step2', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step2', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
@@ -106,7 +106,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep3Response> dKGStep3(DKGStep3Request r) async {
-    final resp = await _post('/api/dkg/step3', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step3', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round2_packages_for_others':
@@ -124,7 +124,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<SignStep1Response> signStep1(SignStep1Request r) async {
-    final resp = await _post('/api/sign/step1', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/sign/step1', {
       'user_id': _hex(r.userId),
       'hiding_commitment': _hex(r.hidingCommitment),
       'binding_commitment': _hex(r.bindingCommitment),
@@ -149,7 +149,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<SignStep2Response> signStep2(SignStep2Request r) async {
-    final resp = await _post('/api/sign/step2', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/sign/step2', {
       'user_id': _hex(r.userId),
       'signature_share': _hex(r.signatureShare),
       'signature': _hex(r.signature),
@@ -166,7 +166,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) async {
-    final resp = await _post('/api/refresh/step1', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step1', {
       'user_id': _hex(r.userId),
       'round1_package': r.round1Package,
       'threshold_amount': r.thresholdAmount.toInt(),
@@ -185,7 +185,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) async {
-    final resp = await _post('/api/refresh/step2', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step2', {
       'user_id': _hex(r.userId),
       'round1_package': r.round1Package,
       'signature': _hex(r.signature),
@@ -199,7 +199,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) async {
-    final resp = await _post('/api/refresh/step3', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step3', {
       'user_id': _hex(r.userId),
       'round2_packages_for_others':
           r.round2PackagesForOthers.map((k, v) => MapEntry(k, v)),
@@ -219,7 +219,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<CreateSpendingPolicyResponse> createSpendingPolicy(
       CreateSpendingPolicyRequest r) async {
-    final resp = await _post('/api/policy/create', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/policy/create', {
       'user_id': _hex(r.userId),
       'threshold_sats': r.thresholdSats.toInt(),
       'start_time': r.startTime.toInt(),
@@ -234,7 +234,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) async {
-    final resp = await _post('/api/policy/get-id', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/policy/get-id', {
       'user_id': _hex(r.userId),
       'tx_message': _hex(r.txMessage),
       'signature': _hex(r.signature),
@@ -246,7 +246,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) async {
-    final resp = await _post('/api/policy/update', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/policy/update', {
       'user_id': _hex(r.userId),
       'policy_id': r.policyId,
       'threshold_sats': r.thresholdSats.toInt(),
@@ -261,7 +261,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) async {
-    final resp = await _post('/api/policy/delete', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/policy/delete', {
       'user_id': _hex(r.userId),
       'policy_id': r.policyId,
       'frost_signature_r': _hex(r.frostSignatureR),
@@ -279,7 +279,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<BroadcastTransactionResponse> broadcastTransaction(
       BroadcastTransactionRequest r) async {
-    final resp = await _post('/api/tx/broadcast', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/tx/broadcast', {
       'user_id': _hex(r.userId),
       'tx_hex': r.txHex,
     });
@@ -289,7 +289,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) async {
-    final resp = await _post('/api/tx/history', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/tx/history', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = FetchHistoryResponse();
@@ -305,7 +305,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
       FetchRecentTransactionsRequest r) async {
-    final resp = await _post('/api/tx/recent', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/tx/recent', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = FetchRecentTransactionsResponse();
@@ -325,7 +325,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest r) async {
-    final resp = await _post('/api/ark/info', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/info', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     return GetArkInfoResponse()
@@ -343,7 +343,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<GetArkAddressResponse> getArkAddress(GetArkAddressRequest r) async {
-    final resp = await _post('/api/ark/address', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/address', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     return GetArkAddressResponse()
@@ -353,7 +353,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<GetBoardingAddressResponse> getBoardingAddress(
       GetBoardingAddressRequest r) async {
-    final resp = await _post('/api/ark/boarding-address', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/boarding-address', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     return GetBoardingAddressResponse()
@@ -363,7 +363,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<CheckBoardingBalanceResponse> checkBoardingBalance(
       CheckBoardingBalanceRequest r) async {
-    final resp = await _post('/api/ark/boarding-balance', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/boarding-balance', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     return CheckBoardingBalanceResponse()
@@ -373,7 +373,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<ListVtxosResponse> listVtxos(ListVtxosRequest r) async {
-    final resp = await _post('/api/ark/vtxos', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/vtxos', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = ListVtxosResponse()
@@ -396,7 +396,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<ListArkTransactionsResponse> listArkTransactions(
       ListArkTransactionsRequest r) async {
-    final resp = await _post('/api/ark/transactions', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/transactions', {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = ListArkTransactionsResponse();
@@ -412,7 +412,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<SendVtxoResponse> sendVtxo(SendVtxoRequest r) async {
-    final resp = await _post('/api/ark/send', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/send', {
       'user_id': _hex(r.userId),
       'recipient_ark_address': r.recipientArkAddress,
       'amount': r.amount.toInt(),
@@ -436,7 +436,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<RedeemVtxoResponse> redeemVtxo(RedeemVtxoRequest r) async {
-    final resp = await _post('/api/ark/redeem', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/redeem', {
       'user_id': _hex(r.userId),
       'on_chain_address': r.onChainAddress,
       'amount': r.amount.toInt(),
@@ -450,7 +450,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<SettleResponse> settle(SettleRequest r) async {
-    final resp = await _post('/api/ark/settle', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/settle', {
       'user_id': _hex(r.userId),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
@@ -472,7 +472,7 @@ class RestWalletApi implements WalletApi {
   @override
   Future<SettleDelegateResponse> settleDelegate(
       SettleDelegateRequest r) async {
-    final resp = await _post('/api/ark/settle-delegate', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/settle-delegate', {
       'user_id': _hex(r.userId),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
@@ -493,7 +493,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) async {
-    final resp = await _post('/api/ark/submit-send', {
+    final resp = await _post('/api/u/${_hex(r.userId)}/ark/submit-send', {
       'user_id': _hex(r.userId),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
