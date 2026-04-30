@@ -1,0 +1,7 @@
+# OpenTofu state and outputs (contains account-specific IDs)
+tofu-outputs.json
+terraform.tfvars.json
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+backend.tf

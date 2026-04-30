@@ -4,14 +4,14 @@
 name: bitspend-server                     # App name (used in stack name, EIF name)
 version: 0.0.1                   # Build version (semver, baked into binary via ldflags)
 region: us-east-1                # AWS region
-account: "043673801220"                      # AWS account ID (required)
+account: "639920118099"                      # AWS account ID (required)
 prefix: dev                      # Deployment prefix (stack = {prefix}Nitro{Name})
 instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
 
 runtime:
-  rev: "v0.0.71"
-  hash: "sha256-4WQaXyPCVg0ysUHqhnHTBVTPlhNFlPplJqtzVp1ZHV4="
+  rev: "v0.0.74"
+  hash: "sha256-9cXFGEcexHZr1JEqU004Okxs55kQdvb7fm4221qgWMU="
   vendor_hash: "sha256-2ZX9x2voIwVkUsmrZvhJssAQqnCh8/HLwopL5HpiaOg="
 
 app:
@@ -23,14 +23,13 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "837f13fceb0c4d8cbc80ab62b19eef3e8eb1ab85"                    # Git commit SHA (required)
-  nix_hash: "sha256-0FDKZejHW02Kn4IByuMlbIAwXkDAOAVchnV1o8/z6eo="                   # Nix source hash: nix-prefetch-url --unpack (required)
-  nix_vendor_hash: "sha256-QPBa326MlMDIxvxC4Zp8PMgW9hi31pdH0MRwv8+j7uc="            # Go vendor hash (required)
+  nix_rev: "08766a69483e2fde0b819b629741e9669dc47461"                    # Git commit SHA (required)
+  nix_hash: "sha256-3PVX25ytBRW2pe51TSNcQpIZ402hDIrQ/ZbqDVNLI4k="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_vendor_hash: "sha256-FoCcAI8Fgj/GLbOWvmC42L+JbT6xNXkwokjVHAQk560="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
-  nix_subdir: "cosigner-runtime"                 # Subdirectory for monorepo (e.g. "server")
-  binary_name: ""                # Output binary name (defaults to 'name')
-  release_tag: "eif-latest"
+  nix_subdir: "cosigner-runtime"       # Subdirectory for monorepo
+  binary_name: "cosigner-runtime"  # Must match [[bin]] name in Cargo.toml
 
   # Extra nixpkgs attrs added to the build sandbox.
   nix_build_inputs: ["openssl"]
@@ -40,7 +39,7 @@ app:
   # Template vars: {{region}}, {{prefix}}, {{version}}
   env:
       PORT: "7074"
-      COSIGNER_WASM_PATH: "https://github.com/BitspendPayment/MPCWallet/releases/download/cosigner-8c631a813dff4f34080b83631ce10ebdc8829d26/cosigner.wasm"
+      COSIGNER_WASM_PATH: "/app/cosigner.wasm"
       BITCOIN_NETWORK: "signet"
       ELECTRUM_URL: "electrum.mutinynet.com"
       ELECTRUM_PORT: "50001"

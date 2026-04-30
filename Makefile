@@ -244,7 +244,7 @@ runtime-build:
 
 signer-build:
 	@echo "Building Hardware Signer Test Server..."
-	-sudo chown -R $(USER):$(USER) e2e/signer-cosigner-runtime/target 2>/dev/null || true
+	-sudo chown -R $(USER):$(USER) e2e/signer-server/target 2>/dev/null || true
 	cd e2e/signer-server && cargo build --release
 
 # ═══════════════════════════════════════════════════════════════════════════════
