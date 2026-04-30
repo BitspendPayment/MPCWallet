@@ -2,10 +2,10 @@ import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
 import 'package:test/test.dart';
-import 'package:client/ark_wallet.dart';
-import 'package:client/client.dart';
+import 'package:app_core/ark_wallet.dart';
+import 'package:app_core/client.dart';
 import 'package:fixnum/fixnum.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
@@ -168,7 +168,7 @@ void main() {
     final serverReady = Completer<void>();
     final serverFailed = Completer<void>();
     serverProcess = await Process.start(
-      '../server/target/release/server',
+      '../cosigner-runtime/target/release/cosigner-runtime',
       [
         '--wasm',
         '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',

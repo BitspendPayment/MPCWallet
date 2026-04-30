@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 # Embassy framework — using local fork with init_ns() for TrustZone NS support
 embassy-executor = { version = "0.9", features = ["arch-cortex-m", "executor-thread", "defmt"] }
-embassy-rp = { path = "../embassy-rp-fork", features = ["defmt", "rp235xa", "time-driver", "trustzone-ns"] }
+embassy-rp = { path = "../crates/embassy-rp-fork", features = ["defmt", "rp235xa", "time-driver", "trustzone-ns"] }
 embassy-time = { version = "0.5", features = ["defmt"] }
 embassy-usb = { version = "0.5", features = ["defmt"] }
 embassy-futures = "0.1"

@@ -17,8 +17,8 @@
 import 'dart:io';
 import 'dart:async';
 import 'package:args/args.dart';
-import 'package:client/client.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/hardware_signer.dart';
 import 'package:grpc/grpc.dart';
 import 'package:hive/hive.dart';
 

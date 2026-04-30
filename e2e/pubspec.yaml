@@ -7,8 +7,8 @@ environment:
   sdk: '>=3.3.0 <4.0.0'
 
 dependencies:
-  client:
-    path: ../client
+  app_core:
+    path: ../app-core
   protocol:
     path: ../protocol
   grpc: ^3.2.4

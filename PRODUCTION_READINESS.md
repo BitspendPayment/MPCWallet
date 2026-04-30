@@ -10,7 +10,7 @@ The MPC Wallet has working cryptography (FROST 2-of-3, Ark integration, MutinyNe
 
 ### 1. No TLS on gRPC server
 - **Server**: `server/src/main.rs:174-178` -- `Server::builder().serve(addr)` with no TLS
-- **Client**: `ap/lib/services/mpc_service.dart:192,229,284` -- `ChannelCredentials.insecure()`
+- **Client**: `app/lib/services/mpc_service.dart:192,229,284` -- `ChannelCredentials.insecure()`
 - **Impact**: All traffic (auth signatures, key shares, signing data) in plaintext. MitM trivial.
 - **Note**: If server runs inside an enclave that only accepts HTTP, TLS may be handled by the enclave's ingress layer.
 
@@ -59,7 +59,7 @@ The MPC Wallet has working cryptography (FROST 2-of-3, Ark integration, MutinyNe
 - `main.rs:80` -- `panic!("Unknown persistence backend")`
 
 ### 10. Key shares unencrypted by default on client
-- `ap/lib/services/mpc_service.dart` never passes a `HiveCipher` to `MpcClient` or `WalletStore`
+- `app/lib/services/mpc_service.dart` never passes a `HiveCipher` to `MpcClient` or `WalletStore`
 - Signing secret stored in plaintext Hive box on device
 - PIN-derived encryption exists but is NOT wired up
 

@@ -16,8 +16,8 @@ library;
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
-import 'package:client/client.dart';
-import 'package:client/hardware_signer.dart';
+import 'package:app_core/client.dart';
+import 'package:app_core/hardware_signer.dart';
 import 'package:hive/hive.dart';
 
 /// HTTP client that accepts self-signed certs (for Nitro enclave TLS).
