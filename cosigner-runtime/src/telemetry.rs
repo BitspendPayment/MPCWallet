@@ -73,7 +73,8 @@ pub fn init() -> TelemetryGuard {
         .with_ansi(std::io::stderr().is_terminal())
         .compact();
 
-    let token = std::env::var("ENCLAVE_MGMT_TOKEN").unwrap_or_default();
+    let token = std::env::var("ENCLAVE_RUNTIME_TOKEN")
+        .unwrap_or_default();
     if token.is_empty() {
         tracing_subscriber::registry()
             .with(env_filter)
