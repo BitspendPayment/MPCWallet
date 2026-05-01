@@ -1,15 +1,6 @@
 name: Build EIF
 
 on:
-  push:
-    branches: [master, main]
-    paths:
-      - 'cosigner-runtime/enclave/**'
-      - 'cosigner-runtime/flake.nix'
-      - 'cosigner-runtime/flake.lock'
-      - 'cosigner-runtime/src/**'
-      - 'cosigner-runtime/Cargo.toml'
-      - 'cosigner-runtime/Cargo.lock'
   workflow_dispatch:
 
 permissions:
