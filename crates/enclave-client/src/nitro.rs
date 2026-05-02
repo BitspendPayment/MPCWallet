@@ -470,9 +470,9 @@ mod tests {
             "deadbeefcafebabe1234567890abcdef01020304"
         );
 
-        // Verify UserData is present (68 bytes for nitriding).
+        // Verify UserData is present (79 bytes for nitriding v1.4.2).
         let user_data = result.document.user_data.as_ref().expect("user_data present");
-        assert!(user_data.len() >= 68);
+        assert!(user_data.len() >= 79);
 
         // Verify certificate chain was valid (signature_ok).
         assert!(result.signature_ok);

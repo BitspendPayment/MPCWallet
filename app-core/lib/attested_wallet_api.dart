@@ -93,8 +93,6 @@ class AttestedWalletApi implements WalletApi {
   @override
   Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) => _inner.refreshStep3(r);
   @override
-  Future<CreateSpendingPolicyResponse> createSpendingPolicy(CreateSpendingPolicyRequest r) => _inner.createSpendingPolicy(r);
-  @override
   Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) => _inner.getPolicyId(r);
   @override
   Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) => _inner.updatePolicy(r);

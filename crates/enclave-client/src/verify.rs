@@ -100,27 +100,56 @@ pub(crate) async fn fetch_and_verify_attestation(
 /// pubkey from /v1/enclave-info matches the appKeyHash in the attestation
 /// document's UserData.
 ///
-/// UserData format (nitriding): `[0x12, 0x20, tlsKeyHash:32] ++ [0x12, 0x20, appKeyHash:32]`
-/// Total 68 bytes. appKeyHash is at bytes 36:68.
+/// UserData format (nitriding v1.4.2):
+///
+///     "sha256:" ++ tlsKeyHash(32) ++ ";" ++ "sha256:" ++ appKeyHash(32)
+///
+/// Total 79 bytes. appKeyHash is at bytes 47:79.
 pub(crate) async fn verify_key_binding(
     http_client: &reqwest::Client,
     base_url: &str,
     document: &AttestationDocument,
 ) -> Result<String> {
+    const HASH_PREFIX: &[u8] = b"sha256:";
+    const HASH_SEP: &[u8] = b";";
+    const TLS_START: usize = 0;
+    const TLS_HASH_START: usize = HASH_PREFIX.len();              // 7
+    const TLS_HASH_END: usize = TLS_HASH_START + 32;              // 39
+    const SEP_START: usize = TLS_HASH_END;                        // 39
+    const APP_PREFIX_START: usize = SEP_START + HASH_SEP.len();   // 40
+    const APP_HASH_START: usize = APP_PREFIX_START + HASH_PREFIX.len(); // 47
+    const APP_HASH_END: usize = APP_HASH_START + 32;              // 79
+
     let user_data = match &document.user_data {
-        Some(ud) if ud.len() >= 68 => ud,
+        Some(ud) if ud.len() >= APP_HASH_END => ud,
         _ => return Ok(String::new()), // UserData too short, key binding not supported
     };
 
-    // Check multihash prefix at offset 34.
-    if user_data[34] != 0x12 || user_data[35] != 0x20 {
+    if &user_data[TLS_START..TLS_HASH_START] != HASH_PREFIX {
         return Err(Error::KeyBinding(format!(
-            "UserData missing multihash prefix at offset 34 (got {:02x} {:02x})",
-            user_data[34], user_data[35]
+            "UserData missing {:?} prefix at offset 0 (got {:?})",
+            std::str::from_utf8(HASH_PREFIX).unwrap(),
+            String::from_utf8_lossy(&user_data[TLS_START..TLS_HASH_START])
+        )));
+    }
+    if &user_data[SEP_START..APP_PREFIX_START] != HASH_SEP {
+        return Err(Error::KeyBinding(format!(
+            "UserData missing {:?} separator at offset {} (got {:?})",
+            std::str::from_utf8(HASH_SEP).unwrap(),
+            SEP_START,
+            String::from_utf8_lossy(&user_data[SEP_START..APP_PREFIX_START])
+        )));
+    }
+    if &user_data[APP_PREFIX_START..APP_HASH_START] != HASH_PREFIX {
+        return Err(Error::KeyBinding(format!(
+            "UserData missing {:?} prefix at offset {} (got {:?})",
+            std::str::from_utf8(HASH_PREFIX).unwrap(),
+            APP_PREFIX_START,
+            String::from_utf8_lossy(&user_data[APP_PREFIX_START..APP_HASH_START])
         )));
     }
 
-    let app_key_hash = &user_data[36..68];
+    let app_key_hash = &user_data[APP_HASH_START..APP_HASH_END];
 
     // Check if appKeyHash is all zeros (key not yet registered).
     if app_key_hash.iter().all(|&b| b == 0) {

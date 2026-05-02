@@ -25,7 +25,6 @@ pub enum CosignerCommand {
     RefreshStep3 { req: RefreshStep3Request, reply: Reply<RefreshStep3Response> },
 
     // --- Policy ---
-    CreateSpendingPolicy { req: CreateSpendingPolicyRequest, reply: Reply<CreateSpendingPolicyResponse> },
     GetPolicyId { req: GetPolicyIdRequest, reply: Reply<GetPolicyIdResponse> },
     UpdatePolicy { req: UpdatePolicyRequest, reply: Reply<UpdatePolicyResponse> },
     DeletePolicy { req: DeletePolicyRequest, reply: Reply<DeletePolicyResponse> },

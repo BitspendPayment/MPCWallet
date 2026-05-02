@@ -17,19 +17,6 @@ use super::helpers::{
     auth_check, calculate_spent_amount, ensure_policy_loaded, persist_policy, timestamp_check,
 };
 
-#[tracing::instrument(skip_all, name = "actor::create_spending_policy", err)]
-pub fn create_spending_policy(
-    _user: &mut CosignerInstance,
-    _state: &mut CosignerState,
-    _shared: &SharedServices,
-    _registry: &CosignerRegistry,
-    _req: CreateSpendingPolicyRequest,
-) -> Result<CreateSpendingPolicyResponse, Status> {
-    Err(Status::unimplemented(
-        "Use Refresh flow to create spending policies",
-    ))
-}
-
 #[tracing::instrument(skip_all, name = "actor::get_policy_id", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_policy_id(
     user: &mut CosignerInstance,

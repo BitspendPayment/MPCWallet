@@ -22,8 +22,6 @@ abstract class WalletApi {
   Future<RefreshStep3Response> refreshStep3(RefreshStep3Request request);
 
   // Policy
-  Future<CreateSpendingPolicyResponse> createSpendingPolicy(
-      CreateSpendingPolicyRequest request);
   Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest request);
   Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest request);
   Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest request);

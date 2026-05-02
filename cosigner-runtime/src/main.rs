@@ -30,8 +30,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let cfg = config::ServerConfig::from_environment();
     tracing::info!(
-        "Config: bitcoin_rpc={}, electrum={}:{}, network={}",
-        cfg.bitcoin_rpc_url,
+        "Config: electrum={}:{}, network={}",
         cfg.electrum_url,
         cfg.electrum_port,
         cfg.bitcoin_network
@@ -66,12 +65,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Bitcoin services.
-    let bitcoin_rpc = Arc::new(bitcoin::BitcoinRpcClient::new(
-        &cfg.bitcoin_rpc_url,
-        &cfg.bitcoin_rpc_user,
-        &cfg.bitcoin_rpc_password,
-    ));
-
     let electrum_client = bitcoin::ElectrumClient::new(&cfg.electrum_url, cfg.electrum_port);
     let bitcoin_history = Arc::new(tokio::sync::Mutex::new(
         bitcoin::BitcoinHistoryService::new(electrum_client),
@@ -107,7 +100,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let shared = Arc::new(shared::SharedServices::new(
         persistence,
         secret_store,
-        bitcoin_rpc,
         bitcoin_history,
         asp_client,
     ));

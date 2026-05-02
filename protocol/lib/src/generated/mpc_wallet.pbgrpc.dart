@@ -62,12 +62,6 @@ class MPCWalletClient extends $grpc.Client {
           ($0.RefreshStep3Request value) => value.writeToBuffer(),
           ($core.List<$core.int> value) =>
               $0.RefreshStep3Response.fromBuffer(value));
-  static final _$createSpendingPolicy = $grpc.ClientMethod<
-          $0.CreateSpendingPolicyRequest, $0.CreateSpendingPolicyResponse>(
-      '/mpc_wallet.MPCWallet/CreateSpendingPolicy',
-      ($0.CreateSpendingPolicyRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) =>
-          $0.CreateSpendingPolicyResponse.fromBuffer(value));
   static final _$getPolicyId =
       $grpc.ClientMethod<$0.GetPolicyIdRequest, $0.GetPolicyIdResponse>(
           '/mpc_wallet.MPCWallet/GetPolicyId',
@@ -225,12 +219,6 @@ class MPCWalletClient extends $grpc.Client {
       $0.RefreshStep3Request request,
       {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$refreshStep3, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.CreateSpendingPolicyResponse> createSpendingPolicy(
-      $0.CreateSpendingPolicyRequest request,
-      {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$createSpendingPolicy, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.GetPolicyIdResponse> getPolicyId(
@@ -409,15 +397,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.RefreshStep3Request.fromBuffer(value),
             ($0.RefreshStep3Response value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.CreateSpendingPolicyRequest,
-            $0.CreateSpendingPolicyResponse>(
-        'CreateSpendingPolicy',
-        createSpendingPolicy_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) =>
-            $0.CreateSpendingPolicyRequest.fromBuffer(value),
-        ($0.CreateSpendingPolicyResponse value) => value.writeToBuffer()));
     $addMethod(
         $grpc.ServiceMethod<$0.GetPolicyIdRequest, $0.GetPolicyIdResponse>(
             'GetPolicyId',
@@ -615,12 +594,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return refreshStep3(call, await request);
   }
 
-  $async.Future<$0.CreateSpendingPolicyResponse> createSpendingPolicy_Pre(
-      $grpc.ServiceCall call,
-      $async.Future<$0.CreateSpendingPolicyRequest> request) async {
-    return createSpendingPolicy(call, await request);
-  }
-
   $async.Future<$0.GetPolicyIdResponse> getPolicyId_Pre($grpc.ServiceCall call,
       $async.Future<$0.GetPolicyIdRequest> request) async {
     return getPolicyId(call, await request);
@@ -739,8 +712,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
       $grpc.ServiceCall call, $0.RefreshStep2Request request);
   $async.Future<$0.RefreshStep3Response> refreshStep3(
       $grpc.ServiceCall call, $0.RefreshStep3Request request);
-  $async.Future<$0.CreateSpendingPolicyResponse> createSpendingPolicy(
-      $grpc.ServiceCall call, $0.CreateSpendingPolicyRequest request);
   $async.Future<$0.GetPolicyIdResponse> getPolicyId(
       $grpc.ServiceCall call, $0.GetPolicyIdRequest request);
   $async.Future<$0.UpdatePolicyResponse> updatePolicy(

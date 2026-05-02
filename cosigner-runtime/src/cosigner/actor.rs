@@ -90,17 +90,6 @@ pub async fn run_actor(
             CosignerCommand::Shutdown => break,
 
             // -------- Policy --------
-            CosignerCommand::CreateSpendingPolicy { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::policy::create_spending_policy
-                );
-            }
             CosignerCommand::GetPolicyId { req, reply } => {
                 dispatch!(
                     user,

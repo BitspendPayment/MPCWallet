@@ -217,22 +217,6 @@ class RestWalletApi implements WalletApi {
   // -------------------------------------------------------------------------
 
   @override
-  Future<CreateSpendingPolicyResponse> createSpendingPolicy(
-      CreateSpendingPolicyRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/policy/create', {
-      'user_id': _hex(r.userId),
-      'threshold_sats': r.thresholdSats.toInt(),
-      'start_time': r.startTime.toInt(),
-      'interval_seconds': r.intervalSeconds.toInt(),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return CreateSpendingPolicyResponse()
-      ..policyId = resp['policy_id'] as String? ?? ''
-      ..allocatedKeyIndex = (resp['allocated_key_index'] as num?)?.toInt() ?? 0;
-  }
-
-  @override
   Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) async {
     final resp = await _post('/api/u/${_hex(r.userId)}/policy/get-id', {
       'user_id': _hex(r.userId),

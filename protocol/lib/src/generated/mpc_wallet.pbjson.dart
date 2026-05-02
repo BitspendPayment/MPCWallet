@@ -321,32 +321,6 @@ const RefreshStep3Response_Round2PackagesForMeEntry$json = const {
 
 /// Descriptor for `RefreshStep3Response`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List refreshStep3ResponseDescriptor = $convert.base64Decode('ChRSZWZyZXNoU3RlcDNSZXNwb25zZRJuChZyb3VuZDJfcGFja2FnZXNfZm9yX21lGAEgAygLMjkubXBjX3dhbGxldC5SZWZyZXNoU3RlcDNSZXNwb25zZS5Sb3VuZDJQYWNrYWdlc0Zvck1lRW50cnlSE3JvdW5kMlBhY2thZ2VzRm9yTWUaRgoYUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
-@$core.Deprecated('Use createSpendingPolicyRequestDescriptor instead')
-const CreateSpendingPolicyRequest$json = const {
-  '1': 'CreateSpendingPolicyRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'threshold_sats', '3': 2, '4': 1, '5': 3, '10': 'thresholdSats'},
-    const {'1': 'start_time', '3': 3, '4': 1, '5': 3, '10': 'startTime'},
-    const {'1': 'interval_seconds', '3': 4, '4': 1, '5': 3, '10': 'intervalSeconds'},
-    const {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 6, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `CreateSpendingPolicyRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List createSpendingPolicyRequestDescriptor = $convert.base64Decode('ChtDcmVhdGVTcGVuZGluZ1BvbGljeVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEiUKDnRocmVzaG9sZF9zYXRzGAIgASgDUg10aHJlc2hvbGRTYXRzEh0KCnN0YXJ0X3RpbWUYAyABKANSCXN0YXJ0VGltZRIpChBpbnRlcnZhbF9zZWNvbmRzGAQgASgDUg9pbnRlcnZhbFNlY29uZHMSHAoJc2lnbmF0dXJlGAUgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAYgASgDUgt0aW1lc3RhbXBNcw==');
-@$core.Deprecated('Use createSpendingPolicyResponseDescriptor instead')
-const CreateSpendingPolicyResponse$json = const {
-  '1': 'CreateSpendingPolicyResponse',
-  '2': const [
-    const {'1': 'policy_id', '3': 1, '4': 1, '5': 9, '10': 'policyId'},
-    const {'1': 'allocated_key_index', '3': 2, '4': 1, '5': 5, '10': 'allocatedKeyIndex'},
-  ],
-};
-
-/// Descriptor for `CreateSpendingPolicyResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List createSpendingPolicyResponseDescriptor = $convert.base64Decode('ChxDcmVhdGVTcGVuZGluZ1BvbGljeVJlc3BvbnNlEhsKCXBvbGljeV9pZBgBIAEoCVIIcG9saWN5SWQSLgoTYWxsb2NhdGVkX2tleV9pbmRleBgCIAEoBVIRYWxsb2NhdGVkS2V5SW5kZXg=');
 @$core.Deprecated('Use getPolicyIdRequestDescriptor instead')
 const GetPolicyIdRequest$json = const {
   '1': 'GetPolicyIdRequest',

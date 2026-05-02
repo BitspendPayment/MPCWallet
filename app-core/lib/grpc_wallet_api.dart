@@ -37,10 +37,6 @@ class GrpcWalletApi implements WalletApi {
       _stub.refreshStep3(r);
 
   @override
-  Future<CreateSpendingPolicyResponse> createSpendingPolicy(
-          CreateSpendingPolicyRequest r) =>
-      _stub.createSpendingPolicy(r);
-  @override
   Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) =>
       _stub.getPolicyId(r);
   @override

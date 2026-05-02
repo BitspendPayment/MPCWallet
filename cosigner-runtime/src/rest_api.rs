@@ -34,7 +34,6 @@ pub fn routes(registry: AppState) -> Router {
         .route("/u/{user_id}/refresh/step2", post(refresh_step2))
         .route("/u/{user_id}/refresh/step3", post(refresh_step3))
         // Policy
-        .route("/u/{user_id}/policy/create", post(create_spending_policy))
         .route("/u/{user_id}/policy/get-id", post(get_policy_id))
         .route("/u/{user_id}/policy/update", post(update_policy))
         .route("/u/{user_id}/policy/delete", post(delete_policy))
@@ -333,22 +332,6 @@ async fn refresh_step3(
 // ---------------------------------------------------------------------------
 // Policy
 // ---------------------------------------------------------------------------
-
-#[tracing::instrument(skip_all, name = "rest::create_spending_policy", fields(user_id = %user_id))]
-async fn create_spending_policy(
-    State(reg): State<AppState>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, CreateSpendingPolicy, wallet_proto::CreateSpendingPolicyRequest {
-        user_id: user_id_bytes(&user_id),
-        threshold_sats: i64_field(&body, "threshold_sats"),
-        start_time: i64_field(&body, "start_time"),
-        interval_seconds: i64_field(&body, "interval_seconds"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
 
 #[tracing::instrument(skip_all, name = "rest::get_policy_id", fields(user_id = %user_id))]
 async fn get_policy_id(

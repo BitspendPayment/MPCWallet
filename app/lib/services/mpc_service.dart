@@ -277,6 +277,14 @@ class MpcService extends ChangeNotifier {
     debugPrint("MPC Service: Switching host to $host");
     _host = host;
 
+    // Remote hosts require attestation. If we switched in from a local host
+    // where manifest fetch was skipped or silently failed, refresh now so the
+    // failure surfaces here (with network context) instead of later as a
+    // confusing "no PCR0 available" error inside _createMpcClient.
+    if (_requiresAttestation && (_expectedPcr0 == null || _expectedPcr0!.isEmpty)) {
+      await fetchManifest();
+    }
+
     await _ensurePersistenceInitialized();
     if (_identityBox == null || !_identityBox!.isOpen) {
       _identityBox = await Hive.openBox('mpc_service_identity');
