@@ -1,435 +1,304 @@
-# Merlin Wallet
+# VTXOS
 
-A **self-custodial Bitcoin wallet** powered by **FROST threshold signatures** and an **RP2350 TrustZone hardware signer**. No single device ever holds the full private key.
+A **self-custodial Bitcoin wallet** powered by **FROST threshold signatures**. The full private key never exists on any single device. Three independent identities — your phone, a hardware signer, and a remote cosigning service — jointly control your funds through a 2-of-3 threshold scheme.
 
-Three independent identities — your phone, a hardware signer, and a coordination server — jointly control your funds through a 2-of-3 threshold scheme. Transactions require cooperation between any two parties, eliminating single points of failure while keeping the user in control.
+
+
+Each layer is doing exactly one job. WASM alone gives memory isolation but not concurrency control. The actor model alone gives concurrency control but not fault isolation. The enclave alone gives the runtime a verifiable identity but doesn't isolate users from each other. The combination is the point.
 
 ## Architecture
 
 ```
                         +-----------------------+
-                        |   Coordination Server |
-                        |   (Rust, gRPC)        |
+                        |   Cosigner Runtime    |
+                        |   AWS Nitro Enclave   |
+                        |   (Rust + Wasmtime)   |
                         |   Identity 3/3        |
                         +-----------+-----------+
                                     |
-                              gRPC (50051)
+                              gRPC / attested HTTPS
                                     |
               +---------------------+---------------------+
               |                                           |
 +-------------+--------------+             +--------------+-------------+
-|   Android Phone            |   USB OTG   |   HW Signer (RP2350)     |
+|   Android Phone            |   USB OTG   |   HW Signer (RP2350)       |
 |   Flutter App              +-------------+   TrustZone firmware       |
-|   Identity 1/3             |   HID 64B   |   Identity 2/3            |
-|   Signing + wallet logic   |   reports   |   Keys in Secure world    |
+|   Identity 1/3             |   HID 64B   |   Identity 2/3             |
+|   Day-to-day signing       |   reports   |   Recovery / policy ops    |
 +----------------------------+             +----------------------------+
 ```
 
-| Identity | Held by | Purpose |
-|----------|---------|---------|
+| Identity | Held by | Role |
+|---|---|---|
 | **Signing** | Phone (local) | Day-to-day transaction signing |
-| **Recovery** | HW Signer (USB HID) | Policy changes, recovery operations |
-| **Server** | Coordination server | Co-signs transactions, never learns the full key |
+| **Recovery** | HW signer (USB HID) | Policy changes, restoration |
+| **Server** | Cosigner runtime in enclave | Co-signs transactions, never sees the full key |
 
-Any 2-of-3 can produce a valid Taproot (BIP-340) signature. The server alone cannot move funds.
+Any 2-of-3 produces a valid Taproot (BIP-340) Schnorr signature. The server alone cannot move funds. The phone alone cannot move funds. You need cooperation between any two parties.
 
-## Components
+## The Cosigner Runtime
 
-```
-MPCWallet/
-+-- app/                 Flutter mobile app (Merlin Wallet)
-+-- client/              Dart client library (DKG, signing, UTXO management, FFI wrapper)
-+-- crates/              Rust support libraries (path deps for ffi/cosigner/server/hwsigner)
-|   +-- ark/             Ark protocol primitives (taproot, VTXOs, send paths)
-|   +-- threshold/       FROST & DKG cryptography (no_std, secp256k1)
-|   +-- enclave-client/  AWS Nitro Enclave HTTP client (attestation + signed responses)
-|   +-- embassy-rp-fork/ Forked embassy-rp with TrustZone NS support (init_ns)
-+-- ffi/                 Merged C-ABI shared library (ark + threshold + enclave) for Dart FFI
-+-- server/              Rust gRPC coordination server (Wasmtime + cosigner WASM)
-+-- cosigner/            WASI cosigner component (server-side threshold crypto)
-+-- hwsigner/            Non-Secure world firmware (Embassy USB HID, RP2350)
-+-- hwsigner-secure/     Secure world firmware (crypto, key storage, TRNG)
-+-- protocol/            gRPC stubs and proto definitions
-+-- e2e/                 End-to-end integration tests (includes signer-server)
-+-- keys/                Secure Boot signing keys (gitignored)
-+-- scripts/             Utilities (bitcoin.sh, test_hwsigner.py, udev rules)
-+-- docker-compose.yml   Bitcoin regtest environment (bitcoind + electrs)
-+-- Makefile             Build, flash, sign, and run targets
-```
-
-## HW Signer — TrustZone Architecture
-
-The hardware signer uses ARM TrustZone on the RP2350 (Cortex-M33) to provide **hardware-enforced isolation** between the crypto engine and the USB attack surface.
+The remote cosigning service is built on three concentric isolation boundaries, each addressing a different class of threat:
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  SECURE WORLD (hwsigner-secure/)                         │
-│  Flash: 0x10000000 — 512K                                │
-│  RAM:   0x20060000 — 128K                                │
+┌─ AWS Nitro Enclave ──────────────────────────────────────┐  hardware-attested VM
+│  PCR0 measurement · KMS keys locked to PCR0              │  client trusts: "the right binary booted"
 │                                                          │
-│  • Boots from ROM (rp235x-hal)                           │
-│  • Initializes clocks, PLLs                              │
-│  • Configures SAU, ACCESSCTRL, DMA SECCFG, NVIC_ITNS    │
-│  • FROST threshold signing, DKG, nonce generation        │
-│  • TRNG hardware random number generator                 │
+│  ┌─ cosigner-runtime (Rust)   tokio actor per user ──┐   │  concurrency isolation
+│  │  per-user mailbox · serial command processing     │   │  trust: "no cross-user state mutation"
+│  │                                                   │   │
+│  │  ┌─ Wasmtime sandbox  one Store per user ─────┐   │   │  memory & fault isolation
+│  │  │  cosigner.wasm · FROST · DKG · Schnorr     │   │   │  trust: "no leak between users"
+│  │  └─────────────────────────────────────────────┘   │   │
+│  └─────────────────────────────────────────────────────┘  │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Outer layer: AWS Nitro Enclave
+
+The runtime executes inside an AWS Nitro Enclave — an isolated VM with no persistent storage, no interactive shell, no network except a vsock to the parent EC2 instance. The host's disk is invisible. The host operator can't read enclave RAM.
+
+What the client gets in return: an **attestation document** signed by AWS, binding a `PCR0` measurement (the SHA-384 hash of the booted EIF image) to the enclave's freshly-generated TLS certificate. The client verifies `PCR0` matches a known build before trusting any response. Connecting to a different binary, or to the host itself, fails attestation — the client refuses to send DKG packets.
+
+KMS-encrypted secrets (the FROST share's recovery material) are decrypted inside the enclave by attaching a **PCR0-locked KMS policy**: only an enclave with this exact PCR0 can call `kms:Decrypt`. A modified runtime can't load a user's secrets even if it has the same IAM role.
+
+The enclave plumbing — supervisor, attestation server, vsock proxies — is upstream from [introspector-enclave](https://github.com/ArkLabsHQ/introspector-enclave). The cosigner-runtime is the userspace app that boots inside it.
+
+### Middle layer: Per-user actor model
+
+Inside the runtime, every user gets a dedicated tokio actor task:
+
+```rust
+// cosigner-runtime/src/cosigner/registry.rs
+const MAILBOX_CAPACITY: usize = 256;
+
+let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
+let user = self.new_user_instance()?;       // fresh Wasmtime store
+let state = CosignerState::new();           // fresh in-memory state
+tokio::spawn(run_actor(user, state, rx, shared, registry));
+```
+
+Properties this gives you:
+
+- **No shared mutable state between users.** Each actor owns its `CosignerInstance` (the WASM store) and `CosignerState` (vtxos, pending DKG packets, settle session, etc.) outright. No `Arc<Mutex<...>>`, no contention, no locks inside hot paths.
+- **Serial command processing per user.** The actor pulls commands one at a time from its mailbox; a DKG step finishes before the next sign-step starts. Removes a class of bugs where two parallel calls from the same user race on shared state.
+- **Slow user can't starve others.** A user holding open a settle session blocks only their own mailbox. Every other user's actor keeps running on its own task.
+- **Routing is constant-time.** [`CosignerRegistry`](cosigner-runtime/src/cosigner/registry.rs) is a `DashMap` from FROST verifying-share → mailbox handle. New gRPC requests just look up the handle and `send().await`. No coordinator thread.
+
+
+
+Handlers run inside `spawn_blocking` so CPU-bound WASM work (FROST round1, DKG part3, etc.) doesn't tie up tokio worker threads. The actor itself is light — millions of idle actors fit in memory.
+
+### Inner layer: WASM sandbox per user
+
+Threshold cryptography (FROST, DKG, Schnorr verify, Taproot tweaking) lives entirely inside [`cosigner/`](cosigner/), a WASI Component Model crate compiled to `wasm32-wasip1`. The Rust runtime never sees raw secret shares — only opaque session handles into the WASM linear memory.
+
+Each user actor instantiates the cosigner component into a fresh `wasmtime::Store`:
+
+```rust
+// cosigner-runtime/src/cosigner/registry.rs (new_user_instance)
+let mut store = Store::new(&engine, view);
+let bindings = self.linker.instantiate(&mut store, &self.component)?;
+// store + bindings = one user's "CosignerInstance"
+```
+
+What this buys you:
+
+- **Memory isolation.** A bug in `cosigner.wasm` that corrupts linear memory affects only that user's `Store`. User A's secret share cannot end up in User B's response — they live in different address spaces.
+- **Fault isolation.** A panic, OOB access, or stack overflow inside WASM doesn't crash the runtime. The host catches the trap, returns an error, the actor moves on or restarts the instance.
+- **Capability-based imports.** WASI gives the WASM no ambient access — no filesystem, no network, no syscalls except what the runtime explicitly imports. The cosigner crate can compute, not exfiltrate.
+- **Deterministic build → PCR0.** The cosigner WASM is part of the EIF, baked into PCR0. A modified WASM means a different PCR0 means clients refuse to attest, full stop.
+
+The runtime's job is plumbing: receive a request, validate auth, hand the request bytes to the WASM via a host call, get a response, route it back. The WASM does the math.
+
+## The Hardware Signer
+
+The recovery identity (2/3) lives on an RP2350 microcontroller. Lives in [`hwsigner-secure/`](hwsigner-secure/) (Secure world) and [`hwsigner/`](hwsigner/) (Non-Secure world).
+
+Two reasons it exists:
+
+1. **The phone is single-purpose hardware running general-purpose software.** A compromised app or OS could exfiltrate the signing share. The hardware signer keeps a separate share on a physically separate device, so a compromise of the phone alone is recoverable.
+2. **Policy changes need a stronger guarantee than day-to-day signing.** Spending limits, refresh, and recovery operations require a recovery signature from the hardware signer. The phone alone cannot raise its own spending limit.
+
+### TrustZone isolation
+
+The RP2350 (Cortex-M33) supports ARM TrustZone. The chip splits flash, RAM, and peripherals into Secure and Non-Secure regions, with hardware enforcement of which side can access which.
+
+```
+┌─ SECURE WORLD  (hwsigner-secure/) ──────────────────────┐
+│  Flash 0x10000000 — 512K  ·  RAM 0x20060000 — 128K      │
+│                                                          │
+│  • FROST share, signing logic, DKG, nonces               │
+│  • TRNG (Secure-only peripheral)                         │
 │  • Key storage in Secure flash (0x103FF000)              │
-│  • BLXNS → hands off to Non-Secure world                 │
 │                                                          │
-│  NSC entry points (SG veneers):                          │
-│    nsc_init()    — init crypto library                   │
+│  Exposes two NSC (Non-Secure Callable) entry points:     │
+│    nsc_init()    — initialize crypto library             │
 │    nsc_process() — handle JSON crypto request/response   │
 └────────────────────────┬─────────────────────────────────┘
                          │ SG veneers (Secure Gateway)
 ┌────────────────────────┴─────────────────────────────────┐
-│  NON-SECURE WORLD (hwsigner/)                            │
-│  Flash: 0x10080000 — 3584K                               │
-│  RAM:   0x20000000 — 384K                                │
-│                                                          │
-│  • Embassy async runtime + USB HID                       │
-│  • JSON protocol over 64-byte HID reports                │
-│  • Forwards crypto requests to Secure via nsc_process()  │
-│  • CANNOT access: Secure flash, Secure RAM, TRNG, keys   │
-└──────────────────────────────────────────────────────────┘
+│  NON-SECURE WORLD  (hwsigner/) ─────────────────────────┐│
+│  Flash 0x10080000 — 3584K  ·  RAM 0x20000000 — 384K     ││
+│                                                          ││
+│  • Embassy async runtime + USB HID                       ││
+│  • JSON protocol over 64-byte HID reports                ││
+│  • Forwards crypto requests to Secure via nsc_process()  ││
+│  • CANNOT access: Secure flash, Secure RAM, TRNG, keys   ││
+└──────────────────────────────────────────────────────────┘│
+                                                            │
+SAU enforces address-region attributes; ACCESSCTRL          │
+locks peripheral security after configuration.              │
 ```
 
-### Security Boundaries (SAU Regions)
+What this gives you: even if the USB stack is compromised — a malicious peer on the bus, a buffer overflow in the HID parser — the attacker is in the Non-Secure world. They can issue crypto requests through the NSC veneers, but **cannot read the FROST share, cannot read the TRNG output, cannot pivot into Secure flash**. The Secure world copies request bytes from NS RAM, processes them in Secure RAM, zeroes the input buffer, and copies the response back. The attack surface from NS to Secure is exactly two function entry points.
 
-| Region | Address Range | Attribute | Purpose |
-|--------|--------------|-----------|---------|
-| 0 | `0x10080000 - 0x103FEFFF` | NS | Non-Secure firmware flash |
-| 1 | `0x20000000 - 0x2005FFFF` | NS | Non-Secure RAM |
-| 2 | `0x1002AB00 - 0x1002ABFF` | NSC | SG veneers (crypto entry points) |
-| 3 | `0x40000000 - 0x50FFFFFF` | NS | Peripherals + USB DPRAM |
-| 4 | `0xD0000000 - 0xD0020FFF` | NS | SIO |
-| 5 | `0x00000000 - 0x00007DFF` | NS | Boot ROM |
-| 7 | *(boot ROM)* | NSC | Boot ROM SG gateway |
-| — | Everything else | **Secure** | Crypto library, key flash, crypto RAM |
+### Boot, signing, and provisioning
 
-### Secure Boot
+Firmware is signed with **ECDSA secp256k1 + SHA-256**. The RP2350 boot ROM verifies each signature against a public key hash burned into OTP before executing the image — unsigned or tampered firmware does not boot. Once OTP is provisioned with `SECURE_BOOT_ENABLE`, the operation is irreversible: only firmware signed with the matching private key will ever boot on that chip.
 
-The firmware is signed with **ECDSA secp256k1 + SHA-256**. The RP2350's boot ROM verifies the signature against a public key hash burned into OTP before executing. Unsigned or tampered firmware will not boot.
+Build, sign, and flash:
 
 ```bash
-# Build → Sign → Flash workflow
-make hw-build         # Build Secure + NS worlds
-make hw-sign          # Sign Secure world with picotool seal
-make hw-flash         # Flash signed Secure + unsigned NS via debug probe
-make hw-test          # Smoke test over USB HID
+make hw-build         # builds Secure + NS worlds
+make hw-sign          # signs Secure world via picotool seal
+make hw-flash         # builds, signs, flashes via probe-rs
+make hw-test          # smoke test over USB HID
 ```
 
-### Boot Sequence
-
-1. **Boot ROM** verifies Secure world signature against OTP key hash
-2. **Secure world** initializes clocks (XOSC 12MHz, PLL_SYS 150MHz, PLL_USB 48MHz)
-3. Deasserts NS peripherals from reset (IO_BANK0, PADS_BANK0, DMA, USB)
-4. Configures DMA internal security (SECCFG channels + IRQs)
-5. Configures SAU (6 regions) + ACCESSCTRL (with write password `0xACCE00FF`)
-6. Locks ACCESSCTRL (Core0 lock — NS code cannot reconfigure)
-7. Retargets interrupts to NS (TIMER0, DMA, USB, IO_BANK0 via NVIC_ITNS)
-8. Configures FPU for TrustZone (NSACR, FPCCR)
-9. Initializes crypto library (TRNG, loads keys from Secure flash)
-10. Sets NS VTOR + MSP from NS vector table
-11. **BLXNS** → transitions CPU to Non-Secure state
-12. **NS world** runs cortex-m-rt Reset handler → `embassy_rp::init_ns()` → Embassy executor → USB HID
-
-### Embassy Fork (`crates/embassy-rp-fork/`)
-
-A minimal fork of `embassy-rp` 0.9.0 that adds TrustZone Non-Secure support:
-
-- **`init_ns(NsClockConfig)`** — initializes Embassy without touching clocks/PLLs/resets (Secure world already configured them). Populates the internal `CLOCKS` static with known frequencies and enables timer/DMA/GPIO interrupts.
-- **`trustzone-ns` feature** — disables `pre_init` which writes to Secure-only registers (SIO spinlock, PSM, ACTLR) that would fault from NS state.
-
-### NSC Protocol
-
-The Non-Secure world communicates with the Secure crypto library through two NSC (Non-Secure Callable) functions exposed via SG (Secure Gateway) veneers:
-
-```
-nsc_init() -> i32
-    Initialize crypto library (TRNG, load keys, signer state).
-    Returns 0 on success.
-
-nsc_process(ns_in_ptr, in_len, ns_out_ptr, out_cap) -> i32
-    Process a JSON crypto request.
-    Secure world copies data from NS buffers, processes, copies response back.
-    Returns response length (>0) or error code (<0).
-```
-
-The NS world keeps its own buffers in NS RAM and passes pointers to the Secure world. The Secure world copies data internally, processes the request, zeros the input buffer (may contain DKG secrets), and copies the response to the NS output buffer.
+The full boot sequence (12 stages from boot ROM through `BLXNS` to Embassy), SAU region table, NSC protocol, USB HID framing, and the irreversible OTP provisioning procedure are in [docs/HW_SIGNER.md](docs/HW_SIGNER.md).
 
 ## Other Components
 
-### Flutter App (`app/`)
+```
+MPCWallet/
+├── app/                  Flutter mobile app
+├── app-core/             Dart client library (DKG, signing, FFI wrapper, attested transport)
+├── cosigner/             WASI cosigner component (the FROST WASM)
+├── cosigner-runtime/     Enclave runtime (described above)
+├── crates/
+│   ├── ark/              Ark protocol primitives (taproot, VTXOs, send paths)
+│   ├── threshold/        FROST + DKG core (no_std, secp256k1)
+│   ├── enclave-client/   Attestation verification + signed-response client
+│   └── embassy-rp-fork/  Forked embassy-rp with TrustZone NS support
+├── ffi/                  Merged C-ABI shared library for Dart FFI (ark + threshold + enclave)
+├── hwsigner/             RP2350 Non-Secure firmware (Embassy, USB HID)
+├── hwsigner-secure/      RP2350 Secure firmware (TrustZone, key storage, TRNG)
+├── protocol/             gRPC stubs and proto definitions
+├── infrastructure/       OpenTofu modules for enclave deployment (KMS, EC2, S3, SSM)
+├── e2e/                  End-to-end integration tests
+└── scripts/              Utilities (bitcoin.sh, test_hwsigner.py, udev rules)
+```
 
-Android wallet UI built with Provider state management and GoRouter navigation. Onboarding flow guides the user through server connection, hardware signer pairing, and DKG key generation. Supports sending/receiving Bitcoin, spending policies, and QR codes.
+### Flutter app ([app/](app/))
 
-### Client Library (`client/`)
+Android wallet UI built with Provider + GoRouter. Onboarding guides server connection, hardware signer pairing, network selection, and DKG. Supports sending/receiving Bitcoin (on-chain + Ark VTXOs), spending policies, and QR codes.
 
-High-level Dart API that orchestrates the full MPC protocol. Manages two local identities (signing + recovery), communicates with the coordination server over gRPC, drives the hardware signer over USB HID, and handles Taproot address derivation, UTXO tracking, coin selection, and PSBT construction.
+### Dart client ([app-core/](app-core/))
 
-### Threshold Library (`crates/threshold/`)
+High-level Dart API that orchestrates the full MPC protocol: drives DKG, signing, refresh, and policy operations; communicates with the cosigner runtime over **attested transport** (verifies the enclave's `PCR0` before each request); drives the hardware signer over USB HID; handles Taproot address derivation, UTXO tracking, and PSBT construction.
 
-`#![no_std]` Rust implementation of FROST over secp256k1 using the `k256` crate. Includes the full 3-round DKG protocol, Pedersen VSS, nonce commitment generation, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native, `wasm32-wasip1` (cosigner), `thumbv8m.main-none-eabihf` (hwsigner), and Dart FFI.
+### Threshold library ([crates/threshold/](crates/threshold/))
 
-### Coordination Server (`server/`)
+`#![no_std]` Rust implementation of FROST over secp256k1. Includes the full 3-round DKG, Pedersen VSS, nonce commitments, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native Rust, `wasm32-wasip1` (cosigner WASM), `thumbv8m.main-none-eabihf` (HW signer Secure world), and Dart FFI.
 
-Rust gRPC server that participates as the third identity in DKG and signing. Each user gets an isolated WASI sandbox — the server uses Wasmtime to instantiate a per-user cosigner WASM component. Routes packages between participants, aggregates signature shares, enforces spending policies, and interfaces with Bitcoin Core (RPC) and Electrs (UTXO indexing).
+## Build & Run
 
-### Cosigner (`cosigner/`)
+### Prerequisites
 
-WASI P2 Component Model guest that encapsulates all threshold cryptography on the server side. Compiled to `wasm32-wasip1` and loaded by the server into per-user Wasmtime instances.
-
-## Prerequisites
-
-- **Dart** >= 3.3
-- **Flutter** >= 3.4 (Android SDK configured)
-- **Rust** (stable + nightly toolchains)
-- **Docker** & Docker Compose
-- **ARM GNU toolchain** (`arm-none-eabi-ld`) for CMSE veneer generation
-- **picotool** (SDK version with `seal` support for Secure Boot)
-- **probe-rs** for SWD flashing via debug probe
-- **Android device** with USB OTG support (for hardware signer testing)
+- Dart ≥ 3.3, Flutter ≥ 3.4
+- Rust (stable + nightly toolchains)
+- Docker + Docker Compose
+- ARM GNU toolchain (`arm-none-eabi-ld`) — only if building HW signer firmware
+- picotool, probe-rs — only if flashing HW signer
+- Android device with USB OTG (for HW signer testing)
 
 ```bash
-# Install Rust targets
-rustup target add wasm32-wasip1                  # Cosigner WASM component
-rustup target add thumbv8m.main-none-eabihf      # HW Signer firmware
+# Rust targets the runtime + cosigner need
+rustup target add wasm32-wasip1                  # cosigner WASM
+rustup target add aarch64-linux-android          # FFI for Android arm64
+rustup target add thumbv8m.main-none-eabihf      # HW signer (only if needed)
+rustup toolchain install nightly                  # TrustZone CMSE features (HW signer only)
 
-# Install nightly (required for TrustZone CMSE features)
-rustup toolchain install nightly
-
-# Install tools
 cargo install cargo-component   # WASI component building
-cargo install probe-rs-tools    # Debug probe flash/reset
-
-# Symlink picotool with signing support
-ln -sf ~/.pico-sdk/picotool/2.2.0-a4/picotool/picotool ~/.local/bin/picotool
+cargo install probe-rs-tools    # only for HW signer flashing
 ```
 
-## Quick Start
-
-### 1. Start the regtest environment
+### Local development (regtest)
 
 ```bash
-make regtest-up       # Docker: bitcoind + electrs
-make bitcoin-init     # Mine 150 blocks
+make regtest-up        # bitcoind + electrs in Docker
+make bitcoin-init      # mine 150 blocks
+make e2e               # runs the full E2E (build cosigner WASM + runtime + e2e harness)
 ```
 
-### 2. Run the coordination server
+The local cosigner runtime runs as a plain Rust binary (no enclave, no attestation) — the WASM and actor isolation still apply. Useful for fast iteration.
+
+### Cloud deployment (signet / mutinynet / mainnet)
 
 ```bash
-make server-run       # Builds cosigner WASM + server, runs on :50051
+cd infrastructure/mutiny/tofu
+tofu apply             # provisions Nitro enclave host, KMS key, S3 buckets, SSM params
 ```
 
-### 3. Hardware Signer Setup
+The enclave EIF is built by the [release-eif](.github/workflows/release-eif.yml) GitHub Action and published to the repo's GitHub Releases. Tofu pulls the artifact, uploads it to S3, and the EC2 supervisor boots it. The client's `enclave verify` command confirms `PCR0` matches the published build before the wallet trusts the deployment.
 
-#### First-time setup (generate signing key)
+### HW signer
+
+If you want the recovery identity on real hardware:
 
 ```bash
-mkdir -p keys
-openssl ecparam -name secp256k1 -genkey -noout -out keys/ec_private_key.pem
-openssl ec -in keys/ec_private_key.pem -pubout -out keys/ec_public_key.pem
+make hw-build && make hw-flash    # builds Secure + NS, signs Secure, flashes via debug probe
+make hw-test                       # smoke test over USB HID
 ```
 
-**Back up `keys/ec_private_key.pem` securely.** If Secure Boot is enabled and you lose this key, the device is permanently bricked.
+For OTP provisioning (Secure Boot enforcement, key invalidation, glitch detection): see [HW_SIGNER.md](docs/HW_SIGNER.md). All OTP writes are permanent.
 
-#### Build, sign, and flash
+### Mobile app
 
 ```bash
-make hw-flash         # Builds both worlds, signs Secure, flashes via debug probe
+adb pair <ip>:<port>           # pair (wireless debugging)
+adb connect <ip>:<port>
+make adb-reverse               # forward server ports to phone
+cd app && flutter run          # pick "Hardware Signer (USB)" or "Software Signer" in onboarding
 ```
-
-This runs:
-1. `hw-build-secure` — builds Secure world with `cargo +nightly` (generates `target/veneers.o`)
-2. `hw-build-ns` — clean-builds NS world (links `veneers.o` for NSC symbols)
-3. `hw-sign` — signs Secure ELF with `picotool seal --sign --hash`
-4. Flashes both images via `probe-rs download`
-5. Resets the device
-
-#### Smoke test
-
-```bash
-make hw-test                    # Quick: just get_info
-make hw-test ARGS="--full-dkg"  # Full: DKG + signing with signer-server
-```
-
-Requires Python `hidapi` and the udev rule:
-
-```bash
-sudo cp scripts/99-hwsigner.rules /etc/udev/rules.d/
-sudo udevadm control --reload-rules && sudo udevadm trigger
-```
-
-### 4. Secure Boot Provisioning (irreversible — read carefully)
-
-All OTP writes are **permanent**. There is no undo. If you lose `keys/ec_private_key.pem` after enabling Secure Boot, the device is **bricked forever**.
-
-Put the device in BOOTSEL mode (hold BOOTSEL + plug in USB) for all OTP commands.
-
-#### Step 1: Prepare OTP config (remove enforcement)
-
-`make hw-sign` generates `keys/otp.json` which includes `"crit1": {"secure_boot_enable": 1}`. Remove that section so we enroll the key without enabling enforcement:
-
-```bash
-jq 'del(.crit1)' keys/otp.json > keys/otp_enroll_only.json
-```
-
-#### Step 2: Enroll signing key hash in OTP
-
-```bash
-# Burns SHA-256 hash of your public key into BOOTKEY0 (OTP rows 0x0080-0x008F).
-# These 16 rows can NEVER be changed.
-picotool otp load keys/otp_enroll_only.json
-```
-
-#### Step 3: Verify enrollment
-
-```bash
-picotool otp get BOOT_FLAGS1     # KEY_VALID should be 1
-picotool otp get BOOTKEY0_0      # Should show non-zero hash value
-picotool otp get CRIT1           # SECURE_BOOT_ENABLE should still be 0
-```
-
-#### Step 4: Invalidate unused key slots
-
-```bash
-# The RP2350 has 4 key slots (BOOTKEY0-3). We only use slot 0.
-# Invalidating slots 1-3 prevents an attacker from enrolling their own key
-# in an empty slot and signing malicious firmware.
-# KEY_INVALID bits 8-11 = 0x0E, combined with existing KEY_VALID bit 0 = 0x01.
-picotool otp set BOOT_FLAGS1 0x0e01
-```
-
-#### Step 5: Enable Secure Boot enforcement
-
-```bash
-# WARNING: This is IRREVERSIBLE.
-# After this:
-#   - Only firmware signed with your private key will boot
-#   - RISC-V cores are permanently disabled (ARM-only)
-#   - Unsigned firmware is rejected by the boot ROM
-#   - Losing ec_private_key.pem = bricked device
-picotool otp set CRIT1 0x01
-```
-
-#### Step 6: Verify Secure Boot works
-
-```bash
-# Reboot device (unplug + replug, or probe-rs reset)
-# Flash SIGNED firmware — should boot:
-make hw-flash && make hw-test
-
-# Flash UNSIGNED firmware — should be REJECTED by boot ROM:
-probe-rs download --chip RP2350 hwsigner-secure/hwsigner-secure.elf
-probe-rs reset --chip RP2350
-# Device will not enumerate on USB — boot ROM rejected unsigned image
-```
-
-#### Optional future hardening
-
-```bash
-# Disable all debug access (SWD probe will no longer work)
-picotool otp set CRIT1 0x05    # SECURE_BOOT_ENABLE + DEBUG_DISABLE
-
-# Enable glitch detection (hardware defense against fault injection)
-picotool otp set CRIT1 0x11    # SECURE_BOOT_ENABLE + GLITCH_DETECTOR_ENABLE
-```
-
-### 5. Mobile app testing
-
-```bash
-adb pair <ip>:<pairing-port>     # Pair once (wireless debugging)
-adb connect <ip>:<connect-port>
-make adb-reverse                  # Forward ports to PC
-cd app && flutter run             # Select "Hardware Signer (USB)" in onboarding
-```
-
-Connect the signer to the phone via USB OTG adapter. The app will auto-discover it.
-
-## USB HID Protocol
-
-Messages between the phone and hardware signer are split into 64-byte HID reports:
-
-```
-First report:  [channel:2][cmd:1][seq:2][total_len:2][payload:57B]
-Continuation:  [channel:2][cmd:1][seq:2][payload:59B]
-```
-
-Channel `0x0101`, command `0x05` (MSG). Sequence numbers are big-endian `u16`. Last packet zero-padded. Strictly request-response.
-
-### Commands
-
-| Command | Description |
-|---------|-------------|
-| `dkg_init` | Initialize DKG round 1 |
-| `dkg_round2` | Process round 1 packages, generate round 2 output |
-| `dkg_round3` | Finalize with round 2 packages, derive key material |
-| `generate_nonce` | Create ephemeral nonce pair for signing |
-| `sign` | Generate signature share |
-| `get_info` | Query key material status |
 
 ## Testing
 
 ```bash
-make threshold-test               # Threshold library unit tests (Rust)
-make ffi-test                     # Merged FFI tests (ark + threshold + enclave)
-make e2e                          # Full E2E test (builds all deps, starts Docker)
-make e2e-ark                      # Ark E2E test
-make hw-test ARGS="--full-dkg"    # HW Signer firmware over USB HID
-make crypto-bench                 # Cryptography benchmarks (Criterion)
-make stress-test                  # Multi-user E2E stress test
+make threshold-test               # threshold library unit tests
+make ffi-test                     # merged FFI tests
+make e2e                          # full E2E (regtest + cosigner runtime + Dart e2e)
+make e2e-ark                      # Ark E2E
+make hw-test ARGS="--full-dkg"    # HW signer firmware over USB HID
+make crypto-bench                 # cryptography benchmarks (Criterion)
+make stress-test                  # multi-user E2E stress test
 ```
 
-## Makefile Reference
+## Security model summary
 
-| Target | Description |
-|--------|-------------|
-| **Primary** | |
-| `e2e` | Run E2E test (no Ark) |
-| `e2e-ark` | Run Ark E2E test |
-| `hardware` | Start regtest for hardware device (no Ark) |
-| `hardware-ark` | Start regtest for hardware device with Ark |
-| `down` | Stop everything |
-| **HW Signer** | |
-| `hw-build` | Build both TrustZone worlds (Secure + NS) |
-| `hw-sign` | Sign Secure world firmware (ECDSA secp256k1 + SHA-256) |
-| `hw-flash` | Build, sign, flash via debug probe |
-| `hw-test` | Smoke test over USB HID (`ARGS="--full-dkg"` for full test) |
-| **Build** | |
-| `server-build` | Build the Rust gRPC server |
-| `cosigner-build` | Build WASM cosigner component |
-| `ffi-build` | Build merged FFI shared library (`libmpcwallet_ffi.so`: ark + threshold + enclave) |
-| `ffi-android` | Build merged FFI for Android arm64 |
-| `ffi-android-arm32` | Build merged FFI for Android arm32 |
-| **Infrastructure** | |
-| `regtest-up` | Start bitcoind + electrs via Docker Compose |
-| `server-run` | Build and run server on :50051 |
-| `signer-run` | Build and run test signer-server on :9090 |
-| `adb-reverse` | Forward ports from phone to PC |
-| `proto` | Regenerate Dart gRPC stubs |
-
-## Security Model
-
-- The **full private key never exists** on any single device.
-- The **hardware signer's secret share** is stored in TrustZone Secure flash — inaccessible from the NS world (USB attack surface) via SAU hardware enforcement.
-- The **TRNG peripheral** is Secure-only — the NS world cannot access the hardware random number generator.
-- **ACCESSCTRL is locked** after configuration — NS code cannot reconfigure peripheral security.
-- **Secure Boot** verifies firmware signatures against an OTP-burned public key hash before execution.
-- **SG veneers** are the only entry points from NS to Secure — the NS world can only call `nsc_init()` and `nsc_process()`.
-- The **server cannot unilaterally sign** — it always needs cooperation from the phone or hardware signer.
-- Each user's server-side key share runs in an **isolated WASM sandbox** (Wasmtime).
-- Signing requests are **authenticated** with Schnorr signatures over timestamped messages.
-- Policy changes require a **recovery signature** from the hardware signer.
+- **The full private key never exists on any single device.** 2-of-3 threshold; loss of any one share is recoverable.
+- **The cosigner cannot unilaterally sign.** It always needs cooperation from the phone or hardware signer.
+- **The cosigner runs in a Nitro Enclave with attested boot.** Clients refuse to send DKG packets to a runtime whose `PCR0` doesn't match a known build.
+- **KMS keys are locked to the enclave's `PCR0`.** A modified runtime can't decrypt user secrets even if it has the same IAM role.
+- **Per-user FROST share runs in an isolated WASM sandbox** (Wasmtime) — memory and fault isolation between users.
+- **Per-user actor task** — no shared mutable state, no locks, slow users can't block others.
+- **The hardware signer's share is in TrustZone Secure flash** — inaccessible from the USB attack surface via SAU hardware enforcement.
+- **All MPC requests are authenticated** with Schnorr signatures over timestamped messages (replay window enforced).
+- **Policy changes require a recovery signature** from the hardware signer.
 
 ## References
 
 - [FROST: Flexible Round-Optimized Schnorr Threshold Signatures](https://eprint.iacr.org/2020/852)
 - [BIP-340: Schnorr Signatures for secp256k1](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)
 - [BIP-341: Taproot](https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki)
+- [WASI Component Model](https://component-model.bytecodealliance.org/)
+- [Wasmtime](https://wasmtime.dev/)
+- [AWS Nitro Enclaves](https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html)
+- [introspector-enclave](https://github.com/ArkLabsHQ/introspector-enclave) — enclave host/runtime plumbing
 - [ARMv8-M TrustZone](https://developer.arm.com/Architectures/TrustZone)
 - [RP2350 Datasheet](https://datasheets.raspberrypi.com/rp2350/rp2350-datasheet.pdf)
-- [Embassy: Async embedded framework for Rust](https://embassy.dev/)
-- [WASI Component Model](https://component-model.bytecodealliance.org/)
 
 ## License
 
-This project is part of the Bitspend Payment ecosystem.
+Part of the Bitspend Payment ecosystem.
