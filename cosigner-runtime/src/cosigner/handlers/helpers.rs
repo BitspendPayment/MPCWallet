@@ -11,7 +11,6 @@ use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::cosigner::wasm::CosignerInstance;
 
@@ -152,11 +151,10 @@ fn try_load_policy(
 }
 
 /// Persist policy state, the recovery-id index, and the DKG secret.
-/// Also updates the registry's in-memory `recovery_idx` so concurrent restore
-/// flows can find this policy without restarting the process.
+/// Recovery lookups read `policy_recovery_idx` from sled directly — no
+/// in-memory cache to keep in sync.
 pub fn persist_policy(
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     user_id_hex: &str,
     policy: &PolicyState,
 ) -> Result<(), Status> {
@@ -179,8 +177,6 @@ pub fn persist_policy(
                 "persist policy_recovery_idx/{} failed: {e}",
                 policy.recovery_id
             );
-        } else {
-            registry.set_recovery_id(&policy.recovery_id, user_id_hex);
         }
     }
     if let Some(ref secret) = policy.server_dkg_secret_hex {

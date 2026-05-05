@@ -52,7 +52,6 @@ pub fn get_ark_info(
     _user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: GetArkInfoRequest,
 ) -> Result<GetArkInfoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -315,7 +314,6 @@ pub fn check_boarding_balance(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: CheckBoardingBalanceRequest,
 ) -> Result<CheckBoardingBalanceResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -376,7 +374,6 @@ pub fn list_vtxos(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: ListVtxosRequest,
 ) -> Result<ListVtxosResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -438,7 +435,6 @@ pub fn list_ark_transactions(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: ListArkTransactionsRequest,
 ) -> Result<ListArkTransactionsResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);

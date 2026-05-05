@@ -219,7 +219,16 @@ ffi-android-arm32: ## Build merged FFI for Android arm32 (armv7)
 		app/android/app/src/main/jniLibs/armeabi-v7a/
 	@echo "Installed: app/android/app/src/main/jniLibs/armeabi-v7a/libmpcwallet_ffi.so"
 
-ffi-android-all: ffi-android ffi-android-arm32   # arm64 + arm32
+ffi-android-x86_64: ## Build merged FFI for Android x86_64 (emulator on Intel/AMD hosts)
+	@echo "Building merged FFI for Android x86_64..."
+	export PATH="$(NDK_HOME)/toolchains/llvm/prebuilt/linux-x86_64/bin:$$PATH" && \
+	cargo build --release --manifest-path ffi/Cargo.toml --target x86_64-linux-android
+	mkdir -p app/android/app/src/main/jniLibs/x86_64
+	cp ffi/target/x86_64-linux-android/release/libmpcwallet_ffi.so \
+		app/android/app/src/main/jniLibs/x86_64/
+	@echo "Installed: app/android/app/src/main/jniLibs/x86_64/libmpcwallet_ffi.so"
+
+ffi-android-all: ffi-android ffi-android-arm32 ffi-android-x86_64   # arm64 + arm32 + x86_64
 
 ffi-test:
 	@echo "Running merged FFI tests..."
@@ -333,6 +342,9 @@ flutter: ffi-android
 	cd app && flutter run
 
 flutter-32: ffi-android-all
+	cd app && flutter run
+
+flutter-x86: ffi-android-x86_64
 	cd app && flutter run
 
 ark-newaddress:

@@ -8,7 +8,6 @@ use crate::auth::message::{OP_REFRESH_STEP1, OP_REFRESH_STEP2, OP_REFRESH_STEP3}
 use crate::crypto_ops;
 use crate::policy::ProtectedPolicy;
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -29,7 +28,6 @@ pub fn refresh_step1(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: RefreshStep1Request,
 ) -> Result<RefreshStep1Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -181,7 +179,6 @@ pub fn refresh_step2(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: RefreshStep2Request,
 ) -> Result<RefreshStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -249,7 +246,6 @@ pub fn refresh_step3(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     req: RefreshStep3Request,
 ) -> Result<RefreshStep3Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -383,7 +379,7 @@ pub fn refresh_step3(
         if let Some(ps) = user.policy_state.as_mut() {
             ps.protected_policies
                 .insert(new_policy.id.clone(), new_policy);
-            let _ = persist_policy(shared, registry, &user_id_hex, ps);
+            let _ = persist_policy(shared, &user_id_hex, ps);
         }
         tracing::info!("[{user_id_hex}] RefreshStep3: New policy created");
     }

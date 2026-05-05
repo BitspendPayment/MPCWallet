@@ -9,7 +9,6 @@ use crate::auth::message::{
     OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE,
 };
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -72,7 +71,6 @@ pub fn send_vtxo(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: SendVtxoRequest,
 ) -> Result<SendVtxoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -257,7 +255,6 @@ pub fn redeem_vtxo(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: RedeemVtxoRequest,
 ) -> Result<RedeemVtxoResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -287,7 +284,6 @@ pub fn settle(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: SettleRequest,
 ) -> Result<SettleResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -526,7 +522,6 @@ pub fn settle_delegate(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: SettleDelegateRequest,
 ) -> Result<SettleDelegateResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -693,7 +688,6 @@ pub fn submit_ark_send(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: SubmitArkSendRequest,
 ) -> Result<SubmitArkSendResponse, Status> {
     use bitcoin::base64::{self, Engine as _};

@@ -11,7 +11,6 @@ use tonic::Status;
 use crate::crypto_ops;
 use crate::policy::{NormalPolicy, PolicyState};
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -31,7 +30,6 @@ pub fn dkg_step1(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: DkgStep1Request,
     reply: oneshot::Sender<Result<DkgStep1Response, Status>>,
 ) {
@@ -221,7 +219,6 @@ pub fn dkg_step2(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     _shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: DkgStep2Request,
     reply: oneshot::Sender<Result<DkgStep2Response, Status>>,
 ) {
@@ -340,7 +337,6 @@ pub fn dkg_step3(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     req: DkgStep3Request,
     reply: oneshot::Sender<Result<DkgStep3Response, Status>>,
 ) {
@@ -394,7 +390,7 @@ pub fn dkg_step3(
         return;
     }
     if user.round2_secret.is_some() {
-        if let Err(e) = step3_finalize_server_key(user, shared, registry, &user_id_hex) {
+        if let Err(e) = step3_finalize_server_key(user, shared, &user_id_hex) {
             let _ = reply.send(Err(e));
             drain_pairs_with_err(&mut state.pending_dkg_step3, "step3 finalize failed");
             return;
@@ -471,7 +467,6 @@ fn step3_register(
 fn step3_finalize_server_key(
     user: &mut CosignerInstance,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     user_id_hex: &str,
 ) -> Result<(), Status> {
     tracing::info!("[{user_id_hex}] DKGStep3: Server computing KeyPackage");
@@ -559,9 +554,8 @@ fn step3_finalize_server_key(
     let recovery_id = user_recovery_id_hex.unwrap_or_default();
 
     // Restore: if this recovery_id was previously associated with another
-    // user_id, preserve their spending history (via persistence — registry's
-    // recovery_idx might be cold for an evicted actor). Then clean up the old
-    // policy entries.
+    // user_id, preserve their spending history (read straight from sled —
+    // there's no in-memory recovery index). Then clean up the old policy entries.
     let preserved_history = if !recovery_id.is_empty() {
         let mut preserved = Vec::new();
         if let Ok(Some(old_user_id)) = shared.persistence.get("policy_recovery_idx", &recovery_id) {
@@ -600,7 +594,7 @@ fn step3_finalize_server_key(
         spending_history: preserved_history,
     };
 
-    persist_policy(shared, registry, &policy_user_id, &policy_state)?;
+    persist_policy(shared, &policy_user_id, &policy_state)?;
 
     // Forward index: the URL/auth user_id used during DKG is the wallet's
     // owner pubkey, but the policy is persisted under the FROST verifying-share

@@ -28,12 +28,9 @@ pub struct CosignerRegistry {
     shared: Arc<SharedServices>,
     /// Active actors keyed by user_id_hex.
     actors: DashMap<String, OwnedHandle>,
-    /// Secondary index: recovery_id_hex → user_id_hex. Populated at startup
-    /// from `policy_recovery_idx` persistence tree, kept in sync on policy
-    /// create/update/delete.
-    recovery_idx: DashMap<String, String>,
     /// Reverse index: vtxo_script_hex → user_id_hex. Used by the global VTXO
-    /// stream to route notifications to the right actor.
+    /// stream to route notifications to the right actor without scanning
+    /// per-user persistence on every event.
     script_idx: DashMap<String, String>,
 }
 
@@ -55,7 +52,6 @@ impl CosignerRegistry {
             linker,
             shared,
             actors: DashMap::new(),
-            recovery_idx: DashMap::new(),
             script_idx: DashMap::new(),
         }))
     }
@@ -145,17 +141,12 @@ impl CosignerRegistry {
     }
 
     // -------------------------------------------------------------------
-    // Secondary indices
+    // Script ownership index — used by the global VTXO stream to route
+    // events to the right actor without per-event persistence reads.
+    // (Recovery lookups go straight to `policy_recovery_idx` in sled —
+    // there's no in-memory cache for them; the lookup is rare and the cache
+    // would have introduced a stale-after-restore-delete hazard.)
     // -------------------------------------------------------------------
-
-    pub fn user_for_recovery_id(&self, recovery_id_hex: &str) -> Option<String> {
-        self.recovery_idx.get(recovery_id_hex).map(|v| v.clone())
-    }
-
-    pub fn set_recovery_id(&self, recovery_id_hex: &str, user_id_hex: &str) {
-        self.recovery_idx
-            .insert(recovery_id_hex.to_string(), user_id_hex.to_string());
-    }
 
     pub fn user_for_script(&self, script_hex: &str) -> Option<String> {
         self.script_idx.get(script_hex).map(|v| v.clone())
@@ -166,13 +157,9 @@ impl CosignerRegistry {
             .insert(script_hex.to_string(), user_id_hex.to_string());
     }
 
-    /// Populate `recovery_idx` and `script_idx` from the persistence backend.
-    /// Called once at startup so cross-user lookups (recovery_id, vtxo script)
-    /// don't have to wake any actors.
+    /// Populate `script_idx` from the persistence backend. Called once at
+    /// startup so VTXO stream lookups don't have to wake any actors.
     pub fn load_indices_from_persistence(&self) -> Result<(), Box<dyn std::error::Error>> {
-        for (recovery_id, user_id) in self.shared.persistence.get_all("policy_recovery_idx")? {
-            self.recovery_idx.insert(recovery_id, user_id);
-        }
         for (script_hex, user_id) in self.shared.persistence.get_all("ark_script_to_user")? {
             self.script_idx.insert(script_hex, user_id);
         }

@@ -42,6 +42,23 @@ where
 /// reply oneshot. Captures the current span and re-enters it inside
 /// `spawn_blocking` so the handler's instrumented span stays in the trace tree.
 macro_rules! dispatch {
+    ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
+        let s = $shared.clone();
+        let span = tracing::Span::current();
+        let (u, st, res) = run_blocking($user, $state, move |user, state| {
+            let _enter = span.enter();
+            $handler(user, state, &s, $req)
+        })
+        .await;
+        $user = u;
+        $state = st;
+        let _ = $reply.send(res);
+    }};
+}
+
+/// Like `dispatch!` but also passes a registry handle. Only used by the two
+/// ark address handlers that need to update `script_idx` for VTXO routing.
+macro_rules! dispatch_with_registry {
     ($user:ident, $state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
         let r = $registry.clone();
@@ -60,15 +77,14 @@ macro_rules! dispatch {
 /// Rendezvous dispatch: handler owns the reply sender so it can fire inline or
 /// stash it in `CosignerState.pending_*`. Used by multi-participant flows (DKG).
 macro_rules! dispatch_rendezvous {
-    ($user:ident, $state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
+    ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
-        let r = $registry.clone();
         let span = tracing::Span::current();
         let (u, st) = tokio::task::spawn_blocking(move || {
             let _enter = span.enter();
             let mut user = $user;
             let mut state = $state;
-            $handler(&mut user, &mut state, &s, &r, $req, $reply);
+            $handler(&mut user, &mut state, &s, $req, $reply);
             (user, state)
         })
         .await
@@ -91,137 +107,89 @@ pub async fn run_actor(
 
             // -------- Policy --------
             CosignerCommand::GetPolicyId { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::policy::get_policy_id
-                );
+                dispatch!(user, state, shared, req, reply, handlers::policy::get_policy_id);
             }
             CosignerCommand::UpdatePolicy { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::policy::update_policy
-                );
+                dispatch!(user, state, shared, req, reply, handlers::policy::update_policy);
             }
             CosignerCommand::DeletePolicy { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::policy::delete_policy
-                );
+                dispatch!(user, state, shared, req, reply, handlers::policy::delete_policy);
             }
 
             // -------- DKG (rendezvous) --------
             CosignerCommand::DkgStep1 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step1);
+                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step1);
             }
             CosignerCommand::DkgStep2 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step2);
+                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step2);
             }
             CosignerCommand::DkgStep3 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, registry, req, reply, handlers::dkg::dkg_step3);
+                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step3);
             }
 
             // -------- Signing --------
             CosignerCommand::SignStep1 { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::sign::sign_step1);
+                dispatch!(user, state, shared, req, reply, handlers::sign::sign_step1);
             }
             CosignerCommand::SignStep2 { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::sign::sign_step2);
+                dispatch!(user, state, shared, req, reply, handlers::sign::sign_step2);
             }
 
             // -------- Refresh --------
             CosignerCommand::RefreshStep1 { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step1);
+                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step1);
             }
             CosignerCommand::RefreshStep2 { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step2);
+                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step2);
             }
             CosignerCommand::RefreshStep3 { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::refresh::refresh_step3);
+                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step3);
             }
 
             // -------- Transactions --------
             CosignerCommand::BroadcastTransaction { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::tx::broadcast_transaction
-                );
+                dispatch!(user, state, shared, req, reply, handlers::tx::broadcast_transaction);
             }
             CosignerCommand::FetchHistory { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::tx::fetch_history
-                );
+                dispatch!(user, state, shared, req, reply, handlers::tx::fetch_history);
             }
             CosignerCommand::FetchRecentTransactions { req, reply } => {
-                dispatch!(
-                    user,
-                    state,
-                    shared,
-                    registry,
-                    req,
-                    reply,
-                    handlers::tx::fetch_recent_transactions
-                );
+                dispatch!(user, state, shared, req, reply, handlers::tx::fetch_recent_transactions);
             }
 
             // -------- Ark (lookups) --------
             CosignerCommand::GetArkInfo { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_ark_info);
+                dispatch!(user, state, shared, req, reply, handlers::ark::get_ark_info);
             }
             CosignerCommand::GetArkAddress { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_ark_address);
+                dispatch_with_registry!(user, state, shared, registry, req, reply, handlers::ark::get_ark_address);
             }
             CosignerCommand::GetBoardingAddress { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::get_boarding_address);
+                dispatch_with_registry!(user, state, shared, registry, req, reply, handlers::ark::get_boarding_address);
             }
             CosignerCommand::CheckBoardingBalance { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::check_boarding_balance);
+                dispatch!(user, state, shared, req, reply, handlers::ark::check_boarding_balance);
             }
             CosignerCommand::ListVtxos { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::list_vtxos);
+                dispatch!(user, state, shared, req, reply, handlers::ark::list_vtxos);
             }
             CosignerCommand::ListArkTransactions { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark::list_ark_transactions);
+                dispatch!(user, state, shared, req, reply, handlers::ark::list_ark_transactions);
             }
             CosignerCommand::SendVtxo { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::send_vtxo);
+                dispatch!(user, state, shared, req, reply, handlers::ark_send::send_vtxo);
             }
             CosignerCommand::RedeemVtxo { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::redeem_vtxo);
+                dispatch!(user, state, shared, req, reply, handlers::ark_send::redeem_vtxo);
             }
             CosignerCommand::Settle { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::settle);
+                dispatch!(user, state, shared, req, reply, handlers::ark_send::settle);
             }
             CosignerCommand::SettleDelegate { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::settle_delegate);
+                dispatch!(user, state, shared, req, reply, handlers::ark_send::settle_delegate);
             }
             CosignerCommand::SubmitArkSend { req, reply } => {
-                dispatch!(user, state, shared, registry, req, reply, handlers::ark_send::submit_ark_send);
+                dispatch!(user, state, shared, req, reply, handlers::ark_send::submit_ark_send);
             }
 
             // -------- Stream fan-in (no reply) --------

@@ -12,6 +12,7 @@ import 'screens/onboarding/password_create_screen.dart';
 import 'screens/onboarding/google_signin_screen.dart';
 import 'screens/onboarding/restore_screen.dart';
 import 'screens/settings/backup_settings_screen.dart';
+import 'screens/settings/network_settings_screen.dart';
 import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
@@ -104,6 +105,10 @@ final GoRouter _router = GoRouter(
     GoRoute(
       path: '/settings/backup',
       builder: (context, state) => const BackupSettingsScreen(),
+    ),
+    GoRoute(
+      path: '/settings/network',
+      builder: (context, state) => const NetworkSettingsScreen(),
     ),
     GoRoute(
       path: '/onboarding/dkg',

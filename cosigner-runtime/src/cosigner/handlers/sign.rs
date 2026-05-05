@@ -6,7 +6,6 @@ use crate::auth::message::{OP_SIGN_STEP1, OP_SIGN_STEP2};
 use crate::crypto_ops;
 use crate::policy::SpendingEntry;
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -23,7 +22,6 @@ pub fn sign_step1(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: SignStep1Request,
 ) -> Result<SignStep1Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -225,7 +223,6 @@ pub fn sign_step2(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     req: SignStep2Request,
 ) -> Result<SignStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -357,7 +354,7 @@ pub fn sign_step2(
                 timestamp_ms: parsers::now_ms(),
                 amount_sats: pending,
             });
-            let _ = persist_policy(shared, registry, &user_id_hex, ps);
+            let _ = persist_policy(shared, &user_id_hex, ps);
         }
     }
 

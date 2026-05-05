@@ -7,7 +7,6 @@ use crate::auth::message::{
 use crate::crypto_ops;
 use crate::policy::ProtectedPolicy;
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -22,7 +21,6 @@ pub fn get_policy_id(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: GetPolicyIdRequest,
 ) -> Result<GetPolicyIdResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -66,7 +64,6 @@ pub fn update_policy(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     req: UpdatePolicyRequest,
 ) -> Result<UpdatePolicyResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -125,7 +122,7 @@ pub fn update_policy(
 
     if let Some(ps) = user.policy_state.as_mut() {
         ps.protected_policies.insert(updated.id.clone(), updated);
-        persist_policy(shared, registry, &user_id_hex, ps)?;
+        persist_policy(shared, &user_id_hex, ps)?;
     }
 
     tracing::info!("[{user_id_hex}] UpdatePolicy: success");
@@ -137,7 +134,6 @@ pub fn delete_policy(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    registry: &CosignerRegistry,
     req: DeletePolicyRequest,
 ) -> Result<DeletePolicyResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -178,7 +174,7 @@ pub fn delete_policy(
 
     if let Some(ps) = user.policy_state.as_mut() {
         ps.protected_policies.remove(&req.policy_id);
-        persist_policy(shared, registry, &user_id_hex, ps)?;
+        persist_policy(shared, &user_id_hex, ps)?;
     }
 
     tracing::info!("[{user_id_hex}] DeletePolicy: success");

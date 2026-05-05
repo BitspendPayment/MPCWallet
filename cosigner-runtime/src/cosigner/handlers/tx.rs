@@ -6,7 +6,6 @@ use tonic::Status;
 use crate::auth::message::{OP_FETCH_HISTORY, OP_FETCH_RECENT_TXS};
 use crate::crypto_ops;
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
@@ -19,7 +18,6 @@ pub fn broadcast_transaction(
     _user: &mut CosignerInstance,
     _state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: BroadcastTransactionRequest,
 ) -> Result<BroadcastTransactionResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -40,7 +38,6 @@ pub fn fetch_history(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: FetchHistoryRequest,
 ) -> Result<FetchHistoryResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -97,7 +94,6 @@ pub fn fetch_recent_transactions(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
-    _registry: &CosignerRegistry,
     req: FetchRecentTransactionsRequest,
 ) -> Result<FetchRecentTransactionsResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
