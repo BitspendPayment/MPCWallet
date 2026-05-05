@@ -842,3 +842,20 @@ const SubmitArkSendResponse$json = const {
 
 /// Descriptor for `SubmitArkSendResponse`. Decode as a `google.protobuf.DescriptorProto`.
 final $typed_data.Uint8List submitArkSendResponseDescriptor = $convert.base64Decode('ChVTdWJtaXRBcmtTZW5kUmVzcG9uc2USGQoIYXJrX3R4aWQYASABKAlSB2Fya1R4aWQSHwoLY2hhbmdlX3R4aWQYAiABKAlSCmNoYW5nZVR4aWQSHwoLY2hhbmdlX3ZvdXQYAyABKA1SCmNoYW5nZVZvdXQSIwoNY2hhbmdlX2Ftb3VudBgEIAEoBFIMY2hhbmdlQW1vdW50');
+@$core.Deprecated('Use getServerInfoRequestDescriptor instead')
+const GetServerInfoRequest$json = const {
+  '1': 'GetServerInfoRequest',
+};
+
+/// Descriptor for `GetServerInfoRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getServerInfoRequestDescriptor = $convert.base64Decode('ChRHZXRTZXJ2ZXJJbmZvUmVxdWVzdA==');
+@$core.Deprecated('Use getServerInfoResponseDescriptor instead')
+const GetServerInfoResponse$json = const {
+  '1': 'GetServerInfoResponse',
+  '2': const [
+    const {'1': 'bitcoin_network', '3': 1, '4': 1, '5': 9, '10': 'bitcoinNetwork'},
+  ],
+};
+
+/// Descriptor for `GetServerInfoResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List getServerInfoResponseDescriptor = $convert.base64Decode('ChVHZXRTZXJ2ZXJJbmZvUmVzcG9uc2USJwoPYml0Y29pbl9uZXR3b3JrGAEgASgJUg5iaXRjb2luTmV0d29yaw==');

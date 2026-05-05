@@ -93,6 +93,10 @@ class GrpcWalletApi implements WalletApi {
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) =>
       _stub.submitArkSend(r);
 
+  @override
+  Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) =>
+      _stub.getServerInfo(r);
+
   /// Server streaming RPC (gRPC only, not part of WalletApi interface).
   Stream<TransactionNotification> subscribeToHistory(
           SubscribeToHistoryRequest r) =>

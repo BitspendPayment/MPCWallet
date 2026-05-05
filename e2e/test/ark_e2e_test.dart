@@ -182,6 +182,9 @@ void main() {
         'BITCOIN_RPC_USER': 'admin1',
         'BITCOIN_RPC_PASSWORD': '123',
         'ASP_URL': 'http://127.0.0.1:7070',
+        // Asserted by the GetServerInfo test below — set explicitly so the
+        // expectation isn't dependent on the cosigner-runtime default.
+        'BITCOIN_NETWORK': 'regtest',
         'HOME': serverTempDir.path,
       },
     );
@@ -240,6 +243,25 @@ void main() {
       await tempDir.delete(recursive: true);
     } catch (_) {}
   });
+
+  // Server is the source of truth for `bitcoin_network`; the client fetches
+  // it via this RPC at the moment a wallet is constructed (see
+  // `MpcService.restoreSession` / `doDkg` / `doRestore`). Verifies the wire
+  // shape: unauthenticated, no DKG required, returns whatever the runtime
+  // was started with.
+  test('GetServerInfo returns the configured bitcoin_network', () async {
+    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await signer.connect();
+    final client = createClient(signer);
+
+    final info = await client.getServerInfo();
+    print('   bitcoin_network=${info.bitcoinNetwork}');
+    expect(info.bitcoinNetwork, equals('regtest'),
+        reason:
+            'Server should echo back BITCOIN_NETWORK env var (set to "regtest" '
+            'in the test harness). If this fails, either the env wiring or the '
+            'GetServerInfo handler is broken.');
+  }, timeout: Timeout(Duration(minutes: 1)));
 
   test('Ark: DKG + GetArkInfo + GetArkAddress + GetBoardingAddress', () async {
     // 1. DKG Setup

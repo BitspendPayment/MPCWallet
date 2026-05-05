@@ -50,6 +50,9 @@ abstract class WalletApi {
       SettleDelegateRequest request);
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest request);
 
+  // Deployment metadata. Unauthenticated.
+  Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request);
+
   /// Shutdown the underlying connection.
   Future<void> shutdown();
 }

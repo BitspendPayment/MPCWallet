@@ -131,8 +131,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(7074)
     });
+    let app_state = rest_api::AppState {
+        registry: registry.clone(),
+        server_info: std::sync::Arc::new(
+            cosigner_runtime::wallet_proto::GetServerInfoResponse {
+                bitcoin_network: cfg.bitcoin_network.clone(),
+            },
+        ),
+    };
     let rest_app = axum::Router::new()
-        .nest("/api", rest_api::routes(registry.clone()))
+        .nest("/api", rest_api::routes(app_state))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::cors::CorsLayer::permissive());
     let rest_addr = format!("0.0.0.0:{rest_port}");

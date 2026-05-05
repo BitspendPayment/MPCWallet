@@ -4417,3 +4417,79 @@ class SubmitArkSendResponse extends $pb.GeneratedMessage {
   void clearChangeAmount() => clearField(4);
 }
 
+class GetServerInfoRequest extends $pb.GeneratedMessage {
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'GetServerInfoRequest', package: const $pb.PackageName(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..hasRequiredFields = false
+  ;
+
+  GetServerInfoRequest._() : super();
+  factory GetServerInfoRequest() => create();
+  factory GetServerInfoRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory GetServerInfoRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  GetServerInfoRequest clone() => GetServerInfoRequest()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  GetServerInfoRequest copyWith(void Function(GetServerInfoRequest) updates) => super.copyWith((message) => updates(message as GetServerInfoRequest)) as GetServerInfoRequest; // ignore: deprecated_member_use
+  $pb.BuilderInfo get info_ => _i;
+  @$core.pragma('dart2js:noInline')
+  static GetServerInfoRequest create() => GetServerInfoRequest._();
+  GetServerInfoRequest createEmptyInstance() => create();
+  static $pb.PbList<GetServerInfoRequest> createRepeated() => $pb.PbList<GetServerInfoRequest>();
+  @$core.pragma('dart2js:noInline')
+  static GetServerInfoRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<GetServerInfoRequest>(create);
+  static GetServerInfoRequest? _defaultInstance;
+}
+
+class GetServerInfoResponse extends $pb.GeneratedMessage {
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'GetServerInfoResponse', package: const $pb.PackageName(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOS(1, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'bitcoinNetwork')
+    ..hasRequiredFields = false
+  ;
+
+  GetServerInfoResponse._() : super();
+  factory GetServerInfoResponse({
+    $core.String? bitcoinNetwork,
+  }) {
+    final _result = create();
+    if (bitcoinNetwork != null) {
+      _result.bitcoinNetwork = bitcoinNetwork;
+    }
+    return _result;
+  }
+  factory GetServerInfoResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory GetServerInfoResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  GetServerInfoResponse clone() => GetServerInfoResponse()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  GetServerInfoResponse copyWith(void Function(GetServerInfoResponse) updates) => super.copyWith((message) => updates(message as GetServerInfoResponse)) as GetServerInfoResponse; // ignore: deprecated_member_use
+  $pb.BuilderInfo get info_ => _i;
+  @$core.pragma('dart2js:noInline')
+  static GetServerInfoResponse create() => GetServerInfoResponse._();
+  GetServerInfoResponse createEmptyInstance() => create();
+  static $pb.PbList<GetServerInfoResponse> createRepeated() => $pb.PbList<GetServerInfoResponse>();
+  @$core.pragma('dart2js:noInline')
+  static GetServerInfoResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<GetServerInfoResponse>(create);
+  static GetServerInfoResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.String get bitcoinNetwork => $_getSZ(0);
+  @$pb.TagNumber(1)
+  set bitcoinNetwork($core.String v) { $_setString(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasBitcoinNetwork() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearBitcoinNetwork() => clearField(1);
+}
+

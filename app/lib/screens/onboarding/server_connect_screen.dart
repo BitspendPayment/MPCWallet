@@ -4,17 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../services/mpc_service.dart';
 
-/// Network values must match what `parseBitcoinNetwork` accepts in
-/// `app-core/lib/bitcoin.dart`. Adding one here without updating that switch
-/// will silently fall through to regtest and mis-encode addresses.
-const _networks = <(String value, String label)>[
-  ('mainnet', 'Mainnet'),
-  ('testnet', 'Testnet'),
-  ('signet', 'Signet'),
-  ('mutinynet', 'Mutinynet'),
-  ('regtest', 'Regtest (local dev)'),
-];
-
 class ServerConnectionScreen extends StatefulWidget {
   const ServerConnectionScreen({super.key});
 
@@ -24,7 +13,6 @@ class ServerConnectionScreen extends StatefulWidget {
 
 class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
   late final TextEditingController _urlController;
-  String _network = 'regtest';
   bool _isChecking = false;
 
   @override
@@ -43,9 +31,7 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
 
     final host = _urlController.text.trim();
     if (host.isNotEmpty) {
-      await context
-          .read<MpcService>()
-          .setHost(host: host, network: _network);
+      await context.read<MpcService>().setHost(host);
     }
 
     // Simulate network check (or in real app, we might check connectivity here)
@@ -88,23 +74,6 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                 hintText: 'e.g. 10.0.2.2 or 192.168.1.x',
               ),
               style: GoogleFonts.inter(color: Colors.white),
-            ),
-            const SizedBox(height: 16),
-            DropdownButtonFormField<String>(
-              value: _network,
-              decoration: const InputDecoration(
-                labelText: 'Bitcoin Network',
-                prefixIcon: Icon(Icons.public),
-              ),
-              dropdownColor: const Color(0xFF1E1E1E),
-              style: GoogleFonts.inter(color: Colors.white),
-              items: [
-                for (final (value, label) in _networks)
-                  DropdownMenuItem(value: value, child: Text(label)),
-              ],
-              onChanged: (v) {
-                if (v != null) setState(() => _network = v);
-              },
             ),
             const Spacer(),
             ElevatedButton(

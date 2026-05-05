@@ -307,6 +307,14 @@ class MpcClient {
   threshold.KeyPackage? get keyPackage2 => _recoveryPolicy?.keyPackage;
   threshold.PublicKeyPackage? get publicKey => _normalPolicy?.publicKeyPackage;
 
+  // --- SERVER METADATA ---
+
+  /// Fetch the server's deployment metadata (Bitcoin network).
+  /// Unauthenticated; safe to call before DKG completes.
+  Future<GetServerInfoResponse> getServerInfo() async {
+    return _stub.getServerInfo(GetServerInfoRequest());
+  }
+
   // --- DKG ---
 
   /// DKG: only the hardware signer and server contribute secrets (dealers).

@@ -170,6 +170,12 @@ class MPCWalletClient extends $grpc.Client {
           ($0.SubmitArkSendRequest value) => value.writeToBuffer(),
           ($core.List<$core.int> value) =>
               $0.SubmitArkSendResponse.fromBuffer(value));
+  static final _$getServerInfo =
+      $grpc.ClientMethod<$0.GetServerInfoRequest, $0.GetServerInfoResponse>(
+          '/mpc_wallet.MPCWallet/GetServerInfo',
+          ($0.GetServerInfoRequest value) => value.writeToBuffer(),
+          ($core.List<$core.int> value) =>
+              $0.GetServerInfoResponse.fromBuffer(value));
 
   MPCWalletClient($grpc.ClientChannel channel,
       {$grpc.CallOptions? options,
@@ -328,6 +334,12 @@ class MPCWalletClient extends $grpc.Client {
       $0.SubmitArkSendRequest request,
       {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$submitArkSend, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.GetServerInfoResponse> getServerInfo(
+      $0.GetServerInfoRequest request,
+      {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$getServerInfo, request, options: options);
   }
 }
 
@@ -549,6 +561,15 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.SubmitArkSendRequest.fromBuffer(value),
             ($0.SubmitArkSendResponse value) => value.writeToBuffer()));
+    $addMethod(
+        $grpc.ServiceMethod<$0.GetServerInfoRequest, $0.GetServerInfoResponse>(
+            'GetServerInfo',
+            getServerInfo_Pre,
+            false,
+            false,
+            ($core.List<$core.int> value) =>
+                $0.GetServerInfoRequest.fromBuffer(value),
+            ($0.GetServerInfoResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.DKGStep1Response> dKGStep1_Pre(
@@ -696,6 +717,12 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return submitArkSend(call, await request);
   }
 
+  $async.Future<$0.GetServerInfoResponse> getServerInfo_Pre(
+      $grpc.ServiceCall call,
+      $async.Future<$0.GetServerInfoRequest> request) async {
+    return getServerInfo(call, await request);
+  }
+
   $async.Future<$0.DKGStep1Response> dKGStep1(
       $grpc.ServiceCall call, $0.DKGStep1Request request);
   $async.Future<$0.DKGStep2Response> dKGStep2(
@@ -748,4 +775,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
       $grpc.ServiceCall call, $0.SettleDelegateRequest request);
   $async.Future<$0.SubmitArkSendResponse> submitArkSend(
       $grpc.ServiceCall call, $0.SubmitArkSendRequest request);
+  $async.Future<$0.GetServerInfoResponse> getServerInfo(
+      $grpc.ServiceCall call, $0.GetServerInfoRequest request);
 }

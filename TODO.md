@@ -233,6 +233,31 @@ this entire file.
 
 ## 3. Plan A — Server is the source of truth for `bitcoin_network`
 
+**Status:** ✅ fixed.
+
+* Server: `rpc GetServerInfo` added to
+  [protocol/protos/mpc_wallet.proto](protocol/protos/mpc_wallet.proto);
+  unauthenticated handler in
+  [cosigner-runtime/src/rest_api.rs](cosigner-runtime/src/rest_api.rs)
+  serves `bitcoin_network` from `ServerConfig`.
+  `AppState` widened to a struct with `FromRef` impls so existing handlers
+  keep extracting `Arc<CosignerRegistry>` unchanged.
+* Client: `getServerInfo()` added through the api stack
+  (`WalletApi` / `RestWalletApi` / `GrpcWalletApi` / `AttestedWalletApi` /
+  `MpcClient`); `RestWalletApi` gained a `_get` helper for the new
+  unauthenticated GET endpoint.
+* MpcService: dropped `_network` field, the `'network'` Hive read/write,
+  the `network` getter, the `setNetwork` setter. `setHost` is single-arg
+  again. The three wallet-construction sites in `doDkg` / `doRestore` /
+  `restoreSession` now call `_client!.getServerInfo()` and pass
+  `serverInfo.bitcoinNetwork` to `MpcBitcoinWallet` as a local variable.
+* UI: dropdown removed from `server_connect_screen.dart`,
+  `network_settings_screen.dart` deleted, `/settings/network` route gone,
+  globe `IconButton` removed from `home_screen.dart`.
+
+The Hive `'network'` key from older installs is left as harmless leftover
+data (init no longer reads it).
+
 ### Context
 
 The Dart app currently keeps a `_network` field in `MpcService`, persisted in

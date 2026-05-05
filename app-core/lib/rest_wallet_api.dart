@@ -63,6 +63,20 @@ class RestWalletApi implements WalletApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  /// GET helper for unauthenticated read-only endpoints (e.g. /server-info).
+  /// Falls back to a POST through `customPost` when one is configured, since
+  /// the enclave-FFI transport only models POST.
+  Future<Map<String, dynamic>> _get(String path) async {
+    if (customPost != null) {
+      return customPost!(path, {});
+    }
+    final resp = await _http!.get(Uri.parse('$baseUrl$path'));
+    if (resp.statusCode != 200) {
+      throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   /// Common auth fields present on most requests.
   Map<String, dynamic> _authFields(
       List<int> userId, List<int> signature, Int64 timestampMs) {
@@ -490,6 +504,13 @@ class RestWalletApi implements WalletApi {
       ..changeTxid = resp['change_txid'] as String? ?? ''
       ..changeVout = (resp['change_vout'] as num?)?.toInt() ?? 0
       ..changeAmount = Int64(resp['change_amount'] as int? ?? 0);
+  }
+
+  @override
+  Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) async {
+    final resp = await _get('/api/server-info');
+    return GetServerInfoResponse()
+      ..bitcoinNetwork = resp['bitcoin_network'] as String? ?? '';
   }
 
   @override

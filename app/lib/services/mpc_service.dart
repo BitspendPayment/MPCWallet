@@ -28,7 +28,6 @@ class MpcService extends ChangeNotifier {
   bool _dkgComplete = false;
   bool _isConnected = false;
   Box? _identityBox;
-  String _network = 'regtest';
 
   String? _storageId;
 
@@ -222,15 +221,17 @@ class MpcService extends ChangeNotifier {
       }
 
       _dkgComplete = _identityBox!.get('dkgComplete', defaultValue: false);
-      // Network is set explicitly via setHost() at server-connect time; we
-      // just read what was persisted. The default 'regtest' covers fresh
-      // installs that haven't reached the connect screen yet.
-      _network = _identityBox!.get('network', defaultValue: 'regtest') as String;
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
         await _identityBox!.put('storageId', _storageId);
       }
+
+      // Migrate from the old client-side network selection: the wallet
+      // network now comes from the server via `getServerInfo()`, so any
+      // persisted 'network' key from prior versions is dead weight.
+      // No-op if the key isn't present.
+      await _identityBox!.delete('network');
 
       // Restore signer kind. Default to software (hardware signer is opt-in
       // for users who own the device).
@@ -268,14 +269,14 @@ class MpcService extends ChangeNotifier {
     super.dispose();
   }
 
-  /// Set the server endpoint and the Bitcoin network this deployment uses.
-  /// Both must be specified by the user — there is no inference.
-  Future<void> setHost({required String host, required String network}) async {
-    if (_host == host && _network == network && _isInitialized) return;
+  /// Set the server endpoint. The Bitcoin network is no longer carried in
+  /// app state — it's fetched from the server via `getServerInfo()` at the
+  /// moment the wallet is constructed (see `restoreSession`/`doDkg`).
+  Future<void> setHost(String host) async {
+    if (_host == host && _isInitialized) return;
 
-    debugPrint("MPC Service: Switching host to $host (network: $network)");
+    debugPrint("MPC Service: Switching host to $host");
     _host = host;
-    _network = network;
 
     // Remote hosts require attestation. If we switched in from a local host
     // where manifest fetch was skipped or silently failed, refresh now so the
@@ -290,35 +291,6 @@ class MpcService extends ChangeNotifier {
       _identityBox = await Hive.openBox('mpc_service_identity');
     }
     await _identityBox!.put('serverHost', host);
-    await _identityBox!.put('network', network);
-  }
-
-  /// Currently configured Bitcoin network (e.g. 'mutinynet', 'signet').
-  /// Settings UI reads this to populate the network selector.
-  String get network => _network;
-
-  /// Change the rendering network for an existing wallet. Persists the
-  /// choice and rebuilds `_wallet` so its final `networkName` field reflects
-  /// the new value. Requires DKG to have already completed; for fresh
-  /// installs use `setHost(...)` instead.
-  Future<void> setNetwork(String network) async {
-    if (_network == network) return;
-    if (!_dkgComplete) {
-      throw StateError('Cannot change network before DKG completes');
-    }
-
-    debugPrint("MPC Service: Changing network to $network");
-    _network = network;
-
-    await _ensurePersistenceInitialized();
-    if (_identityBox == null || !_identityBox!.isOpen) {
-      _identityBox = await Hive.openBox('mpc_service_identity');
-    }
-    await _identityBox!.put('network', network);
-
-    // Rebuild the wallet so its `final` networkName picks up the new value.
-    // Reuse restoreSession which constructs a fresh _wallet from current state.
-    await restoreSession();
   }
 
   /// For hardware mode: return a live USB signer. For software mode we
@@ -400,8 +372,9 @@ class MpcService extends ChangeNotifier {
         hardwareSigner: signer,
         storageId: storageId,
       );
+      final serverInfo = await _client!.getServerInfo();
       _wallet = MpcBitcoinWallet(_client!,
-          networkName: _network, storageId: storageId);
+          networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
 
       await _wallet!.init();
@@ -478,8 +451,9 @@ class MpcService extends ChangeNotifier {
           );
       debugPrint("[RESTORE] Re-DKG complete.");
 
+      final serverInfo = await _client!.getServerInfo();
       _wallet = MpcBitcoinWallet(_client!,
-          networkName: _network, storageId: storageId);
+          networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
 
       await _wallet!.init();
@@ -539,8 +513,9 @@ class MpcService extends ChangeNotifier {
       hardwareSigner: _hardwareSigner, // null for software mode — that's fine
       storageId: storageId,
     );
-    _wallet =
-        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    final serverInfo = await _client!.getServerInfo();
+    _wallet = MpcBitcoinWallet(_client!,
+        networkName: serverInfo.bitcoinNetwork, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();

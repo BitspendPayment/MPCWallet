@@ -55,6 +55,11 @@ service MPCWallet {
 
   // Ark SubmitArkSend: client-built off-chain send, server proxies to ASP.
   rpc SubmitArkSend (SubmitArkSendRequest) returns (SubmitArkSendResponse);
+
+  // Server deployment metadata. Unauthenticated — returns the cosigner-runtime's
+  // configured Bitcoin network so clients render addresses with the right HRP
+  // without having to know it themselves.
+  rpc GetServerInfo (GetServerInfoRequest) returns (GetServerInfoResponse);
 }
 
 // DKG Messages
@@ -476,4 +481,13 @@ message SubmitArkSendResponse {
     string change_txid = 2;
     uint32 change_vout = 3;
     uint64 change_amount = 4;
+}
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+    // The Bitcoin network this deployment operates on. One of: "mainnet",
+    // "testnet", "signet", "mutinynet", "regtest". Source of truth for the
+    // client's address-rendering HRP.
+    string bitcoin_network = 1;
 }
