@@ -449,6 +449,23 @@ void main() {
     expect(bobBalance1, equals(sendAmount),
         reason: 'Bob should have received exactly $sendAmount sats');
 
+    // 8c. Verify the receive shows up in Bob's transaction history.
+    // Regression guard for the `vtxo_stream::apply_stream_update` gate that
+    // previously dropped "receive" entries when any session was in flight.
+    // Without this assertion the bug was invisible — listVtxos worked fine
+    // even while listArkTransactions silently lost the row.
+    final bobHistoryAfterSend1 = await bob.listArkTransactions();
+    final receivesAfter1 = bobHistoryAfterSend1.transactions
+        .where((e) => e.txType == 'receive')
+        .toList();
+    print(
+        '   Bob history: ${bobHistoryAfterSend1.transactions.length} entries, '
+        'receives: ${receivesAfter1.length}');
+    expect(receivesAfter1, hasLength(1),
+        reason: 'Bob should have exactly 1 receive entry after first send');
+    expect(receivesAfter1.first.amountSats.toInt(), equals(sendAmount),
+        reason: 'Receive amount should match sent amount');
+
     // 9. Alice sends again to Bob (uses change VTXO from first send)
     print('9. Alice sends to Bob again');
     final sendAmount2 = 50000; // 50k sats
@@ -480,6 +497,21 @@ void main() {
     print('   Bob: balance=$bobBalance2');
     expect(bobBalance2, equals(sendAmount + sendAmount2),
         reason: 'Bob should have ${sendAmount + sendAmount2} sats total');
+
+    // 9c. Bob's history should now have two distinct receive entries — one
+    // per send. Verifies receives don't merge or get dropped on the second
+    // event when the first VTXO is being spent.
+    final bobHistoryAfterSend2 = await bob.listArkTransactions();
+    final receivesAfter2 = bobHistoryAfterSend2.transactions
+        .where((e) => e.txType == 'receive')
+        .toList();
+    print('   Bob history: ${receivesAfter2.length} receives');
+    expect(receivesAfter2, hasLength(2),
+        reason: 'Bob should have 2 receive entries after second send');
+    final totalReceived = receivesAfter2.fold<int>(
+        0, (sum, e) => sum + e.amountSats.toInt());
+    expect(totalReceived, equals(sendAmount + sendAmount2),
+        reason: 'Sum of receive amounts should match total sent');
 
     // 10. Create spending policy (limit 10k sats)
     print('10. Creating spending policy (limit 10,000 sats)');

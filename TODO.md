@@ -127,6 +127,13 @@ Two layered fixes, do both:
 
 ## 2. Server-side `ark_tx_history` drops receives during any active session
 
+**Status:** ✅ fixed — gate removed in
+[cosigner-runtime/src/cosigner/handlers/vtxo_stream.rs](cosigner-runtime/src/cosigner/handlers/vtxo_stream.rs);
+the Dart-side workaround (`_mergeWithLocalReceives`, `_localReceives`,
+load/save helpers, `dart:async` and `fixnum` imports) has been deleted from
+`MpcService`. Pending: rebuild EIF + tofu apply with the new PCR0 to ship
+the server change.
+
 ### Symptoms
 
 Incoming Ark transactions never appear in the user's Ark transaction list.

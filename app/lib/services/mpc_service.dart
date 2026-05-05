@@ -1,7 +1,5 @@
-import 'dart:async';
 import 'dart:math';
 
-import 'package:fixnum/fixnum.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
@@ -87,14 +85,6 @@ class MpcService extends ChangeNotifier {
   List<ArkTransactionSummary> _arkTransactions = [];
   List<ArkTransactionSummary> get arkTransactions => _arkTransactions;
 
-  // Synthesised "receive" entries observed during this session, keyed by the
-  // VTXO txid. Persisted in this map (not just `_arkTransactions`) so they
-  // survive the receive VTXO being spent — once a VTXO leaves `_vtxos`, we'd
-  // otherwise lose the row entirely on the next refresh. Cleared per-entry
-  // only when the server eventually picks up the receive in its own history.
-  // Workaround for the server-side ark_tx_history gate at vtxo_stream.rs:109
-  // (see TODO.md "Server-side ark_tx_history drops receives").
-  final Map<String, ArkTransactionSummary> _localReceives = {};
   int _boardingBalance = 0;
   int get boardingBalance => _boardingBalance;
   int _boardingUtxoCount = 0;
@@ -241,7 +231,6 @@ class MpcService extends ChangeNotifier {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
         await _identityBox!.put('storageId', _storageId);
       }
-      _loadLocalReceives();
 
       // Restore signer kind. Default to software (hardware signer is opt-in
       // for users who own the device).
@@ -637,82 +626,10 @@ class MpcService extends ChangeNotifier {
     if (_client == null) return;
     try {
       final resp = await _client!.listArkTransactions();
-      _arkTransactions = _mergeWithLocalReceives(resp.transactions);
+      _arkTransactions = resp.transactions;
     } catch (e) {
       debugPrint("Refresh Ark transactions failed: $e");
     }
-  }
-
-  /// Reconstruct missing "receive" entries client-side. The server's
-  /// `ark_tx_history` skips receive logging while any settle/send/delegate
-  /// session is in flight, including stale ones (see TODO.md). Until that's
-  /// fixed server-side, we synthesise the entries by:
-  ///
-  ///  1. For each currently-live VTXO whose txid isn't claimed by a server
-  ///     entry AND we haven't already cached, record a new local entry.
-  ///  2. Keep cached entries even after the underlying VTXO is spent — the
-  ///     receive happened, the user should still see it in history.
-  ///  3. Drop a cached entry only if the server eventually surfaces it in
-  ///     its own history (avoids double-listing).
-  List<ArkTransactionSummary> _mergeWithLocalReceives(
-      List<ArkTransactionSummary> serverEntries) {
-    final knownTxids = serverEntries.map((e) => e.txid).toSet();
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-    for (final v in _vtxos) {
-      if (knownTxids.contains(v.txid)) continue; // server has it
-      _localReceives.putIfAbsent(
-        v.txid,
-        () => ArkTransactionSummary(
-          txType: 'receive',
-          txid: v.txid,
-          amountSats: v.amount,
-          timestamp: Int64(now),
-        ),
-      );
-    }
-
-    // If the server eventually surfaces a receive (e.g. once the server-side
-    // gate is fixed), drop the local copy so the row isn't duplicated.
-    _localReceives.removeWhere((txid, _) => knownTxids.contains(txid));
-
-    unawaited(_saveLocalReceives());
-    return [...serverEntries, ..._localReceives.values]
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-  }
-
-  String get _localReceivesKey =>
-      'localReceives:${_storageId ?? "default"}';
-
-  /// Hydrate `_localReceives` from Hive on startup. Synchronous Hive read,
-  /// so safe to call without `await`.
-  void _loadLocalReceives() {
-    if (_identityBox == null || !_identityBox!.isOpen) return;
-    final raw = _identityBox!.get(_localReceivesKey);
-    if (raw is! Map) return;
-    for (final entry in raw.entries) {
-      final txid = entry.key;
-      final bytes = entry.value;
-      if (txid is! String || bytes is! List) continue;
-      try {
-        _localReceives[txid] = ArkTransactionSummary.fromBuffer(
-          Uint8List.fromList(bytes.cast<int>()),
-        );
-      } catch (e) {
-        debugPrint('Failed to decode local receive $txid: $e');
-      }
-    }
-  }
-
-  /// Persist `_localReceives` to Hive. Each entry is serialised to its
-  /// protobuf wire form for compactness and stability across schema changes.
-  Future<void> _saveLocalReceives() async {
-    if (_identityBox == null || !_identityBox!.isOpen) return;
-    final serialised = <String, List<int>>{};
-    for (final entry in _localReceives.entries) {
-      serialised[entry.key] = entry.value.writeToBuffer();
-    }
-    await _identityBox!.put(_localReceivesKey, serialised);
   }
 
   Future<void> refreshBoardingBalance() async {

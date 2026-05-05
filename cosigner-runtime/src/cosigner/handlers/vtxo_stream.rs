@@ -39,8 +39,16 @@ fn resolve_exit_delay(
 
 /// Apply a `VtxoStreamUpdate` (or `IndexerUpdate`) to per-user state. Removes
 /// spent entries, adds new spendable VTXOs with the correct exit_delay,
-/// persists, and appends a "receive" history entry when no active settle/send
-/// session is in flight.
+/// persists, and appends a "receive" history entry for any genuinely new VTXO.
+///
+/// Self-originated change VTXOs (from the user's own send/settle/board) are
+/// not double-counted: the `send_vtxo` and `settle` handlers push the
+/// resulting VTXO into `state.vtxos` synchronously before returning. Because
+/// the actor processes commands serially, any stream notification queued
+/// during that handler runs *after* the handler completes — so the
+/// `(txid, vout)` already-present check below short-circuits past the entire
+/// block, including the history append. No separate "active session" gate
+/// is needed.
 pub fn apply_stream_update(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
@@ -74,10 +82,6 @@ pub fn apply_stream_update(
         Err(e) => return Err(Status::internal(e)),
     };
 
-    let has_active_session = state.settle_session.is_some()
-        || state.delegate_session.is_some()
-        || state.send_session.is_some();
-
     for new in &spendable {
         if let Some(outpoint) = &new.outpoint {
             let already = state
@@ -106,23 +110,19 @@ pub fn apply_stream_update(
                 new.amount,
                 exit_delay,
             ));
-            if !has_active_session {
-                state.ark_tx_history.push(ArkTxEntry {
-                    tx_type: "receive".into(),
-                    amount_sats: new.amount as i64,
-                    txid: outpoint.txid.clone(),
-                    timestamp: now_secs(),
-                });
-            }
+            state.ark_tx_history.push(ArkTxEntry {
+                tx_type: "receive".into(),
+                amount_sats: new.amount as i64,
+                txid: outpoint.txid.clone(),
+                timestamp: now_secs(),
+            });
         }
     }
     save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
-    if !has_active_session {
-        save_user_ark_history(
-            shared.persistence.as_ref(),
-            user_id_hex,
-            &state.ark_tx_history,
-        );
-    }
+    save_user_ark_history(
+        shared.persistence.as_ref(),
+        user_id_hex,
+        &state.ark_tx_history,
+    );
     Ok(())
 }
