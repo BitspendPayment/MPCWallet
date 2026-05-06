@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download latest -p deployment.json || {
+          gh release download -p deployment.json || {
             echo "No deployment manifest found. Run the deploy workflow first."
             exit 1
           }
