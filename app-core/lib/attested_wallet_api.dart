@@ -131,6 +131,11 @@ class AttestedWalletApi implements WalletApi {
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) => _inner.getServerInfo(r);
 
   @override
+  Future<RegisterDeviceTokenResponse> registerDeviceToken(
+          RegisterDeviceTokenRequest r) =>
+      _inner.registerDeviceToken(r);
+
+  @override
   Future<void> shutdown() async {
     await _enclave.dispose();
   }

@@ -3,7 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, cosigner, persistence, rest_api, shared, telemetry, vtxo_stream,
+    bitcoin, config, cosigner, fcm_client, persistence, rest_api, shared, telemetry,
+    vtxo_stream,
 };
 
 #[derive(Parser)]
@@ -97,11 +98,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // FCM push client (optional; auto-settle still works without it).
+    let fcm = if cfg.fcm_service_account_json.trim().is_empty() {
+        tracing::warn!(
+            "FCM_SERVICE_ACCOUNT_JSON not set; push notifications disabled — \
+             auto-settle will only fire for users who open the app"
+        );
+        None
+    } else {
+        match fcm_client::FcmClient::from_service_account_json(&cfg.fcm_service_account_json) {
+            Ok(client) => {
+                tracing::info!("FCM client initialized");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::error!("FCM init failed: {e}; push notifications disabled");
+                None
+            }
+        }
+    };
+
     let shared = Arc::new(shared::SharedServices::new(
         persistence,
         secret_store,
         bitcoin_history,
         asp_client,
+        fcm,
+        cfg.auto_settle_safety_margin_secs,
     ));
 
     // WASM source: CLI > env > config default.
@@ -121,6 +144,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let shared_clone = shared.clone();
         tokio::spawn(async move {
             vtxo_stream::run_vtxo_stream(registry_clone, shared_clone).await;
+        });
+    }
+
+    // Auto-settle tick: every 60 seconds, fan TickAutoSettle out to all
+    // spawned actors. Only meaningful when ASP is configured.
+    if shared.asp_client.is_some() {
+        let registry_clone = registry.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(
+                tokio::time::MissedTickBehavior::Delay,
+            );
+            // Skip the immediate fire so existing actors have time to finish boot.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                for (user_id, handle) in registry_clone.snapshot_handles() {
+                    if let Err(e) = handle.try_send(cosigner::CosignerCommand::TickAutoSettle) {
+                        tracing::debug!("auto-settle tick: skip {user_id}: {e}");
+                    }
+                }
+            }
         });
     }
 

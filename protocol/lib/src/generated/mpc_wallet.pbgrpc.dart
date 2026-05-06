@@ -176,6 +176,12 @@ class MPCWalletClient extends $grpc.Client {
           ($0.GetServerInfoRequest value) => value.writeToBuffer(),
           ($core.List<$core.int> value) =>
               $0.GetServerInfoResponse.fromBuffer(value));
+  static final _$registerDeviceToken = $grpc.ClientMethod<
+          $0.RegisterDeviceTokenRequest, $0.RegisterDeviceTokenResponse>(
+      '/mpc_wallet.MPCWallet/RegisterDeviceToken',
+      ($0.RegisterDeviceTokenRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) =>
+          $0.RegisterDeviceTokenResponse.fromBuffer(value));
 
   MPCWalletClient($grpc.ClientChannel channel,
       {$grpc.CallOptions? options,
@@ -340,6 +346,12 @@ class MPCWalletClient extends $grpc.Client {
       $0.GetServerInfoRequest request,
       {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$getServerInfo, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.RegisterDeviceTokenResponse> registerDeviceToken(
+      $0.RegisterDeviceTokenRequest request,
+      {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$registerDeviceToken, request, options: options);
   }
 }
 
@@ -570,6 +582,15 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
             ($core.List<$core.int> value) =>
                 $0.GetServerInfoRequest.fromBuffer(value),
             ($0.GetServerInfoResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.RegisterDeviceTokenRequest,
+            $0.RegisterDeviceTokenResponse>(
+        'RegisterDeviceToken',
+        registerDeviceToken_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) =>
+            $0.RegisterDeviceTokenRequest.fromBuffer(value),
+        ($0.RegisterDeviceTokenResponse value) => value.writeToBuffer()));
   }
 
   $async.Future<$0.DKGStep1Response> dKGStep1_Pre(
@@ -723,6 +744,12 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return getServerInfo(call, await request);
   }
 
+  $async.Future<$0.RegisterDeviceTokenResponse> registerDeviceToken_Pre(
+      $grpc.ServiceCall call,
+      $async.Future<$0.RegisterDeviceTokenRequest> request) async {
+    return registerDeviceToken(call, await request);
+  }
+
   $async.Future<$0.DKGStep1Response> dKGStep1(
       $grpc.ServiceCall call, $0.DKGStep1Request request);
   $async.Future<$0.DKGStep2Response> dKGStep2(
@@ -777,4 +804,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
       $grpc.ServiceCall call, $0.SubmitArkSendRequest request);
   $async.Future<$0.GetServerInfoResponse> getServerInfo(
       $grpc.ServiceCall call, $0.GetServerInfoRequest request);
+  $async.Future<$0.RegisterDeviceTokenResponse> registerDeviceToken(
+      $grpc.ServiceCall call, $0.RegisterDeviceTokenRequest request);
 }

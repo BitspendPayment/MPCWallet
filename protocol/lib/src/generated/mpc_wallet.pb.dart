@@ -3085,6 +3085,7 @@ class ListVtxosResponse extends $pb.GeneratedMessage {
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'ListVtxosResponse', package: const $pb.PackageName(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'mpc_wallet'), createEmptyInstance: create)
     ..pc<VtxoInfo>(1, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'vtxos', $pb.PbFieldType.PM, subBuilder: VtxoInfo.create)
     ..a<$fixnum.Int64>(2, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'totalBalance', $pb.PbFieldType.OU6, defaultOrMaker: $fixnum.Int64.ZERO)
+    ..aOB(3, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'hasActiveDelegate')
     ..hasRequiredFields = false
   ;
 
@@ -3092,6 +3093,7 @@ class ListVtxosResponse extends $pb.GeneratedMessage {
   factory ListVtxosResponse({
     $core.Iterable<VtxoInfo>? vtxos,
     $fixnum.Int64? totalBalance,
+    $core.bool? hasActiveDelegate,
   }) {
     final _result = create();
     if (vtxos != null) {
@@ -3099,6 +3101,9 @@ class ListVtxosResponse extends $pb.GeneratedMessage {
     }
     if (totalBalance != null) {
       _result.totalBalance = totalBalance;
+    }
+    if (hasActiveDelegate != null) {
+      _result.hasActiveDelegate = hasActiveDelegate;
     }
     return _result;
   }
@@ -3134,6 +3139,15 @@ class ListVtxosResponse extends $pb.GeneratedMessage {
   $core.bool hasTotalBalance() => $_has(1);
   @$pb.TagNumber(2)
   void clearTotalBalance() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.bool get hasActiveDelegate => $_getBF(2);
+  @$pb.TagNumber(3)
+  set hasActiveDelegate($core.bool v) { $_setBool(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasHasActiveDelegate() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearHasActiveDelegate() => clearField(3);
 }
 
 class CheckBoardingBalanceRequest extends $pb.GeneratedMessage {
@@ -4049,6 +4063,7 @@ class SettleDelegateRequest extends $pb.GeneratedMessage {
     ..a<$core.List<$core.int>>(2, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'signature', $pb.PbFieldType.OY)
     ..aInt64(3, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'timestampMs')
     ..p<$core.List<$core.int>>(4, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'signedMessages', $pb.PbFieldType.PY)
+    ..aOB(5, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'storeOnly')
     ..hasRequiredFields = false
   ;
 
@@ -4058,6 +4073,7 @@ class SettleDelegateRequest extends $pb.GeneratedMessage {
     $core.List<$core.int>? signature,
     $fixnum.Int64? timestampMs,
     $core.Iterable<$core.List<$core.int>>? signedMessages,
+    $core.bool? storeOnly,
   }) {
     final _result = create();
     if (userId != null) {
@@ -4071,6 +4087,9 @@ class SettleDelegateRequest extends $pb.GeneratedMessage {
     }
     if (signedMessages != null) {
       _result.signedMessages.addAll(signedMessages);
+    }
+    if (storeOnly != null) {
+      _result.storeOnly = storeOnly;
     }
     return _result;
   }
@@ -4124,6 +4143,15 @@ class SettleDelegateRequest extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(4)
   $core.List<$core.List<$core.int>> get signedMessages => $_getList(3);
+
+  @$pb.TagNumber(5)
+  $core.bool get storeOnly => $_getBF(4);
+  @$pb.TagNumber(5)
+  set storeOnly($core.bool v) { $_setBool(4, v); }
+  @$pb.TagNumber(5)
+  $core.bool hasStoreOnly() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearStoreOnly() => clearField(5);
 }
 
 class SettleDelegateResponse extends $pb.GeneratedMessage {
@@ -4491,5 +4519,169 @@ class GetServerInfoResponse extends $pb.GeneratedMessage {
   $core.bool hasBitcoinNetwork() => $_has(0);
   @$pb.TagNumber(1)
   void clearBitcoinNetwork() => clearField(1);
+}
+
+class RegisterDeviceTokenRequest extends $pb.GeneratedMessage {
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'RegisterDeviceTokenRequest', package: const $pb.PackageName(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(1, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'userId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(2, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aInt64(3, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'timestampMs')
+    ..aOS(4, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'fcmToken')
+    ..aOS(5, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'platform')
+    ..aOS(6, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'appVersion')
+    ..hasRequiredFields = false
+  ;
+
+  RegisterDeviceTokenRequest._() : super();
+  factory RegisterDeviceTokenRequest({
+    $core.List<$core.int>? userId,
+    $core.List<$core.int>? signature,
+    $fixnum.Int64? timestampMs,
+    $core.String? fcmToken,
+    $core.String? platform,
+    $core.String? appVersion,
+  }) {
+    final _result = create();
+    if (userId != null) {
+      _result.userId = userId;
+    }
+    if (signature != null) {
+      _result.signature = signature;
+    }
+    if (timestampMs != null) {
+      _result.timestampMs = timestampMs;
+    }
+    if (fcmToken != null) {
+      _result.fcmToken = fcmToken;
+    }
+    if (platform != null) {
+      _result.platform = platform;
+    }
+    if (appVersion != null) {
+      _result.appVersion = appVersion;
+    }
+    return _result;
+  }
+  factory RegisterDeviceTokenRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory RegisterDeviceTokenRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  RegisterDeviceTokenRequest clone() => RegisterDeviceTokenRequest()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  RegisterDeviceTokenRequest copyWith(void Function(RegisterDeviceTokenRequest) updates) => super.copyWith((message) => updates(message as RegisterDeviceTokenRequest)) as RegisterDeviceTokenRequest; // ignore: deprecated_member_use
+  $pb.BuilderInfo get info_ => _i;
+  @$core.pragma('dart2js:noInline')
+  static RegisterDeviceTokenRequest create() => RegisterDeviceTokenRequest._();
+  RegisterDeviceTokenRequest createEmptyInstance() => create();
+  static $pb.PbList<RegisterDeviceTokenRequest> createRepeated() => $pb.PbList<RegisterDeviceTokenRequest>();
+  @$core.pragma('dart2js:noInline')
+  static RegisterDeviceTokenRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RegisterDeviceTokenRequest>(create);
+  static RegisterDeviceTokenRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get userId => $_getN(0);
+  @$pb.TagNumber(1)
+  set userId($core.List<$core.int> v) { $_setBytes(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasUserId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUserId() => clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get signature => $_getN(1);
+  @$pb.TagNumber(2)
+  set signature($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasSignature() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearSignature() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get timestampMs => $_getI64(2);
+  @$pb.TagNumber(3)
+  set timestampMs($fixnum.Int64 v) { $_setInt64(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasTimestampMs() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearTimestampMs() => clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.String get fcmToken => $_getSZ(3);
+  @$pb.TagNumber(4)
+  set fcmToken($core.String v) { $_setString(3, v); }
+  @$pb.TagNumber(4)
+  $core.bool hasFcmToken() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearFcmToken() => clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.String get platform => $_getSZ(4);
+  @$pb.TagNumber(5)
+  set platform($core.String v) { $_setString(4, v); }
+  @$pb.TagNumber(5)
+  $core.bool hasPlatform() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearPlatform() => clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get appVersion => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set appVersion($core.String v) { $_setString(5, v); }
+  @$pb.TagNumber(6)
+  $core.bool hasAppVersion() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearAppVersion() => clearField(6);
+}
+
+class RegisterDeviceTokenResponse extends $pb.GeneratedMessage {
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'RegisterDeviceTokenResponse', package: const $pb.PackageName(const $core.bool.fromEnvironment('protobuf.omit_message_names') ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOB(1, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'ok')
+    ..hasRequiredFields = false
+  ;
+
+  RegisterDeviceTokenResponse._() : super();
+  factory RegisterDeviceTokenResponse({
+    $core.bool? ok,
+  }) {
+    final _result = create();
+    if (ok != null) {
+      _result.ok = ok;
+    }
+    return _result;
+  }
+  factory RegisterDeviceTokenResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory RegisterDeviceTokenResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  RegisterDeviceTokenResponse clone() => RegisterDeviceTokenResponse()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  RegisterDeviceTokenResponse copyWith(void Function(RegisterDeviceTokenResponse) updates) => super.copyWith((message) => updates(message as RegisterDeviceTokenResponse)) as RegisterDeviceTokenResponse; // ignore: deprecated_member_use
+  $pb.BuilderInfo get info_ => _i;
+  @$core.pragma('dart2js:noInline')
+  static RegisterDeviceTokenResponse create() => RegisterDeviceTokenResponse._();
+  RegisterDeviceTokenResponse createEmptyInstance() => create();
+  static $pb.PbList<RegisterDeviceTokenResponse> createRepeated() => $pb.PbList<RegisterDeviceTokenResponse>();
+  @$core.pragma('dart2js:noInline')
+  static RegisterDeviceTokenResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<RegisterDeviceTokenResponse>(create);
+  static RegisterDeviceTokenResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get ok => $_getBF(0);
+  @$pb.TagNumber(1)
+  set ok($core.bool v) { $_setBool(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasOk() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearOk() => clearField(1);
 }
 

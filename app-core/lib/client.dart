@@ -1321,10 +1321,13 @@ class MpcClient {
 
   /// Settle existing VTXOs using the delegate pattern.
   ///
-  /// Only 2 rounds vs 4 for boarding:
-  /// Phase 1: get all sighashes (intent proof + forfeit PSBTs)
-  /// Phase 2: send FROST signatures, server drives batch autonomously
-  Future<String> settleDelegate() async {
+  /// Two rounds. Phase 1 fetches sighashes; phase 2 sends FROST signatures.
+  /// When [storeOnly] is true, the cosigner stores the signed intent and
+  /// drives the batch later when the auto-settle threshold is met
+  /// (returns DELEGATED, commitment txid is empty). When false, the cosigner
+  /// joins the next batch immediately (returns SETTLED with the commitment
+  /// txid).
+  Future<String> settleDelegate({bool storeOnly = false}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settleDelegate.");
     }
@@ -1370,12 +1373,14 @@ class MpcClient {
       signedMessages.add(schnorrSig.toList());
     }
 
-    // Phase 2: send signatures, server settles autonomously
+    // Phase 2: send signatures. When storeOnly, the server holds the intent
+    // and the auto-settle tick task drives it later.
     final auth2 = _authHelper!.signForSettleDelegate();
     final req2 = SettleDelegateRequest()
       ..userId = _userId!
       ..signature = auth2.signature
-      ..timestampMs = auth2.timestampMs;
+      ..timestampMs = auth2.timestampMs
+      ..storeOnly = storeOnly;
     req2.signedMessages.addAll(signedMessages);
 
     final resp2 = await _stub.settleDelegate(req2);
@@ -1383,11 +1388,36 @@ class MpcClient {
     if (resp2.status == SettleDelegateResponse_Status.ERROR) {
       throw Exception('SettleDelegate error: ${resp2.errorMessage}');
     }
-    if (resp2.status != SettleDelegateResponse_Status.SETTLED) {
-      throw Exception('Expected SETTLED, got ${resp2.status}');
+    final isDelegatedOk = storeOnly
+        ? resp2.status == SettleDelegateResponse_Status.DELEGATED
+        : resp2.status == SettleDelegateResponse_Status.SETTLED;
+    if (!isDelegatedOk) {
+      throw Exception(
+          'Expected ${storeOnly ? "DELEGATED" : "SETTLED"}, got ${resp2.status}');
     }
 
-    return resp2.commitmentTxid;
+    return resp2.commitmentTxid; // empty when DELEGATED
+  }
+
+  /// Register an FCM token so the cosigner can wake the device on receive.
+  /// Idempotent — safe to call on every login and token rotation.
+  Future<void> registerDeviceToken({
+    required String fcmToken,
+    required String platform,
+    String appVersion = '',
+  }) async {
+    if (_userId == null) {
+      throw StateError("User ID is null, cannot registerDeviceToken.");
+    }
+    final auth = _authHelper!.signForRegisterDeviceToken();
+    final req = RegisterDeviceTokenRequest()
+      ..userId = _userId!
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs
+      ..fcmToken = fcmToken
+      ..platform = platform
+      ..appVersion = appVersion;
+    await _stub.registerDeviceToken(req);
   }
 
   // --- BROADCAST ---

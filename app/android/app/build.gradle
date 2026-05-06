@@ -5,6 +5,19 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// Firebase Cloud Messaging is only wired in when google-services.json is
+// present. Without it the build still succeeds; PushService.initialize()
+// will catch the runtime Firebase init failure and fall back to the
+// open-app re-delegation path. With it, FCM is fully active.
+if (file("google-services.json").exists()) {
+    apply plugin: "com.google.gms.google-services"
+} else {
+    logger.warn("[push] google-services.json not found in app/android/app/; " +
+                "skipping com.google.gms.google-services plugin. " +
+                "FCM push notifications will be disabled at runtime — " +
+                "auto-settle still works for users who open the app.")
+}
+
 def localProperties = new Properties()
 def localPropertiesFile = rootProject.file("local.properties")
 if (localPropertiesFile.exists()) {

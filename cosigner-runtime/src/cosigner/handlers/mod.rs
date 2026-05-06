@@ -8,6 +8,8 @@
 
 pub mod ark;
 pub mod ark_send;
+pub mod auto_settle;
+pub mod device_token;
 pub mod dkg;
 pub mod helpers;
 pub mod parsers;

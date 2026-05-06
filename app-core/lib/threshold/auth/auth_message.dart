@@ -37,6 +37,7 @@ class AuthMessage {
   static const String opSettleDelegate = 'SETTLE_DELEGATE';
   static const String opListArkTxs = 'LIST_ARK_TXS';
   static const String opCheckBoardingBalance = 'CHECK_BOARDING_BALANCE';
+  static const String opRegisterDeviceToken = 'REGISTER_DEVICE_TOKEN';
 
   final String operation;
   final int timestampMs;

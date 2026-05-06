@@ -49,11 +49,13 @@ class SettleDelegateResponse_Status extends $pb.ProtobufEnum {
   static const SettleDelegateResponse_Status SIGNING_REQUIRED = SettleDelegateResponse_Status._(0, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SIGNING_REQUIRED');
   static const SettleDelegateResponse_Status SETTLED = SettleDelegateResponse_Status._(1, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SETTLED');
   static const SettleDelegateResponse_Status ERROR = SettleDelegateResponse_Status._(2, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'ERROR');
+  static const SettleDelegateResponse_Status DELEGATED = SettleDelegateResponse_Status._(3, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'DELEGATED');
 
   static const $core.List<SettleDelegateResponse_Status> values = <SettleDelegateResponse_Status> [
     SIGNING_REQUIRED,
     SETTLED,
     ERROR,
+    DELEGATED,
   ];
 
   static final $core.Map<$core.int, SettleDelegateResponse_Status> _byValue = $pb.ProtobufEnum.initByValue(values);

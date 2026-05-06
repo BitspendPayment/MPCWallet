@@ -185,6 +185,12 @@ void main() {
         // Asserted by the GetServerInfo test below — set explicitly so the
         // expectation isn't dependent on the cosigner-runtime default.
         'BITCOIN_NETWORK': 'regtest',
+        // Force the auto-settle threshold to be "always crossed" for any
+        // realistic VTXO_TREE_EXPIRY. The tick task fires when
+        // `now > expires_at - safety_margin`; with 1 hour margin and the
+        // docker-compose's 512s expiry that's always true, so the next
+        // 60-second tick after the intent is stored will drive the batch.
+        'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
         'HOME': serverTempDir.path,
       },
     );
@@ -410,9 +416,39 @@ void main() {
     expect(vtxosResp.vtxos.first.exitDelay, greaterThan(0),
         reason:
             'exit_delay must not be 0 — would produce wrong taproot tree on spend');
+    // expires_at lands asynchronously: the boarding settle handler pushes
+    // the VTXO without it (the ASP doesn't return it from the settle call),
+    // and the vtxo_stream subscription backfills it when the matching
+    // event arrives. Poll for it.
+    int expiresAt = vtxosResp.vtxos.first.expiresAt.toInt();
+    for (int i = 0; i < 20 && expiresAt == 0; i++) {
+      await Future.delayed(Duration(seconds: 1));
+      final r = await alice.listVtxos();
+      if (r.vtxos.isNotEmpty) {
+        expiresAt = r.vtxos.first.expiresAt.toInt();
+      }
+    }
+    expect(expiresAt, greaterThan(0),
+        reason:
+            'expires_at must be populated end-to-end so auto-settle can decide when to fire');
     final aliceScript = vtxosResp.vtxos.first.script;
     expect(aliceScript, isNotEmpty, reason: 'VTXO script must be populated');
     print('   Alice script: ${aliceScript.substring(0, 16)}...');
+
+    // 5b. Store-only delegate: signed intent stored on the cosigner without
+    // joining a batch. listVtxos should report the delegate as active and
+    // VTXOs unchanged.
+    print('5b. settleDelegate(storeOnly: true)');
+    final delegatedTxid = await alice.settleDelegate(storeOnly: true);
+    expect(delegatedTxid, isEmpty,
+        reason: 'DELEGATED status returns no commitment_txid');
+    final afterDelegate = await alice.listVtxos();
+    expect(afterDelegate.hasActiveDelegate, isTrue,
+        reason: 'cosigner should report delegate as active');
+    expect(afterDelegate.vtxos.length, equals(1),
+        reason: 'store-only must not consume VTXOs');
+    expect(afterDelegate.totalBalance.toInt(), equals(aliceBalanceAfterSettle),
+        reason: 'store-only must not change balance');
 
     // 6. Bob DKG
     print('6. Bob DKG');
@@ -450,6 +486,13 @@ void main() {
     expect(
         aliceAfterSend1.totalBalance.toInt(), lessThan(aliceBalanceAfterSettle),
         reason: 'Alice balance should decrease after send');
+    // The off-chain send consumed VTXOs covered by Alice's stored delegate,
+    // so the cosigner must have invalidated it. Without invalidation the
+    // auto-settle tick task would later submit signatures referencing
+    // already-spent VTXOs.
+    expect(aliceAfterSend1.hasActiveDelegate, isFalse,
+        reason:
+            'sending should invalidate any stored delegate covering the spent VTXOs');
     // Verify all Alice VTXOs have a non-empty script.
     // Note: boarding VTXOs use boarding_exit_delay, change VTXOs use
     // unilateral_exit_delay — so scripts may differ. Both must be non-empty.
@@ -610,4 +653,115 @@ void main() {
 
     print('Full Ark E2E flow complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
+
+  // Auto-settle round-trip: register a delegate intent with store_only=true,
+  // then verify the cosigner's tick task drives it to completion on its own.
+  //
+  // Requires `ARKD_VTXO_TREE_EXPIRY` short enough for the tick to cross the
+  // threshold before the test times out (the docker-compose has it at 60s).
+  // The cosigner's `AUTO_SETTLE_SAFETY_MARGIN_SECS` defaults to 1800, which
+  // means any intent fires on the next tick — no need to override in tests.
+  test('Ark: auto-settle drives stored delegate intent without client', () async {
+    print('1. Alice DKG');
+    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await aliceSigner.connect();
+    final alice = createClient(aliceSigner);
+    await alice.doDkg();
+
+    print('2. Fund boarding + settle');
+    final boardingAddress = await alice.getBoardingAddress();
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.005);
+    await btc.generateToAddress(1, minerAddr);
+    await Future.delayed(Duration(seconds: 5));
+
+    bool stillMining = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!stillMining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    try {
+      final commitment = await alice.settle();
+      expect(commitment, isNotEmpty);
+      print('   Settled commitment=$commitment');
+    } finally {
+      // Keep mining through the rest of the test — the cosigner's auto-settle
+      // submission still needs the ASP scheduler firing batches.
+    }
+
+    print('3. Snapshot original VTXO (poll until expires_at populates)');
+    String originalTxid = '';
+    int originalBalance = 0;
+    int expiresAt = 0;
+    for (int i = 0; i < 20; i++) {
+      final r = await alice.listVtxos();
+      if (r.vtxos.isNotEmpty) {
+        originalTxid = r.vtxos.first.txid;
+        originalBalance = r.totalBalance.toInt();
+        expiresAt = r.vtxos.first.expiresAt.toInt();
+      }
+      if (expiresAt > 0) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(expiresAt, greaterThan(0),
+        reason:
+            'expires_at must be populated by the vtxo_stream backfill before the tick can act');
+    print('   txid=$originalTxid balance=$originalBalance expires_at=$expiresAt');
+
+    print('4. settleDelegate(storeOnly: true) — store signed intent');
+    final delegated = await alice.settleDelegate(storeOnly: true);
+    expect(delegated, isEmpty, reason: 'DELEGATED returns no commitment_txid');
+    final afterDelegate = await alice.listVtxos();
+    expect(afterDelegate.hasActiveDelegate, isTrue);
+    expect(afterDelegate.vtxos.first.txid, equals(originalTxid),
+        reason: 'storing the intent must NOT consume the VTXO');
+
+    print(
+        '5. Wait up to 2 minutes for the cosigner tick task to drive the intent');
+    // Setup forces AUTO_SETTLE_SAFETY_MARGIN_SECS=3600, so the tick threshold
+    // is "always crossed" regardless of VTXO_TREE_EXPIRY. Tick interval is
+    // 60s with the first tick skipped on boot, so worst-case ~60s before
+    // submission + ASP batch latency. Mining keeps the scheduler moving.
+    String? newTxid;
+    int newBalance = 0;
+    bool stillActive = true;
+    final deadline = DateTime.now().add(Duration(minutes: 2));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(Duration(seconds: 5));
+      try {
+        final resp = await alice.listVtxos();
+        stillActive = resp.hasActiveDelegate;
+        if (resp.vtxos.isNotEmpty) {
+          newTxid = resp.vtxos.first.txid;
+          newBalance = resp.totalBalance.toInt();
+        }
+        // Auto-settle complete: VTXO refreshed (txid changed) AND delegate
+        // cleared (the handler clears it after a successful settle).
+        if (newTxid != null && newTxid != originalTxid && !stillActive) {
+          break;
+        }
+      } catch (e) {
+        print('   listVtxos error (will retry): $e');
+      }
+    }
+    stillMining = false;
+    miningTimer.cancel();
+
+    expect(newTxid, isNotNull,
+        reason: 'auto-settle did not produce any VTXO update before timeout');
+    expect(newTxid, isNot(equals(originalTxid)),
+        reason:
+            'auto-settle must replace the original VTXO with a fresh one');
+    expect(newBalance, equals(originalBalance),
+        reason: 'auto-settle must preserve the balance');
+    expect(stillActive, isFalse,
+        reason: 'cosigner must clear the delegate after a successful settle');
+    print(
+        '6. Auto-settle complete: new txid=$newTxid (was $originalTxid), balance preserved');
+  }, timeout: Timeout(Duration(minutes: 4)));
 }

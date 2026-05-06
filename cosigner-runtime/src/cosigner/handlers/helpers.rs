@@ -256,11 +256,24 @@ pub fn get_user_ark_keys(
 pub fn save_user_vtxos(
     persistence: &dyn KvStore,
     user_id_hex: &str,
-    vtxos: &[(String, u32, u64, u32)],
+    vtxos: &[crate::cosigner::state::VtxoEntry],
 ) {
     if let Ok(json) = serde_json::to_string(vtxos) {
         if let Err(e) = persistence.put("vtxo_store", user_id_hex, &json) {
             tracing::warn!("persist vtxo_store/{user_id_hex} failed: {e}");
+        }
+    }
+}
+
+/// Persist a user's registered device tokens.
+pub fn save_user_device_tokens(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+    tokens: &[crate::cosigner::state::DeviceToken],
+) {
+    if let Ok(json) = serde_json::to_string(tokens) {
+        if let Err(e) = persistence.put("device_tokens", user_id_hex, &json) {
+            tracing::warn!("persist device_tokens/{user_id_hex} failed: {e}");
         }
     }
 }

@@ -21,6 +21,13 @@ pub struct ServerConfig {
     pub enclave_mgmt_token: String,
     /// Path to the cosigner WASM component file.
     pub cosigner_wasm_path: String,
+    /// Auto-settle threshold: submit a stored delegate intent when
+    /// `now > earliest_expires_at - this`. Default 30 minutes.
+    pub auto_settle_safety_margin_secs: i64,
+    /// Decrypted FCM service-account JSON. Empty = push disabled.
+    /// In production this is filled by the enclave KMS-decrypt step before
+    /// the runtime starts; in dev set `FCM_SERVICE_ACCOUNT_JSON` directly.
+    pub fcm_service_account_json: String,
 }
 
 impl ServerConfig {
@@ -47,6 +54,12 @@ impl ServerConfig {
             enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
             cosigner_wasm_path: env::var("COSIGNER_WASM_PATH")
                 .unwrap_or_else(|_| "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()),
+            auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1800),
+            fcm_service_account_json: env::var("FCM_SERVICE_ACCOUNT_JSON")
+                .unwrap_or_default(),
         }
     }
 }

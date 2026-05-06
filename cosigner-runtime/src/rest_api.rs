@@ -73,6 +73,8 @@ pub fn routes(state: AppState) -> Router {
         .route("/u/{user_id}/ark/settle", post(settle))
         .route("/u/{user_id}/ark/settle-delegate", post(settle_delegate))
         .route("/u/{user_id}/ark/submit-send", post(submit_ark_send))
+        // Push notifications
+        .route("/u/{user_id}/push/register-device-token", post(register_device_token))
         // Server deployment metadata. Unauthenticated, not user-scoped.
         // Accepts both GET and POST so the enclave-FFI transport (which only
         // models POST) can reach it the same way regular HTTP clients do.
@@ -626,6 +628,10 @@ async fn settle_delegate(
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
+        store_only: body
+            .get("store_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
     match reg
         .dispatch(&user_id, move |reply| CosignerCommand::SettleDelegate { req, reply })
@@ -655,5 +661,21 @@ async fn submit_ark_send(
         signed_ark_tx_b64: str_field(&body, "signed_ark_tx_b64"),
         signed_checkpoint_txs_b64: str_array_field(&body, "signed_checkpoint_txs_b64"),
         spent_outpoints: str_array_field(&body, "spent_outpoints"),
+    })
+}
+
+#[tracing::instrument(skip_all, name = "rest::register_device_token", fields(user_id = %user_id))]
+async fn register_device_token(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    dispatch_json!(reg, user_id, RegisterDeviceToken, wallet_proto::RegisterDeviceTokenRequest {
+        user_id: user_id_bytes(&user_id),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+        fcm_token: str_field(&body, "fcm_token"),
+        platform: str_field(&body, "platform"),
+        app_version: str_field(&body, "app_version"),
     })
 }

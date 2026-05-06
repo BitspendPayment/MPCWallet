@@ -399,34 +399,36 @@ pub fn list_vtxos(
 
     let mut vtxos = Vec::new();
     let mut total_balance: u64 = 0;
-    for (txid, vout, amount, exit_delay) in state.vtxos.iter() {
+    for entry in state.vtxos.iter() {
         let script = ark::client::vtxo_script_pubkey_hex(
             &owner_pk_hex,
             &info.signer_pubkey,
-            *exit_delay,
+            entry.exit_delay,
             network,
         )
         .unwrap_or_default();
-        total_balance += amount;
+        total_balance += entry.amount;
         vtxos.push(VtxoInfo {
-            txid: txid.clone(),
-            vout: *vout,
-            amount: *amount,
-            created_at: 0,
-            expires_at: 0,
+            txid: entry.txid.clone(),
+            vout: entry.vout,
+            amount: entry.amount,
+            created_at: entry.created_at,
+            expires_at: entry.expires_at,
             status: "confirmed".to_string(),
             is_preconfirmed: false,
-            exit_delay: *exit_delay,
+            exit_delay: entry.exit_delay,
             script,
         });
     }
+    let has_active_delegate = state.delegate_session.is_some();
     tracing::info!(
-        "[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}",
+        "[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}, has_active_delegate={has_active_delegate}",
         vtxos.len()
     );
     Ok(ListVtxosResponse {
         vtxos,
         total_balance,
+        has_active_delegate,
     })
 }
 

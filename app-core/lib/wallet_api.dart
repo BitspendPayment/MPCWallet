@@ -53,6 +53,10 @@ abstract class WalletApi {
   // Deployment metadata. Unauthenticated.
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request);
 
+  // Push notifications
+  Future<RegisterDeviceTokenResponse> registerDeviceToken(
+      RegisterDeviceTokenRequest request);
+
   /// Shutdown the underlying connection.
   Future<void> shutdown();
 }

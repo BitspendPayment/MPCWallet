@@ -9,7 +9,7 @@ use crate::auth::message::{
     OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE,
 };
 use crate::shared::SharedServices;
-use crate::cosigner::state::CosignerState;
+use crate::cosigner::state::{CosignerState, DelegateRecord, VtxoEntry};
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::types::ArkTxEntry;
@@ -110,7 +110,7 @@ pub fn send_vtxo(
             }
             tracing::info!("[{user_id_hex}] SendVtxo: spending VTXOs: {:?}", state.vtxos);
 
-            let total_available: u64 = state.vtxos.iter().map(|(_, _, a, _)| a).sum();
+            let total_available: u64 = state.vtxos.iter().map(|e| e.amount).sum();
             if total_available < req.amount {
                 return Err(Status::failed_precondition(format!(
                     "insufficient balance: have {} sats, need {} sats",
@@ -121,17 +121,17 @@ pub fn send_vtxo(
             let vtxo_inputs: Vec<ark::client::send::SendVtxoInput> = state
                 .vtxos
                 .iter()
-                .map(|(txid, vout, amount, _)| ark::client::send::SendVtxoInput {
-                    txid: txid.clone(),
-                    vout: *vout,
-                    amount_sats: *amount,
+                .map(|e| ark::client::send::SendVtxoInput {
+                    txid: e.txid.clone(),
+                    vout: e.vout,
+                    amount_sats: e.amount,
                 })
                 .collect();
 
             let exit_delay = state
                 .vtxos
                 .first()
-                .map(|(_, _, _, d)| *d)
+                .map(|e| e.exit_delay)
                 .unwrap_or(info.unilateral_exit_delay as u32);
 
             let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
@@ -206,17 +206,25 @@ pub fn send_vtxo(
                 .map_err(|e| Status::internal(format!("submit: {e}")))?;
             let (ark_txid, session) = ark_txid;
 
-            // Update local VTXO state: drop spent, add change (if any).
+            // Update local VTXO state: drop spent, add change (if any), and
+            // invalidate any stored delegate intent — the send consumed the
+            // VTXOs the delegate authorized. Client must re-delegate.
             let change = session.change_vtxo();
             state.vtxos.clear();
+            state.delegate_session = None;
             if let Some((change_txid, change_vout, change_amount)) = change {
                 tracing::info!(
                     "[{user_id_hex}] SendVtxo: change VTXO txid={}, vout={}, amount={}, exit_delay={}",
                     change_txid, change_vout, change_amount, change_exit_delay
                 );
-                state
-                    .vtxos
-                    .push((change_txid, change_vout, change_amount, change_exit_delay));
+                state.vtxos.push(VtxoEntry {
+                    txid: change_txid,
+                    vout: change_vout,
+                    amount: change_amount,
+                    exit_delay: change_exit_delay,
+                    created_at: now_secs(),
+                    expires_at: 0,
+                });
             }
             tracing::info!("[{user_id_hex}] SendVtxo: sent, ark_txid={ark_txid}");
             save_user_vtxos(shared.persistence.as_ref(), &user_id_hex, &state.vtxos);
@@ -456,10 +464,15 @@ pub fn settle(
                         vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
                     state
                         .vtxos
-                        .retain(|(t, v, _, _)| !(t == &vtxo_txid && *v == vtxo_vout));
-                    state
-                        .vtxos
-                        .push((vtxo_txid.clone(), vtxo_vout, boarding_amount, exit_delay));
+                        .retain(|e| !(e.txid == vtxo_txid && e.vout == vtxo_vout));
+                    state.vtxos.push(VtxoEntry {
+                        txid: vtxo_txid.clone(),
+                        vout: vtxo_vout,
+                        amount: boarding_amount,
+                        exit_delay,
+                        created_at: now_secs(),
+                        expires_at: 0,
+                    });
                     tracing::info!(
                         "[{user_id_hex}] Settle: VTXO recorded vtxo_txid={vtxo_txid}:{vtxo_vout} amount={boarding_amount} exit_delay={exit_delay}"
                     );
@@ -556,14 +569,14 @@ pub fn settle_delegate(
             let vtxo_inputs: Vec<ark::client::batch::DelegateVtxoInput> = state
                 .vtxos
                 .iter()
-                .map(|(txid, vout, amount, _)| ark::client::batch::DelegateVtxoInput {
-                    txid: txid.clone(),
-                    vout: *vout,
-                    amount_sats: *amount,
+                .map(|e| ark::client::batch::DelegateVtxoInput {
+                    txid: e.txid.clone(),
+                    vout: e.vout,
+                    amount_sats: e.amount,
                     is_swept: false,
                 })
                 .collect();
-            let total_amount: u64 = state.vtxos.iter().map(|(_, _, a, _)| a).sum();
+            let total_amount: u64 = state.vtxos.iter().map(|e| e.amount).sum();
 
             let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
             let exit_delay = info.unilateral_exit_delay as u32;
@@ -600,7 +613,26 @@ pub fn settle_delegate(
                 )
                 .map_err(|e| Status::internal(format!("generate_delegate: {e}")))?;
 
-            state.delegate_session = Some(session);
+            // Capture the scope of this delegate so the auto-settle tick task
+            // and the conflict-invalidation hooks can reason about it without
+            // re-reading the session internals.
+            let covered_outpoints: Vec<(String, u32)> = state
+                .vtxos
+                .iter()
+                .map(|e| (e.txid.clone(), e.vout))
+                .collect();
+            let earliest_expires_at = state
+                .vtxos
+                .iter()
+                .filter_map(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+                .min()
+                .unwrap_or(0);
+
+            state.delegate_session = Some(DelegateRecord {
+                session,
+                covered_outpoints,
+                earliest_expires_at,
+            });
             Ok(SettleDelegateResponse {
                 status: settle_delegate_response::Status::SigningRequired as i32,
                 messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
@@ -610,14 +642,34 @@ pub fn settle_delegate(
             })
         }
 
-        // Phase 2: sign + settle autonomously.
-        (Some(mut session), true) => {
+        // Phase 2: sign with FROST. Either store the signed intent
+        // (`store_only=true`, used by the auto-trigger after a receive) or
+        // drive the batch immediately (the existing manual-settle path).
+        (Some(mut record), true) => {
             let signatures = parse_signatures(&req.signed_messages)?;
-            session
+            record
+                .session
                 .sign_with_frost(signatures)
                 .map_err(|e| Status::internal(format!("sign_with_frost: {e}")))?;
 
+            if req.store_only {
+                tracing::info!(
+                    "[{user_id_hex}] SettleDelegate: stored signed intent for {} VTXO(s), earliest_expires_at={}",
+                    record.covered_outpoints.len(),
+                    record.earliest_expires_at
+                );
+                state.delegate_session = Some(record);
+                return Ok(SettleDelegateResponse {
+                    status: settle_delegate_response::Status::Delegated as i32,
+                    messages_to_sign: vec![],
+                    script_path_spend: false,
+                    commitment_txid: String::new(),
+                    error_message: String::new(),
+                });
+            }
+
             let asp_for_call = asp.clone();
+            let mut session = record.session;
             let (commitment_txid, vtxo_outpoint, info) = Handle::current()
                 .block_on(async move {
                     let mut guard = asp_for_call.lock().await;
@@ -637,12 +689,17 @@ pub fn settle_delegate(
 
             let (vtxo_txid, vtxo_vout): (String, u32) =
                 vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
-            let total_amount: u64 = state.vtxos.iter().map(|(_, _, a, _)| a).sum();
+            let total_amount: u64 = state.vtxos.iter().map(|e| e.amount).sum();
             state.vtxos.clear();
             let new_exit_delay = info.unilateral_exit_delay as u32;
-            state
-                .vtxos
-                .push((vtxo_txid.clone(), vtxo_vout, total_amount, new_exit_delay));
+            state.vtxos.push(VtxoEntry {
+                txid: vtxo_txid.clone(),
+                vout: vtxo_vout,
+                amount: total_amount,
+                exit_delay: new_exit_delay,
+                created_at: now_secs(),
+                expires_at: 0,
+            });
             tracing::info!(
                 "[{user_id_hex}] SettleDelegate: settled, new VTXO txid={vtxo_txid}:{vtxo_vout} amount={total_amount}"
             );
@@ -669,8 +726,8 @@ pub fn settle_delegate(
         }
 
         // Session exists but no signatures.
-        (Some(session), false) => {
-            state.delegate_session = Some(session);
+        (Some(record), false) => {
+            state.delegate_session = Some(record);
             Err(Status::failed_precondition(
                 "delegate session exists; provide signatures",
             ))
@@ -811,26 +868,41 @@ pub fn submit_ark_send(
         (String::new(), 0, 0)
     };
 
-    // Update local VTXO state.
+    // Update local VTXO state. The off-chain send consumed VTXOs, so any
+    // stored delegate intent is now stale — invalidate it.
     let spent_total: u64 = state
         .vtxos
         .iter()
-        .filter(|(txid, vout, _, _)| {
-            req.spent_outpoints.contains(&format!("{txid}:{vout}"))
-        })
-        .map(|(_, _, amount, _)| *amount)
+        .filter(|e| req.spent_outpoints.contains(&format!("{}:{}", e.txid, e.vout)))
+        .map(|e| e.amount)
         .sum();
-    state.vtxos.retain(|(txid, vout, _, _)| {
-        !req.spent_outpoints.contains(&format!("{}:{}", txid, vout))
+    state.vtxos.retain(|e| {
+        !req.spent_outpoints.contains(&format!("{}:{}", e.txid, e.vout))
     });
+    if let Some(record) = &state.delegate_session {
+        let any_covered_spent = record.covered_outpoints.iter().any(|(t, v)| {
+            req.spent_outpoints.contains(&format!("{t}:{v}"))
+        });
+        if any_covered_spent {
+            state.delegate_session = None;
+            tracing::info!(
+                "[{user_id_hex}] delegate invalidated: covered VTXO consumed by off-chain send"
+            );
+        }
+    }
     if change_amount > 0 {
         let exit_delay = match info {
             Some(i) => i.unilateral_exit_delay as u32,
             None => fetch_asp_info(&asp)?.unilateral_exit_delay as u32,
         };
-        state
-            .vtxos
-            .push((change_txid.clone(), change_vout, change_amount, exit_delay));
+        state.vtxos.push(VtxoEntry {
+            txid: change_txid.clone(),
+            vout: change_vout,
+            amount: change_amount,
+            exit_delay,
+            created_at: now_secs(),
+            expires_at: 0,
+        });
     }
 
     tracing::info!(

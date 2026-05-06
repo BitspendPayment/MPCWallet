@@ -60,6 +60,9 @@ service MPCWallet {
   // configured Bitcoin network so clients render addresses with the right HRP
   // without having to know it themselves.
   rpc GetServerInfo (GetServerInfoRequest) returns (GetServerInfoResponse);
+
+  // Register an FCM token so the cosigner can wake the device when a VTXO arrives.
+  rpc RegisterDeviceToken (RegisterDeviceTokenRequest) returns (RegisterDeviceTokenResponse);
 }
 
 // DKG Messages
@@ -334,6 +337,10 @@ message ListVtxosRequest {
 message ListVtxosResponse {
     repeated VtxoInfo vtxos = 1;
     uint64 total_balance = 2;
+    // True if the cosigner has a stored, signed delegate intent for this user.
+    // Clients use this to detect "VTXOs exist but no delegate" (e.g. after
+    // cosigner-runtime restart) and re-delegate.
+    bool has_active_delegate = 3;
 }
 
 message CheckBoardingBalanceRequest {
@@ -442,6 +449,10 @@ message SettleDelegateRequest {
     int64 timestamp_ms = 3;
     // FROST signatures for previously requested sighashes (phase 2)
     repeated bytes signed_messages = 4;
+    // Phase 2 only. When true, the cosigner stores the signed intent and
+    // returns DELEGATED without joining a batch. The cosigner's auto-settle
+    // tick task drives the stored intent later when the threshold is reached.
+    bool store_only = 5;
 }
 
 message SettleDelegateResponse {
@@ -449,13 +460,15 @@ message SettleDelegateResponse {
         SIGNING_REQUIRED = 0;
         SETTLED = 1;
         ERROR = 2;
+        // store_only path: signed intent stored, batch not joined yet.
+        DELEGATED = 3;
     }
     Status status = 1;
     // Sighashes that need FROST signing (when SIGNING_REQUIRED)
     repeated bytes messages_to_sign = 2;
     // Always true for delegate (script-path spend, no taproot tweak)
     bool script_path_spend = 3;
-    // Commitment txid when SETTLED
+    // Commitment txid when SETTLED (empty for DELEGATED)
     string commitment_txid = 4;
     // Error message when ERROR
     string error_message = 5;
@@ -490,4 +503,19 @@ message GetServerInfoResponse {
     // "testnet", "signet", "mutinynet", "regtest". Source of truth for the
     // client's address-rendering HRP.
     string bitcoin_network = 1;
+}
+
+// Push notification registration
+
+message RegisterDeviceTokenRequest {
+    bytes user_id = 1;
+    bytes signature = 2;
+    int64 timestamp_ms = 3;
+    string fcm_token = 4;
+    string platform = 5;     // "android" | "ios"
+    string app_version = 6;  // optional, for debugging
+}
+
+message RegisterDeviceTokenResponse {
+    bool ok = 1;
 }

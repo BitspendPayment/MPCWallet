@@ -26,6 +26,7 @@ import 'screens/ark/ark_board_screen.dart';
 
 import 'package:provider/provider.dart';
 import 'services/mpc_service.dart';
+import 'services/push_service.dart';
 
 class _AllowSelfSignedCerts extends HttpOverrides {
   @override
@@ -35,15 +36,23 @@ class _AllowSelfSignedCerts extends HttpOverrides {
   }
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
   // Accept self-signed TLS certificates (enclave uses self-signed certs).
   HttpOverrides.global = _AllowSelfSignedCerts();
+  // Best-effort push init. No-ops gracefully when Firebase config is missing
+  // (e.g. CI builds without google-services.json).
+  await PushService.initialize();
   runApp(
     MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) {
           final svc = MpcService();
-          svc.initFuture = svc.init();
+          svc.initFuture = svc.init().then((_) async {
+            // Register FCM token with the cosigner once init has set up the
+            // client. Idempotent — re-registers on token rotation too.
+            await PushService.registerCurrentToken(svc);
+          });
           return svc;
         }),
       ],

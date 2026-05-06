@@ -375,7 +375,8 @@ class RestWalletApi implements WalletApi {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = ListVtxosResponse()
-      ..totalBalance = Int64(resp['total_balance'] as int? ?? 0);
+      ..totalBalance = Int64(resp['total_balance'] as int? ?? 0)
+      ..hasActiveDelegate = resp['has_active_delegate'] as bool? ?? false;
     for (final v in (resp['vtxos'] as List? ?? [])) {
       result.vtxos.add(VtxoInfo()
         ..txid = v['txid'] as String? ?? ''
@@ -475,6 +476,7 @@ class RestWalletApi implements WalletApi {
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
       'signed_messages': r.signedMessages.map((m) => _hex(m)).toList(),
+      'store_only': r.storeOnly,
     });
     final result = SettleDelegateResponse()
       ..status = SettleDelegateResponse_Status.valueOf(
@@ -511,6 +513,21 @@ class RestWalletApi implements WalletApi {
     final resp = await _get('/api/server-info');
     return GetServerInfoResponse()
       ..bitcoinNetwork = resp['bitcoin_network'] as String? ?? '';
+  }
+
+  @override
+  Future<RegisterDeviceTokenResponse> registerDeviceToken(
+      RegisterDeviceTokenRequest r) async {
+    final resp = await _post(
+      '/api/u/${_hex(r.userId)}/push/register-device-token',
+      {
+        ..._authFields(r.userId, r.signature, r.timestampMs),
+        'fcm_token': r.fcmToken,
+        'platform': r.platform,
+        'app_version': r.appVersion,
+      },
+    );
+    return RegisterDeviceTokenResponse()..ok = resp['ok'] as bool? ?? false;
   }
 
   @override

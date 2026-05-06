@@ -47,6 +47,15 @@ pub enum CosignerCommand {
     SettleDelegate { req: SettleDelegateRequest, reply: Reply<SettleDelegateResponse> },
     SubmitArkSend { req: SubmitArkSendRequest, reply: Reply<SubmitArkSendResponse> },
 
+    // --- Push registration ---
+    RegisterDeviceToken { req: RegisterDeviceTokenRequest, reply: Reply<RegisterDeviceTokenResponse> },
+
+    // --- Auto-settle ---
+    /// Tick from the global 60-second task. The actor checks its stored
+    /// delegate intent and submits it if `now > earliest_expires_at - margin`.
+    /// Fire-and-forget — errors are logged inside the handler.
+    TickAutoSettle,
+
     // --- Stream fan-in (no reply) ---
     /// VTXO stream notification: union of spent + new entries for a single user.
     /// `user_id_hex` is included so the actor can persist updates without

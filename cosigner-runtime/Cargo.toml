@@ -52,6 +52,9 @@ bitcoin = { version = "0.32", features = ["serde"] }
 ark = { path = "../crates/ark", features = ["client"] }
 reqwest = { version = "0.12", features = ["json"] }
 
+# FCM HTTP v1 OAuth (service-account JWT bearer flow)
+jsonwebtoken = "9"
+
 # Streaming
 tokio-stream = "0.1"
 

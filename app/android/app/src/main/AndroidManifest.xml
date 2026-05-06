@@ -1,5 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+    <!-- Required on Android 13+ for FCM notifications. Silent data-only pushes
+         do NOT require this permission, but anything user-visible does. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
         android:label="ap"
         android:name="${applicationName}"

@@ -71,7 +71,7 @@ impl CosignerRegistry {
         let user = self
             .new_user_instance()
             .map_err(|e| Status::internal(format!("WASM init error: {e}")))?;
-        let state = CosignerState::new();
+        let state = CosignerState::new(user_id.to_string());
         let shared = self.shared.clone();
         let registry = self.clone();
         let join = tokio::spawn(run_actor(user, state, rx, shared, registry));
@@ -164,5 +164,15 @@ impl CosignerRegistry {
             self.script_idx.insert(script_hex, user_id);
         }
         Ok(())
+    }
+
+    /// Snapshot every spawned actor's mailbox sender. Used by the global
+    /// auto-settle tick task to fan out `TickAutoSettle` without holding the
+    /// DashMap across an `await`.
+    pub fn snapshot_handles(&self) -> Vec<(String, CosignerHandle)> {
+        self.actors
+            .iter()
+            .map(|e| (e.key().clone(), e.value().handle.clone()))
+            .collect()
     }
 }

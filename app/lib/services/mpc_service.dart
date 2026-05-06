@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter/foundation.dart';
@@ -584,17 +585,64 @@ class MpcService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Outpoints (`txid:vout`) seen on the previous refresh. Used to detect
+  /// "new VTXO arrived" so the auto-settle re-delegation can fire even when
+  /// the push notification path didn't deliver (denied perms, force-quit, etc).
+  final Set<String> _previousVtxoOutpoints = <String>{};
+  bool _serverHasActiveDelegate = false;
+  bool _delegateInFlight = false;
+
   Future<void> refreshVtxos() async {
     if (_client == null) return;
     try {
       final resp = await _client!.listVtxos();
       _vtxos = resp.vtxos;
       _arkBalance = BigInt.from(resp.totalBalance.toInt());
+      _serverHasActiveDelegate = resp.hasActiveDelegate;
     } catch (e) {
       debugPrint("Refresh VTXOs failed: $e");
     }
     await refreshArkTransactions();
     notifyListeners();
+    unawaited(_delegateIfNeeded());
+  }
+
+  /// Re-delegate when either:
+  /// - A new VTXO appeared since the last refresh that wasn't created by us
+  ///   (i.e. an external receive), OR
+  /// - VTXOs exist but the server reports no active delegate (cosigner
+  ///   restart, or first refresh after login).
+  ///
+  /// Self-originated change (txid matches a recent send/board/settle) is
+  /// skipped since the corresponding handler already invalidated the delegate
+  /// on the server side and a fresh re-delegate covers the new change VTXO.
+  Future<void> _delegateIfNeeded() async {
+    if (_client == null || _delegateInFlight || _vtxos.isEmpty) return;
+
+    final current = _vtxos.map((v) => '${v.txid}:${v.vout}').toSet();
+    final newOutpoints = current.difference(_previousVtxoOutpoints);
+    _previousVtxoOutpoints
+      ..clear()
+      ..addAll(current);
+
+    final selfTxids =
+        _arkTransactions.map((t) => t.txid).where((s) => s.isNotEmpty).toSet();
+    final external =
+        newOutpoints.where((op) => !selfTxids.contains(op.split(':').first));
+
+    final needsDelegate = external.isNotEmpty || !_serverHasActiveDelegate;
+    if (!needsDelegate) return;
+
+    _delegateInFlight = true;
+    try {
+      await _client!.settleDelegate(storeOnly: true);
+      _serverHasActiveDelegate = true;
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[auto-settle] re-delegate failed: $e");
+    } finally {
+      _delegateInFlight = false;
+    }
   }
 
   Future<void> refreshArkTransactions() async {
@@ -640,6 +688,24 @@ class MpcService extends ChangeNotifier {
     final txid = await _client!.settleDelegate();
     await refreshVtxos();
     return txid;
+  }
+
+  /// Register a push notification token. Best-effort — failures are logged.
+  Future<void> registerDeviceToken({
+    required String fcmToken,
+    required String platform,
+    String appVersion = '',
+  }) async {
+    if (_client == null) return;
+    try {
+      await _client!.registerDeviceToken(
+        fcmToken: fcmToken,
+        platform: platform,
+        appVersion: appVersion,
+      );
+    } catch (e) {
+      debugPrint("registerDeviceToken failed: $e");
+    }
   }
 
   String _generateSessionId() {

@@ -14,7 +14,7 @@ use crate::cosigner::wasm::CosignerInstance;
 use super::command::CosignerCommand;
 use super::handlers;
 use super::registry::CosignerRegistry;
-use super::state::CosignerState;
+use super::state::{CosignerState, DeviceToken};
 
 /// Move `(user, state)` into a blocking closure, run `f`, reclaim ownership.
 /// `f` returns the response payload; the user/state pair is paired back via
@@ -192,6 +192,27 @@ pub async fn run_actor(
                 dispatch!(user, state, shared, req, reply, handlers::ark_send::submit_ark_send);
             }
 
+            // -------- Push registration --------
+            CosignerCommand::RegisterDeviceToken { req, reply } => {
+                dispatch!(user, state, shared, req, reply, handlers::device_token::register_device_token);
+            }
+
+            // -------- Auto-settle tick --------
+            CosignerCommand::TickAutoSettle => {
+                let s = shared.clone();
+                let span = tracing::info_span!("actor::tick_auto_settle");
+                let (u, st, res) = run_blocking(user, state, move |user, state| {
+                    let _enter = span.enter();
+                    handlers::auto_settle::tick_auto_settle(user, state, &s)
+                })
+                .await;
+                user = u;
+                state = st;
+                if let Err(e) = res {
+                    tracing::warn!("tick_auto_settle: {e}");
+                }
+            }
+
             // -------- Stream fan-in (no reply) --------
             CosignerCommand::VtxoStreamUpdate {
                 user_id_hex,
@@ -201,21 +222,30 @@ pub async fn run_actor(
             } => {
                 let s = shared.clone();
                 let span = tracing::info_span!("actor::vtxo_stream_update", user_id = %user_id_hex);
-                let (u, st) = tokio::task::spawn_blocking(move || {
+                let user_id_for_push = user_id_hex.clone();
+                let (u, st, newly_added, device_tokens) = tokio::task::spawn_blocking(move || {
                     let _enter = span.enter();
                     let mut user = user;
                     let mut state = state;
-                    if let Err(e) = handlers::vtxo_stream::apply_stream_update(
+                    let added = match handlers::vtxo_stream::apply_stream_update(
                         &mut user, &mut state, &s, &user_id_hex, spent, spendable, info,
                     ) {
-                        tracing::warn!("[{user_id_hex}] VTXO stream apply failed: {e}");
-                    }
-                    (user, state)
+                        Ok(added) => added,
+                        Err(e) => {
+                            tracing::warn!("[{user_id_hex}] VTXO stream apply failed: {e}");
+                            Vec::new()
+                        }
+                    };
+                    let tokens = state.device_tokens.clone();
+                    (user, state, added, tokens)
                 })
                 .await
                 .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
                 user = u;
                 state = st;
+                if !newly_added.is_empty() {
+                    push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
+                }
             }
             CosignerCommand::IndexerUpdate {
                 user_id_hex,
@@ -225,23 +255,59 @@ pub async fn run_actor(
             } => {
                 let s = shared.clone();
                 let span = tracing::info_span!("actor::indexer_update", user_id = %user_id_hex);
-                let (u, st) = tokio::task::spawn_blocking(move || {
+                let user_id_for_push = user_id_hex.clone();
+                let (u, st, newly_added, device_tokens) = tokio::task::spawn_blocking(move || {
                     let _enter = span.enter();
                     let mut user = user;
                     let mut state = state;
-                    if let Err(e) = handlers::vtxo_stream::apply_stream_update(
+                    let added = match handlers::vtxo_stream::apply_stream_update(
                         &mut user, &mut state, &s, &user_id_hex, spent_vtxos, new_vtxos, info,
                     ) {
-                        tracing::warn!("[{user_id_hex}] Indexer apply failed: {e}");
-                    }
-                    (user, state)
+                        Ok(added) => added,
+                        Err(e) => {
+                            tracing::warn!("[{user_id_hex}] Indexer apply failed: {e}");
+                            Vec::new()
+                        }
+                    };
+                    let tokens = state.device_tokens.clone();
+                    (user, state, added, tokens)
                 })
                 .await
                 .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
                 user = u;
                 state = st;
+                if !newly_added.is_empty() {
+                    push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
+                }
             }
         }
     }
     drop((user, state));
+}
+
+/// Send a "vtxo_received" data-only push to every registered device for this
+/// user. Best-effort: failures are logged and ignored — the stream handler
+/// has already persisted state, the open-app fallback closes any gap.
+async fn push_vtxo_received(
+    shared: &SharedServices,
+    user_id_hex: &str,
+    tokens: &[DeviceToken],
+) {
+    let Some(fcm) = shared.fcm.as_ref() else {
+        return;
+    };
+    if tokens.is_empty() {
+        return;
+    }
+    let mut data = std::collections::HashMap::new();
+    data.insert("type".to_string(), "vtxo_received".to_string());
+    data.insert("user_id".to_string(), user_id_hex.to_string());
+    for token in tokens {
+        if let Err(e) = fcm.send_data(&token.fcm_token, &data).await {
+            tracing::warn!(
+                "[{user_id_hex}] FCM push to {} failed: {e}",
+                token.platform
+            );
+        }
+    }
 }
