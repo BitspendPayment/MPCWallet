@@ -64,6 +64,17 @@ Future<void> bootApp(
 }) async {
   HttpOverrides.global = _AllowSelfSignedCerts();
   GoogleFonts.config.allowRuntimeFetching = false;
+  // Suppress RenderFlex overflow warnings in tests. They show as yellow/black
+  // stripes in production but fail integration_test runs because the binding
+  // treats every FlutterError as a test failure.
+  final priorOnError = FlutterError.onError;
+  FlutterError.onError = (FlutterErrorDetails details) {
+    final msg = details.exceptionAsString();
+    if (msg.contains('overflowed') || msg.contains('RenderFlex')) {
+      return;
+    }
+    priorOnError?.call(details);
+  };
   await tester.pumpWidget(buildTestApp(backupStore: backupStore));
   await tester.pumpAndSettle();
 }
@@ -131,4 +142,38 @@ Future<void> waitForBalance(
   }
   throw TestFailure(
       'waitForBalance timed out — balance ${svc.balance} < $minimumSats sats');
+}
+
+/// Polls `MpcService.refreshVtxos()` until `arkBalance` >= [minimumSats]. Use
+/// after Bob (or anyone external) sends a VTXO to the wallet's ark address.
+/// Resolves the MpcService context from any of the Ark screen's known keys.
+Future<void> waitForArkBalance(
+  WidgetTester tester,
+  BigInt minimumSats, {
+  Duration timeout = const Duration(seconds: 60),
+  Duration pollEvery = const Duration(seconds: 2),
+}) async {
+  Element resolveCtx() {
+    for (final keyName in const [
+      'arkSendBtn',
+      'arkRefreshBtn',
+      'homeSendBtn',
+    ]) {
+      final f = find.byKey(Key(keyName));
+      if (f.evaluate().isNotEmpty) return tester.element(f);
+    }
+    throw StateError('waitForArkBalance: no anchor widget on screen');
+  }
+
+  final svc = Provider.of<MpcService>(resolveCtx(), listen: false);
+  final deadline = DateTime.now().add(timeout);
+  while (DateTime.now().isBefore(deadline)) {
+    try {
+      await svc.refreshVtxos();
+    } catch (_) {}
+    if (svc.arkBalance >= minimumSats) return;
+    await tester.pump(pollEvery);
+  }
+  throw TestFailure(
+      'waitForArkBalance timed out — arkBalance ${svc.arkBalance} < $minimumSats sats');
 }

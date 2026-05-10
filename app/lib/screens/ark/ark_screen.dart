@@ -28,6 +28,7 @@ class ArkScreen extends StatelessWidget {
         centerTitle: true,
         actions: [
           IconButton(
+            key: const Key('arkRefreshBtn'),
             icon: const Icon(Icons.refresh),
             onPressed: () => mpcService.refreshVtxos(),
           ),

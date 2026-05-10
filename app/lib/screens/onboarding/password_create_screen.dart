@@ -59,7 +59,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Password')),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -148,7 +148,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
                 ],
               ),
             ),
-            const Spacer(),
+            const SizedBox(height: 32),
             ElevatedButton(
               key: const Key('passwordContinueBtn'),
               onPressed: canContinue

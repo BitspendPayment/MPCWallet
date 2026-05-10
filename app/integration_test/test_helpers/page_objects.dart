@@ -4,7 +4,19 @@ import 'package:flutter_test/flutter_test.dart';
 import 'test_setup.dart';
 
 Future<void> _tapKey(WidgetTester tester, String keyName) async {
-  await tester.tap(find.byKey(Key(keyName)));
+  // Wait until the widget is in the tree AND actually hit-testable (i.e. not
+  // behind a route-transition Offstage/AbsorbPointer overlay). pumpAndSettle
+  // alone has been observed to return while the outgoing route is still
+  // absorbing pointer events.
+  final hit = find.byKey(Key(keyName)).hitTestable();
+  final deadline = DateTime.now().add(const Duration(seconds: 10));
+  while (hit.evaluate().isEmpty && DateTime.now().isBefore(deadline)) {
+    await tester.pump(const Duration(milliseconds: 100));
+  }
+  if (hit.evaluate().isEmpty) {
+    throw StateError('_tapKey: $keyName never became hit-testable');
+  }
+  await tester.tap(hit);
   await tester.pump();
 }
 
@@ -35,7 +47,17 @@ class PasswordPage {
     await _enterText(tester, 'passwordField1', password);
     await _enterText(tester, 'passwordField2', password);
     await _tapKey(tester, 'passwordAckCheckbox');
+    await tester.pumpAndSettle();
+    // The on-device keyboard is up after enterText and pushes the Continue
+    // button below the visible area; scroll it into view first.
+    await tester.dragUntilVisible(
+      find.byKey(const Key('passwordContinueBtn')),
+      find.byType(SingleChildScrollView),
+      const Offset(0, -100),
+    );
+    await tester.pumpAndSettle();
     await _tapKey(tester, 'passwordContinueBtn');
+    await tester.pumpAndSettle();
   }
 }
 

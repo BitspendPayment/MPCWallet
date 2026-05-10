@@ -13,7 +13,8 @@
 #    make down           Stop everything
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark software hardware hardware-ark flash down \
+.PHONY: e2e e2e-ark software software-ark hardware hardware-ark flash down \
+	bob-up bob-down \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
 	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
 	threshold-ffi-android ark-ffi-android enclave-ffi-android \
@@ -80,6 +81,47 @@ software: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-b
 			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 			--port 7074'
 
+# 3b) Start regtest + arkd for SOFTWARE signer (no USB device required) — Ark enabled
+software-ark: cosigner-build runtime-build ffi-build ffi-android
+	@echo "=== Tearing down any prior stack (volumes too, for fresh keys) ==="
+	-pkill -f "target/release/cosigner-runtime" || true
+	-pkill -f bob_proxy || true
+	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v 2>/dev/null || true
+	-sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
+	-sudo rm -rf /tmp/bob_ark 2>/dev/null || true
+	@echo "=== Starting regtest + arkd ==="
+	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
+	@echo "Waiting for services to stabilize (20s)..."
+	@sleep 20
+	@echo "=== Initializing Bitcoin chain ==="
+	./scripts/bitcoin.sh init
+	@echo "=== Initializing arkd ==="
+	./scripts/arkd_init.sh --fund
+	@echo "=== Waiting 10s for NBXplorer to index initial blocks ==="
+	@sleep 10
+	@echo "=== Setting up Bob (ark-sample counter-party) ==="
+	$(MAKE) bob-up
+	@echo "=== Setting up ADB reverse ==="
+	-adb reverse tcp:7074 tcp:7074
+	-adb reverse tcp:50001 tcp:50001
+	-adb reverse tcp:7090 tcp:7090
+	@echo ""
+	@echo "==> Software signer mode + Ark — no USB device required."
+	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
+	@echo "==> In the app, pick 'Software Signer' (default) on the first screen."
+	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
+	@echo ""
+	@bash -c 'set -m; \
+		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
+		MINE_PID=$$!; \
+		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
+		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
+		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
+		       ASP_URL=http://127.0.0.1:7070; \
+		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
+			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--port 7074'
+
 # 4) Start regtest for hardware device (no Ark) — server runs in foreground
 hardware: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-build ffi-android
 	@echo ""
@@ -131,11 +173,27 @@ down:
 	-pkill -f "target/release/cosigner-runtime" || true
 	-pkill -f "signer-server" || true
 	-pkill -f "bitcoin.sh mine" || true
+	-pkill -f "bob_proxy" || true
 	-sudo fuser -k 7074/tcp 2>/dev/null || true
+	-sudo fuser -k 7090/tcp 2>/dev/null || true
 	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down 2>/dev/null || true
 	sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
 	sudo rm -rf $(DATA_DIR) 2>/dev/null || true
 	@echo "All stopped."
+
+# Bring up Bob — ark-sample wallet that acts as counter-party for the Flutter
+# integration test. Requires arkd already running (call after arkd-init).
+bob-up:
+	@./scripts/bob_setup.sh
+	@echo "==> Starting bob_proxy on :7090..."
+	-pkill -f bob_proxy || true
+	@nohup python3 scripts/bob_proxy.py > /tmp/bob_proxy.log 2>&1 &
+	@sleep 1
+	@curl -sf http://127.0.0.1:7090/ark-address | head -c 200 && echo
+
+bob-down:
+	-pkill -f bob_proxy || true
+	-sudo fuser -k 7090/tcp 2>/dev/null || true
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  HW SIGNER (TrustZone — Secure + Non-Secure worlds)

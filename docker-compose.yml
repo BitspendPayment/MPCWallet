@@ -39,6 +39,7 @@ services:
       - "50001:50001" # TCP
       - "50002:50002" # SSL
       - "4224:4224"   # HTTP monitoring
+      - "30000:30000" # Esplora REST (used by ark-client-sample / Bob)
     depends_on:
       - bitcoind
     entrypoint:
