@@ -52,6 +52,7 @@ class WelcomeScreen extends StatelessWidget {
               ),
               const Spacer(),
               ElevatedButton(
+                key: const Key('welcomeCreateBtn'),
                 onPressed: () {
                   context.push('/onboarding/signer-selection');
                 },
@@ -59,6 +60,7 @@ class WelcomeScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
               TextButton(
+                key: const Key('welcomeRestoreBtn'),
                 onPressed: () {
                   context.push('/onboarding/signer-selection',
                       extra: {'isRestore': true});

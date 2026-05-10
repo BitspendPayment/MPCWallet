@@ -27,7 +27,8 @@
 	flutter flutter-run ark-newaddress crypto-bench \
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
-	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down
+	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down \
+	integration-test integration-test-ci integration-test-ci-ark
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 
@@ -409,6 +410,50 @@ e2e-mutinynet-ark: ffi-build cosigner-build runtime-build signer-run
 	@echo "Running MutinyNet Ark E2E test..."
 	cd e2e && dart test test/mutinynet_ark_e2e_test.dart --timeout 900s
 	-pkill -f "signer-server" || true
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  FLUTTER INTEGRATION TESTS — UI on Android emulator against real backend
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Run integration tests against an emulator that's already running, with
+# services already started elsewhere (e.g. `make software` in a separate
+# terminal). Default for local dev.
+integration-test:
+	cd app && \
+		flutter test integration_test/app_test.dart
+
+# Full headless lifecycle (no Ark): boots regtest, builds FFI for x86_64
+# emulator, starts signer + runtime, runs tests, tears down.
+integration-test-ci: runtime-stop signer-stop regtest-up bitcoin-init adb-reverse \
+	ffi-android-x86_64 cosigner-build runtime-build signer-run runtime-run
+	@echo "Running integration tests..."
+	-adb reverse tcp:18443 tcp:18443
+	cd app && flutter pub get && \
+		flutter test integration_test/app_test.dart
+	$(MAKE) runtime-stop
+	$(MAKE) signer-stop
+
+# Integration tests with the Ark stack running. The Ark test is gated on ASP
+# availability so it skips itself if arkd isn't reachable; running through
+# this target makes sure it isn't.
+integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init \
+	signer-run ffi-android-x86_64 cosigner-build runtime-build
+	@echo "Running Ark integration test..."
+	-adb reverse tcp:7074 tcp:7074
+	-adb reverse tcp:50001 tcp:50001
+	-adb reverse tcp:18443 tcp:18443
+	export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
+		BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
+		ASP_URL=http://127.0.0.1:7070 && \
+		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
+			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--port 7074 &
+	@sleep 5
+	cd app && flutter pub get && \
+		flutter test integration_test/app_test.dart
+	$(MAKE) runtime-stop
+	$(MAKE) signer-stop
+	$(MAKE) arkd-down
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LEGACY ALIASES (old names still work)

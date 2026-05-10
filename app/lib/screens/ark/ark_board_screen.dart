@@ -236,6 +236,7 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
         ],
         const Spacer(),
         ElevatedButton(
+          key: const Key('arkBoardNowBtn'),
           onPressed: hasFunds ? _startBoarding : null,
           child: Text(hasFunds ? 'Board Now' : 'Waiting for funds...'),
         ),
@@ -382,6 +383,7 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
+              key: const Key('arkBoardDoneBtn'),
               onPressed: () => context.go('/ark'),
               child: const Text('Back to Ark'),
             ),

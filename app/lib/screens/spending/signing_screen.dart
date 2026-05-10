@@ -49,6 +49,7 @@ class _SigningScreenState extends State<SigningScreen> {
             ),
             const SizedBox(height: 16),
             TextField(
+              key: const Key('signingPinField'),
               obscureText: true,
               keyboardType: TextInputType.number,
               maxLength: 6,
@@ -69,6 +70,7 @@ class _SigningScreenState extends State<SigningScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
+            key: const Key('signingAuthorizeBtn'),
             onPressed: () {
               if (pin.length == 6 && RegExp(r'^\d{6}$').hasMatch(pin)) {
                 Navigator.of(context).pop(pin);

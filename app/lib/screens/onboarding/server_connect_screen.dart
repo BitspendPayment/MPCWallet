@@ -81,6 +81,7 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
             ),
             const SizedBox(height: 24),
             TextField(
+              key: const Key('serverUrlField'),
               controller: _urlController,
               decoration: const InputDecoration(
                 labelText: 'Server Host / IP',
@@ -108,6 +109,7 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
             ),
             const Spacer(),
             ElevatedButton(
+              key: const Key('serverConnectBtn'),
               onPressed: _isChecking ? null : _connect,
               child: _isChecking
                   ? const SizedBox(

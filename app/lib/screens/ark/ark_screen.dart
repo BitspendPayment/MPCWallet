@@ -207,6 +207,7 @@ class ArkScreen extends StatelessWidget {
               Expanded(
                 child: _buildActionButton(
                   context,
+                  widgetKey: const Key('arkSendBtn'),
                   icon: Icons.arrow_upward,
                   label: 'Send',
                   onTap: () => context.push('/ark/send'),
@@ -217,6 +218,7 @@ class ArkScreen extends StatelessWidget {
               Expanded(
                 child: _buildActionButton(
                   context,
+                  widgetKey: const Key('arkReceiveBtn'),
                   icon: Icons.arrow_downward,
                   label: 'Receive',
                   onTap: () => context.push('/ark/receive'),
@@ -227,6 +229,7 @@ class ArkScreen extends StatelessWidget {
               Expanded(
                 child: _buildActionButton(
                   context,
+                  widgetKey: const Key('arkBoardBtn'),
                   icon: Icons.login,
                   label: 'Board',
                   onTap: () => context.push('/ark/board'),
@@ -242,12 +245,14 @@ class ArkScreen extends StatelessWidget {
 
   Widget _buildActionButton(
     BuildContext context, {
+    Key? widgetKey,
     required IconData icon,
     required String label,
     required VoidCallback onTap,
     required bool isPrimary,
   }) {
     return GestureDetector(
+      key: widgetKey,
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),

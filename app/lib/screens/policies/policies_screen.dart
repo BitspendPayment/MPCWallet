@@ -245,6 +245,7 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
             ),
             const SizedBox(height: 16),
             ElevatedButton.icon(
+              key: const Key('addPolicyBtn'),
               onPressed: () {
                 context.push('/policies/edit');
               },

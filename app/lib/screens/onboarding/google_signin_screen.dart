@@ -88,6 +88,7 @@ class _GoogleSignInScreenState extends State<GoogleSignInScreen> {
                     style: GoogleFonts.inter(color: Colors.redAccent)),
               ),
             ElevatedButton.icon(
+              key: const Key('googleSignInBtn'),
               onPressed: _busy ? null : () => _signIn(extras),
               icon: _busy
                   ? const SizedBox(
@@ -101,6 +102,7 @@ class _GoogleSignInScreenState extends State<GoogleSignInScreen> {
             const Spacer(),
             if (!isRestore)
               TextButton(
+                key: const Key('googleSkipBtn'),
                 onPressed: _busy
                     ? null
                     : () => _confirmSkip(context, extras),

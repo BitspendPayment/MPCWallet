@@ -45,6 +45,7 @@ class _SendScreenState extends State<SendScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
+              key: const Key('sendAddressField'),
               controller: _addressController,
               onChanged: (_) => setState(() {}),
               decoration: InputDecoration(
@@ -82,6 +83,7 @@ class _SendScreenState extends State<SendScreen> {
               children: [
                 Expanded(
                   child: TextField(
+                    key: const Key('sendAmountField'),
                     controller: _amountController,
                     keyboardType:
                         const TextInputType.numberWithOptions(decimal: true),
@@ -110,6 +112,7 @@ class _SendScreenState extends State<SendScreen> {
             ),
             const Spacer(),
             ElevatedButton(
+              key: const Key('sendReviewBtn'),
               onPressed: _onReview,
               child: const Text('Review Transaction'),
             ),

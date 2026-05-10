@@ -261,6 +261,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
             ),
             const SizedBox(height: 16),
             TextField(
+              key: const Key('createPolicyPinField'),
               obscureText: true,
               keyboardType: TextInputType.number,
               maxLength: 6,
@@ -281,6 +282,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
+            key: const Key('createPolicyAuthorizeBtn'),
             onPressed: () {
               if (pin.length == 6 && RegExp(r'^\d{6}$').hasMatch(pin)) {
                 Navigator.of(context).pop(pin);
@@ -305,6 +307,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
             Text('Spending Threshold (Sats)',
                 style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
             Slider(
+              key: const Key('thresholdSlider'),
               value: _sliderValue,
               min: 0,
               max: 1,
@@ -355,6 +358,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
                 )),
             const Spacer(),
             ElevatedButton(
+              key: const Key('createPolicyBtn'),
               onPressed: _isSigning ? null : _savePolicy,
               child: _isSigning
                   ? const SizedBox(
