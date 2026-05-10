@@ -303,12 +303,29 @@ pub fn calculate_spent_amount(
                 .filter_map(|i| i.witness_utxo.as_ref())
                 .map(|utxo| utxo.value.to_sat())
                 .sum();
-            let outputs = &psbt.unsigned_tx.output;
-            let change_amount = if outputs.len() >= 3 {
-                outputs[outputs.len() - 2].value.to_sat()
-            } else {
-                0
-            };
+            // The user's change script is whatever script their spent inputs
+            // reside under — for Ark redeems all of the user's VTXOs share a
+            // single script tied to their group key. Reading it from the
+            // PSBT's witness_utxo is safe: any tampering also tampers the
+            // sighash the FROST signature commits to, so a compromised
+            // client can't silently mislabel inputs without producing a
+            // signature that won't verify or won't broadcast.
+            //
+            // Outputs whose script matches the user's input script are
+            // change; the spent (recipient) amount is everything else.
+            let user_input_scripts: std::collections::HashSet<_> = psbt
+                .inputs
+                .iter()
+                .filter_map(|i| i.witness_utxo.as_ref())
+                .map(|utxo| utxo.script_pubkey.clone())
+                .collect();
+            let change_amount: u64 = psbt
+                .unsigned_tx
+                .output
+                .iter()
+                .filter(|out| user_input_scripts.contains(&out.script_pubkey))
+                .map(|out| out.value.to_sat())
+                .sum();
             let net_spend = input_total.saturating_sub(change_amount);
             tracing::info!(
                 "PSBT policy eval: inputs={input_total}, change={change_amount}, net_spend={net_spend}"

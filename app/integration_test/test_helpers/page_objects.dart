@@ -189,6 +189,15 @@ class ArkBoardPage {
       timeout: timeout,
     );
   }
+
+  /// Fill the PIN that pops up when an active policy gates boarding.
+  static Future<void> enterBoardingPinAndAuthorize(
+    WidgetTester tester,
+    String pin,
+  ) async {
+    await _enterText(tester, 'boardingPinField', pin);
+    await _tapKey(tester, 'boardingAuthorizeBtn');
+  }
 }
 
 class ArkSendPage {

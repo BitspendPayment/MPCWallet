@@ -41,14 +41,27 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
   }
 
   Future<void> _startBoarding() async {
+    final mpcService = context.read<MpcService>();
+    final activePolicy = mpcService.activePolicy;
+
+    // If a spending policy is active, the boarding-output value is almost
+    // always above its threshold, so the server signs with the protected
+    // key package. We must use the same on the client — collect the PIN.
+    String? pin;
+    String? policyId;
+    if (activePolicy != null) {
+      pin = await _showPinDialog();
+      if (pin == null) return; // user cancelled
+      policyId = activePolicy.id;
+    }
+
     setState(() {
       _state = _BoardState.settling;
       _error = null;
     });
 
     try {
-      final mpcService = context.read<MpcService>();
-      final txid = await mpcService.boardFunds();
+      final txid = await mpcService.boardFunds(pin: pin, policyId: policyId);
       if (!mounted) return;
       setState(() {
         _state = _BoardState.done;
@@ -61,6 +74,62 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
         _error = e.toString();
       });
     }
+  }
+
+  Future<String?> _showPinDialog() async {
+    String pin = '';
+    return await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: Text('Policy Triggered',
+            style: GoogleFonts.inter(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.shield, size: 48, color: Colors.amber),
+            const SizedBox(height: 16),
+            Text(
+              'A spending policy is active. Enter your PIN to authorise the '
+              'boarding signatures.',
+              style: GoogleFonts.inter(color: Colors.white70),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              key: const Key('boardingPinField'),
+              obscureText: true,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              onChanged: (v) => pin = v,
+              style: const TextStyle(color: Colors.white, letterSpacing: 8),
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                labelText: '6-digit PIN',
+                counterText: '',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(null),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            key: const Key('boardingAuthorizeBtn'),
+            onPressed: () {
+              if (pin.length == 6 && RegExp(r'^\d{6}$').hasMatch(pin)) {
+                Navigator.of(context).pop(pin);
+              }
+            },
+            child: const Text('Authorize'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

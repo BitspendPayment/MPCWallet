@@ -1241,7 +1241,14 @@ class MpcClient {
 
   /// Settle on-chain boarding UTXOs into Ark VTXOs.
   /// Returns the commitment txid when settled.
-  Future<String> settle() async {
+  /// Settle (board on-chain UTXOs into VTXOs).
+  ///
+  /// If the user has an active spending policy and the boarding output's value
+  /// exceeds its threshold, the server switches to the protected key package
+  /// for FROST signing. Pass [pin] and [policyId] so the client signs with the
+  /// matching protected key — otherwise FROST aggregation will fail with
+  /// "invalid signature".
+  Future<String> settle({String? pin, String? policyId}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settle.");
     }
@@ -1276,12 +1283,12 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // FROST sign - script path means no taproot tweak
-          final sig = await signWithContext(
+          // FROST sign — sign() picks the protected policy KP when
+          // pin+policyId are supplied, or _normalPolicy otherwise.
+          final sig = await sign(
             sighashBytes,
-            _normalPolicy!.keyPackage,
-            _normalPolicy!.publicKeyPackage,
-            null,
+            pin: pin,
+            policyId: policyId,
             applyTweak: !scriptPath,
           );
 
@@ -1316,7 +1323,9 @@ class MpcClient {
   /// Only 2 rounds vs 4 for boarding:
   /// Phase 1: get all sighashes (intent proof + forfeit PSBTs)
   /// Phase 2: send FROST signatures, server drives batch autonomously
-  Future<String> settleDelegate() async {
+  /// Same caveat as [settle]: pass [pin] + [policyId] when an active policy
+  /// covers the VTXO amounts being refreshed.
+  Future<String> settleDelegate({String? pin, String? policyId}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settleDelegate.");
     }
@@ -1343,11 +1352,10 @@ class MpcClient {
 
     for (final sighash in resp1.messagesToSign) {
       final sighashBytes = Uint8List.fromList(sighash);
-      final sig = await signWithContext(
+      final sig = await sign(
         sighashBytes,
-        _normalPolicy!.keyPackage,
-        _normalPolicy!.publicKeyPackage,
-        null,
+        pin: pin,
+        policyId: policyId,
         applyTweak: !scriptPath,
       );
 

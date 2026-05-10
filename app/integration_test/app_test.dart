@@ -73,10 +73,7 @@ void main() {
         timeout: const Duration(seconds: 90),
       );
 
-      // ── Spending policy block — TEMPORARILY DISABLED to confirm whether
-      //    the active policy is breaking the subsequent Ark boarding sign.
-      //    Re-enable once the FROST/policy interaction is understood.
-      /*
+      // ── Spending policy: create + verify enforcement ────────────────────
       const pin = '123456';
 
       await HomePage.tapPoliciesTab(tester);
@@ -143,7 +140,6 @@ void main() {
         find.byKey(const Key('homeSendBtn')),
         timeout: const Duration(seconds: 90),
       );
-      */
 
       // ── Ark boarding (skipped when ASP not configured) ──────────────────
       await HomePage.tapArkTab(tester);
@@ -166,6 +162,15 @@ void main() {
 
         await ArkBoardPage.waitForFundsDetected(tester);
         await ArkBoardPage.tapBoardNow(tester);
+        // With an active policy, ark_board_screen prompts for PIN before
+        // sending the FROST signs to the server (so client uses the same
+        // protected key package the server will use).
+        await pumpUntilFound(
+          tester,
+          find.byKey(const Key('boardingPinField')),
+          timeout: const Duration(seconds: 30),
+        );
+        await ArkBoardPage.enterBoardingPinAndAuthorize(tester, pin);
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkBoardDoneBtn')),
@@ -187,6 +192,15 @@ void main() {
         await ArkSendPage.enterAddress(tester, bobArkAddress);
         await ArkSendPage.enterAmount(tester, '5000');
         await ArkSendPage.tapSend(tester);
+        // Cumulative spending in the 24h window already exceeds the 10k
+        // threshold (50k on-chain over-threshold + 500k boarding both went
+        // into the spending history), so even a 5k Ark send triggers PIN.
+        await pumpUntilFound(
+          tester,
+          find.byKey(const Key('signingPinField')),
+          timeout: const Duration(seconds: 30),
+        );
+        await SigningPinDialog.enterAndAuthorize(tester, pin);
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkSendBtn')),
