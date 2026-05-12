@@ -61,6 +61,9 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Pin to match the project's Gradle 7.6.3 / AGP setup. Newer Flutter
+          # ships a Gradle plugin that needs Gradle 8.3+ (filePermissions API).
+          flutter-version: '3.22.0'
           channel: stable
           cache: true
 
@@ -211,6 +214,9 @@ jobs:
       - name: Set up Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Pin to match the project's Gradle 7.6.3 / AGP setup. Newer Flutter
+          # ships a Gradle plugin that needs Gradle 8.3+ (filePermissions API).
+          flutter-version: '3.22.0'
           channel: stable
           cache: true
 
