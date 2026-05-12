@@ -26,6 +26,13 @@ Future<void> _enterText(
   await tester.pump();
 }
 
+/// Closes the on-screen keyboard. On the small CI emulator (320x640) the IME
+/// covers buttons that sit below a text field, so dismiss it before tapping.
+Future<void> _dismissKeyboard(WidgetTester tester) async {
+  FocusManager.instance.primaryFocus?.unfocus();
+  await tester.pumpAndSettle();
+}
+
 class WelcomePage {
   static Future<void> tapCreate(WidgetTester tester) =>
       _tapKey(tester, 'welcomeCreateBtn');
@@ -48,8 +55,7 @@ class PasswordPage {
     await _enterText(tester, 'passwordField2', password);
     await _tapKey(tester, 'passwordAckCheckbox');
     await tester.pumpAndSettle();
-    // The on-device keyboard is up after enterText and pushes the Continue
-    // button below the visible area; scroll it into view first.
+    await _dismissKeyboard(tester);
     await tester.dragUntilVisible(
       find.byKey(const Key('passwordContinueBtn')),
       find.byType(SingleChildScrollView),
@@ -137,6 +143,7 @@ class PoliciesPage {
 class RecoveryPasswordDialog {
   static Future<void> enterAndOk(WidgetTester tester, String password) async {
     await _enterText(tester, 'recoveryPasswordField', password);
+    await _dismissKeyboard(tester);
     await _tapKey(tester, 'recoveryPasswordOkBtn');
   }
 }
@@ -167,6 +174,7 @@ class EditPolicyPage {
     String pin,
   ) async {
     await _enterText(tester, 'createPolicyPinField', pin);
+    await _dismissKeyboard(tester);
     await _tapKey(tester, 'createPolicyAuthorizeBtn');
   }
 }
@@ -177,6 +185,7 @@ class SigningPinDialog {
     String pin,
   ) async {
     await _enterText(tester, 'signingPinField', pin);
+    await _dismissKeyboard(tester);
     await _tapKey(tester, 'signingAuthorizeBtn');
   }
 }
@@ -186,8 +195,10 @@ class SendPage {
       _enterText(tester, 'sendAddressField', address);
   static Future<void> enterAmount(WidgetTester tester, String sats) =>
       _enterText(tester, 'sendAmountField', sats);
-  static Future<void> tapReview(WidgetTester tester) =>
-      _tapKey(tester, 'sendReviewBtn');
+  static Future<void> tapReview(WidgetTester tester) async {
+    await _dismissKeyboard(tester);
+    await _tapKey(tester, 'sendReviewBtn');
+  }
 }
 
 class ReviewPage {
@@ -226,6 +237,7 @@ class ArkBoardPage {
     String pin,
   ) async {
     await _enterText(tester, 'boardingPinField', pin);
+    await _dismissKeyboard(tester);
     await _tapKey(tester, 'boardingAuthorizeBtn');
   }
 }
@@ -235,13 +247,17 @@ class ArkSendPage {
       _enterText(tester, 'arkSendAddressField', address);
   static Future<void> enterAmount(WidgetTester tester, String sats) =>
       _enterText(tester, 'arkSendAmountField', sats);
-  static Future<void> tapSend(WidgetTester tester) =>
-      _tapKey(tester, 'arkSendVtxoBtn');
+  static Future<void> tapSend(WidgetTester tester) async {
+    await _dismissKeyboard(tester);
+    await _tapKey(tester, 'arkSendVtxoBtn');
+  }
 }
 
 class RestorePage {
   static Future<void> enterPassword(WidgetTester tester, String password) =>
       _enterText(tester, 'restorePasswordField', password);
-  static Future<void> tapContinue(WidgetTester tester) =>
-      _tapKey(tester, 'restoreContinueBtn');
+  static Future<void> tapContinue(WidgetTester tester) async {
+    await _dismissKeyboard(tester);
+    await _tapKey(tester, 'restoreContinueBtn');
+  }
 }

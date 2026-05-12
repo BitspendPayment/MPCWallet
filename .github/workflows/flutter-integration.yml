@@ -143,6 +143,7 @@ jobs:
           api-level: 33
           arch: x86_64
           target: google_apis
+          profile: pixel_6   # real phone screen; the default skin is a tiny 320x640
           script: |
             adb reverse tcp:7074 tcp:7074
             adb reverse tcp:50001 tcp:50001
@@ -276,6 +277,7 @@ jobs:
           api-level: 33
           arch: x86_64
           target: google_apis
+          profile: pixel_6   # real phone screen; the default skin is a tiny 320x640
           script: |
             adb reverse tcp:7074 tcp:7074
             adb reverse tcp:50001 tcp:50001
