@@ -111,7 +111,8 @@ jobs:
 
       - name: Start signer-server
         run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
+          nohup e2e/signer-server/target/release/signer-server --port 9090 \
+            > /tmp/signer-server.log 2>&1 &
           sleep 1
 
       - name: Start cosigner-runtime (with ASP)
@@ -122,10 +123,11 @@ jobs:
           BITCOIN_RPC_PASSWORD: '123'
           ASP_URL: http://127.0.0.1:7070
         run: |
-          cosigner-runtime/target/release/cosigner-runtime \
+          nohup cosigner-runtime/target/release/cosigner-runtime \
             --wasm cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-            --port 7074 &
+            --port 7074 > /tmp/cosigner-runtime.log 2>&1 &
           sleep 3
+          curl -sS http://127.0.0.1:7074/health || curl -sS http://127.0.0.1:7074/ || true
 
       - name: Flutter pub get
         run: cd app && flutter pub get
@@ -154,10 +156,13 @@ jobs:
       - name: Dump logs on failure
         if: failure()
         run: |
+          echo "=== cosigner-runtime ==="; tail -200 /tmp/cosigner-runtime.log || true
+          echo "=== signer-server ==="; tail -80 /tmp/signer-server.log || true
           echo "=== bob_proxy ==="; cat /tmp/bob_proxy.log || true
           echo "=== arkd ==="; docker logs --tail 100 mpc_arkd || true
           echo "=== arkd-wallet ==="; docker logs --tail 50 mpc_arkd_wallet || true
           echo "=== nbxplorer ==="; docker logs --tail 50 mpc_nbxplorer || true
+          echo "=== electrs ==="; docker logs --tail 50 mpc_electrs || true
 
       - name: Cleanup
         if: always()
@@ -166,127 +171,3 @@ jobs:
           pkill -f signer-server || true
           pkill -f bob_proxy || true
           docker compose -f docker-compose.yml -f docker-compose.ark.yml down || true
-
-  # ─────────────────────────────────────────────────────────────────────────
-  # Fast canary: same test, but no ASP — the Ark sub-flow self-skips. Gives a
-  # green/red signal in ~12 min for the onboarding/send/policy/recovery core
-  # even if the full job is mid-run or flaking on Ark-stack timing.
-  # ─────────────────────────────────────────────────────────────────────────
-  core:
-    name: Core integration test (no Ark)
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip1,x86_64-linux-android
-
-      - name: Install protoc
-        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install cargo-component
-        run: cargo install cargo-component
-
-      - name: Cache cargo
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            ffi/target
-            cosigner/target
-            cosigner-runtime/target
-            e2e/signer-server/target
-          key: integration-core-rust-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: integration-core-rust-
-
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          # Pin to match the project's Gradle 7.6.3 / AGP setup. Newer Flutter
-          # ships a Gradle plugin that needs Gradle 8.3+ (filePermissions API).
-          flutter-version: '3.22.0'
-          channel: stable
-          cache: true
-
-      - name: Use the runner's JDK for Gradle
-        run: sed -i '/^org.gradle.java.home=/d' app/android/gradle.properties
-
-      - name: Build host binaries
-        run: |
-          cargo build --release --manifest-path cosigner-runtime/Cargo.toml
-          (cd cosigner && cargo component build --release)
-          cargo build --release --manifest-path e2e/signer-server/Cargo.toml
-
-      - name: Build FFI for Android x86_64
-        run: |
-          export PATH="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
-          cargo build --release --manifest-path ffi/Cargo.toml --target x86_64-linux-android
-          mkdir -p app/android/app/src/main/jniLibs/x86_64
-          cp ffi/target/x86_64-linux-android/release/libmpcwallet_ffi.so \
-             app/android/app/src/main/jniLibs/x86_64/
-
-      - name: Start regtest (no ASP)
-        run: |
-          docker compose up -d
-          sleep 10
-          ./scripts/bitcoin.sh init
-
-      - name: Start signer-server
-        run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
-          sleep 1
-
-      - name: Start cosigner-runtime (no ASP — Ark sub-flow will self-skip)
-        env:
-          ELECTRUM_URL: 127.0.0.1
-          ELECTRUM_PORT: '50001'
-          BITCOIN_RPC_USER: admin1
-          BITCOIN_RPC_PASSWORD: '123'
-        run: |
-          cosigner-runtime/target/release/cosigner-runtime \
-            --wasm cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-            --port 7074 &
-          sleep 3
-
-      - name: Flutter pub get
-        run: cd app && flutter pub get
-
-      - name: Enable KVM (emulator acceleration)
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
-            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-
-      - name: Run integration test on emulator
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 33
-          arch: x86_64
-          target: google_apis
-          profile: pixel_6   # real phone screen; the default skin is a tiny 320x640
-          script: |
-            adb reverse tcp:7074 tcp:7074
-            adb reverse tcp:50001 tcp:50001
-            adb reverse tcp:18443 tcp:18443
-            cd app && flutter test integration_test/app_test.dart --reporter expanded
-
-      - name: Cleanup
-        if: always()
-        run: |
-          pkill -f cosigner-runtime || true
-          pkill -f signer-server || true
-          docker compose down || true

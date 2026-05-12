@@ -24,8 +24,14 @@ class Flows {
     await GoogleSignInPage.signIn(tester);
     await tester.pumpAndSettle();
     await ServerConnectPage.useDefault(tester);
-    await tester.pumpAndSettle();
-    await DkgProgressPage.waitForReady(tester);
+    // Don't pumpAndSettle here — the DKG screen has a CircularProgressIndicator
+    // that never "settles" until DKG completes, so pumpAndSettle would block
+    // (up to its 10-min cap). waitForReady polls via pump() instead, which is
+    // unaffected by ongoing animations.
+    await DkgProgressPage.waitForReady(
+      tester,
+      timeout: const Duration(minutes: 3),
+    );
     await WalletReadyPage.tapGoToWallet(tester);
     await tester.pumpAndSettle();
   }

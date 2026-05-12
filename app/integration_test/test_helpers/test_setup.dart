@@ -135,7 +135,9 @@ Future<void> waitForBalance(
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
     try {
-      await svc.refreshHistory();
+      // Timeout the refresh itself — a hung electrs query would otherwise
+      // block this loop past the testWidgets cap.
+      await svc.refreshHistory().timeout(const Duration(seconds: 20));
     } catch (_) {}
     if (svc.balance >= minimumSats) return;
     await tester.pump(pollEvery);
@@ -169,7 +171,7 @@ Future<void> waitForArkBalance(
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
     try {
-      await svc.refreshVtxos();
+      await svc.refreshVtxos().timeout(const Duration(seconds: 20));
     } catch (_) {}
     if (svc.arkBalance >= minimumSats) return;
     await tester.pump(pollEvery);
