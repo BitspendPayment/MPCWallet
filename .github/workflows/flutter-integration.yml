@@ -64,6 +64,11 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Use the runner's JDK for Gradle
+        # gradle.properties pins org.gradle.java.home to a dev-machine path;
+        # strip it so Gradle uses JAVA_HOME (set by actions/setup-java above).
+        run: sed -i '/^org.gradle.java.home=/d' app/android/gradle.properties
+
       - name: Build MPCWallet host binaries
         run: |
           cargo build --release --manifest-path cosigner-runtime/Cargo.toml
@@ -208,6 +213,9 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      - name: Use the runner's JDK for Gradle
+        run: sed -i '/^org.gradle.java.home=/d' app/android/gradle.properties
 
       - name: Build host binaries
         run: |
