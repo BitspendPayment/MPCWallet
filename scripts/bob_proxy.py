@@ -18,7 +18,12 @@ import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-RUST_SDK_DIR = Path(os.environ.get("RUST_SDK_DIR", str(Path.home() / "rust-sdk")))
+# Default to the vendored submodule (scripts/ -> repo root -> third_party/rust-sdk);
+# override RUST_SDK_DIR to point at a local checkout instead.
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+RUST_SDK_DIR = Path(
+    os.environ.get("RUST_SDK_DIR", str(_REPO_ROOT / "third_party" / "rust-sdk"))
+)
 BOB_DIR = Path(os.environ.get("BOB_DIR", "/tmp/bob_ark"))
 PORT = int(os.environ.get("BOB_PROXY_PORT", "7090"))
 

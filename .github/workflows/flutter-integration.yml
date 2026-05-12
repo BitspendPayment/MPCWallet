@@ -10,10 +10,163 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  integration:
-    name: Flutter integration tests
+  # ─────────────────────────────────────────────────────────────────────────
+  # Full end-to-end: onboarding → on-chain send → policy → Ark board/send/
+  # receive (with ark-client-sample = "Bob") → policy delete → 30s rollover →
+  # recovery, on an x86_64 Android emulator against the full ASP stack.
+  # ─────────────────────────────────────────────────────────────────────────
+  full:
+    name: Full integration test (Ark stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive   # pulls third_party/rust-sdk (ark-client-sample)
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip1,x86_64-linux-android
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install cargo-component
+        run: cargo install cargo-component
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ffi/target
+            cosigner/target
+            cosigner-runtime/target
+            e2e/signer-server/target
+            third_party/rust-sdk/target
+          key: integration-rust-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: integration-rust-
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Build MPCWallet host binaries
+        run: |
+          cargo build --release --manifest-path cosigner-runtime/Cargo.toml
+          (cd cosigner && cargo component build --release)
+          cargo build --release --manifest-path e2e/signer-server/Cargo.toml
+
+      - name: Build FFI for Android x86_64
+        run: |
+          export PATH="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          cargo build --release --manifest-path ffi/Cargo.toml --target x86_64-linux-android
+          mkdir -p app/android/app/src/main/jniLibs/x86_64
+          cp ffi/target/x86_64-linux-android/release/libmpcwallet_ffi.so \
+             app/android/app/src/main/jniLibs/x86_64/
+
+      - name: Build ark-client-sample (Bob)
+        run: cargo build --release --manifest-path third_party/rust-sdk/ark-client-sample/Cargo.toml
+
+      - name: Bring up the Ark stack (bitcoind + electrs + nbxplorer + arkd)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d --force-recreate
+          echo "Waiting for services to stabilize (20s)..."
+          sleep 20
+          ./scripts/bitcoin.sh init
+          ./scripts/arkd_init.sh --fund
+          echo "Waiting for NBXplorer to index (10s)..."
+          sleep 10
+
+      - name: Set up Bob (ark-client-sample wallet + HTTP proxy on :7090)
+        env:
+          RUST_SDK_DIR: ${{ github.workspace }}/third_party/rust-sdk
+          BOB_DIR: /tmp/bob_ark
+        run: |
+          ./scripts/bob_setup.sh
+          nohup python3 scripts/bob_proxy.py > /tmp/bob_proxy.log 2>&1 &
+          sleep 2
+          curl -sS http://127.0.0.1:7090/ark-address || (cat /tmp/bob_proxy.log; exit 1)
+
+      - name: Start signer-server
+        run: |
+          e2e/signer-server/target/release/signer-server --port 9090 &
+          sleep 1
+
+      - name: Start cosigner-runtime (with ASP)
+        env:
+          ELECTRUM_URL: 127.0.0.1
+          ELECTRUM_PORT: '50001'
+          BITCOIN_RPC_USER: admin1
+          BITCOIN_RPC_PASSWORD: '123'
+          ASP_URL: http://127.0.0.1:7070
+        run: |
+          cosigner-runtime/target/release/cosigner-runtime \
+            --wasm cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+            --port 7074 &
+          sleep 3
+
+      - name: Flutter pub get
+        run: cd app && flutter pub get
+
+      - name: Enable KVM (emulator acceleration)
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run integration test on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 33
+          arch: x86_64
+          target: google_apis
+          script: |
+            adb reverse tcp:7074 tcp:7074
+            adb reverse tcp:50001 tcp:50001
+            adb reverse tcp:18443 tcp:18443
+            adb reverse tcp:7090 tcp:7090
+            cd app && flutter test integration_test/app_test.dart --reporter expanded
+
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "=== bob_proxy ==="; cat /tmp/bob_proxy.log || true
+          echo "=== arkd ==="; docker logs --tail 100 mpc_arkd || true
+          echo "=== arkd-wallet ==="; docker logs --tail 50 mpc_arkd_wallet || true
+          echo "=== nbxplorer ==="; docker logs --tail 50 mpc_nbxplorer || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          pkill -f cosigner-runtime || true
+          pkill -f signer-server || true
+          pkill -f bob_proxy || true
+          docker compose -f docker-compose.yml -f docker-compose.ark.yml down || true
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Fast canary: same test, but no ASP — the Ark sub-flow self-skips. Gives a
+  # green/red signal in ~12 min for the onboarding/send/policy/recovery core
+  # even if the full job is mid-run or flaking on Ark-stack timing.
+  # ─────────────────────────────────────────────────────────────────────────
+  core:
+    name: Core integration test (no Ark)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -38,8 +191,8 @@ jobs:
             cosigner/target
             cosigner-runtime/target
             e2e/signer-server/target
-          key: integration-rust-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: integration-rust-
+          key: integration-core-rust-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: integration-core-rust-
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -63,16 +216,14 @@ jobs:
           cargo build --release --manifest-path e2e/signer-server/Cargo.toml
 
       - name: Build FFI for Android x86_64
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
         run: |
-          export PATH="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
+          export PATH="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin:$PATH"
           cargo build --release --manifest-path ffi/Cargo.toml --target x86_64-linux-android
           mkdir -p app/android/app/src/main/jniLibs/x86_64
           cp ffi/target/x86_64-linux-android/release/libmpcwallet_ffi.so \
              app/android/app/src/main/jniLibs/x86_64/
 
-      - name: Start regtest (bitcoind + electrs)
+      - name: Start regtest (no ASP)
         run: |
           docker compose up -d
           sleep 10
@@ -83,7 +234,7 @@ jobs:
           e2e/signer-server/target/release/signer-server --port 9090 &
           sleep 1
 
-      - name: Start cosigner-runtime
+      - name: Start cosigner-runtime (no ASP — Ark sub-flow will self-skip)
         env:
           ELECTRUM_URL: 127.0.0.1
           ELECTRUM_PORT: '50001'
@@ -105,7 +256,7 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
-      - name: Run integration tests on emulator
+      - name: Run integration test on emulator
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 33
@@ -115,8 +266,7 @@ jobs:
             adb reverse tcp:7074 tcp:7074
             adb reverse tcp:50001 tcp:50001
             adb reverse tcp:18443 tcp:18443
-            cd app
-            flutter test integration_test/app_test.dart
+            cd app && flutter test integration_test/app_test.dart --reporter expanded
 
       - name: Cleanup
         if: always()

@@ -17,7 +17,9 @@
 
 set -euo pipefail
 
-RUST_SDK_DIR="${RUST_SDK_DIR:-$HOME/rust-sdk}"
+# Default to the vendored submodule; override RUST_SDK_DIR to use a local checkout.
+_REPO_ROOT="$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null || echo "$(dirname "$0")/..")"
+RUST_SDK_DIR="${RUST_SDK_DIR:-$_REPO_ROOT/third_party/rust-sdk}"
 BOB_DIR="${BOB_DIR:-/tmp/bob_ark}"
 ARK_SERVER_URL="${ARK_SERVER_URL:-http://127.0.0.1:7070}"
 ESPLORA_URL="${ESPLORA_URL:-http://127.0.0.1:30000}"
