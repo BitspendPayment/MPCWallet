@@ -29,4 +29,41 @@ class Flows {
     await WalletReadyPage.tapGoToWallet(tester);
     await tester.pumpAndSettle();
   }
+
+  /// Home → Send → Review → Sign → (maybe PIN) → back to Home.
+  ///
+  /// Asserts the spending-policy PIN dialog is present-or-absent according to
+  /// [expectPin] — this is how the test pins down policy enforcement.
+  static Future<void> doOnChainSend(
+    WidgetTester tester, {
+    required String destination,
+    required String amountSats,
+    required bool expectPin,
+    String pin = '123456',
+  }) async {
+    await HomePage.tapSend(tester);
+    await tester.pumpAndSettle();
+    await SendPage.enterAddress(tester, destination);
+    await SendPage.enterAmount(tester, amountSats);
+    await SendPage.tapReview(tester);
+    await pumpUntilFound(tester, find.byKey(const Key('reviewSignBtn')));
+    await ReviewPage.tapSign(tester);
+    if (expectPin) {
+      await pumpUntilFound(
+        tester,
+        find.byKey(const Key('signingPinField')),
+        timeout: const Duration(seconds: 30),
+      );
+      await SigningPinDialog.enterAndAuthorize(tester, pin);
+    } else {
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.byKey(const Key('signingPinField')), findsNothing,
+          reason: 'send of $amountSats sats must not prompt for PIN');
+    }
+    await pumpUntilFound(
+      tester,
+      find.byKey(const Key('homeSendBtn')),
+      timeout: const Duration(seconds: 90),
+    );
+  }
 }

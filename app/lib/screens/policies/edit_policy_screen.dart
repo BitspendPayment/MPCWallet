@@ -44,6 +44,7 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
     if (d.inDays >= 7) return '7d';
     if (d.inHours >= 24) return '24h';
     if (d.inHours >= 1) return '1h';
+    if (d.inSeconds < 60) return '30s';
     return '5m';
   }
 
@@ -74,6 +75,8 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
 
   Duration get _selectedDuration {
     switch (_interval) {
+      case '30s':
+        return const Duration(seconds: 30);
       case '5m':
         return const Duration(minutes: 5);
       case '1h':
@@ -326,7 +329,9 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
                 style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
             const SizedBox(height: 16),
             SegmentedButton<String>(
+                key: const Key('policyIntervalSelector'),
                 segments: const [
+                  ButtonSegment(value: '30s', label: Text('30 Sec')),
                   ButtonSegment(value: '5m', label: Text('5 Min')),
                   ButtonSegment(value: '1h', label: Text('1 Hour')),
                   ButtonSegment(value: '24h', label: Text('Daily')),

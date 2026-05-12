@@ -59,6 +59,7 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
             child: const Text('Cancel'),
           ),
           ElevatedButton(
+            key: const Key('confirmDeletePolicyBtn'),
             style: ElevatedButton.styleFrom(
               backgroundColor: Colors.redAccent,
               foregroundColor: Colors.white,
@@ -311,6 +312,8 @@ class _PoliciesScreenState extends State<PoliciesScreen> {
               ),
               const SizedBox(width: 4),
               IconButton(
+                // `index` here is the 1-based display number; key is 0-based.
+                key: ValueKey('deletePolicyBtn_${index - 1}'),
                 icon: const Icon(Icons.delete_outline,
                     color: Colors.redAccent, size: 20),
                 tooltip: 'Delete Policy',

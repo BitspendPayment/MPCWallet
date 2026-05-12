@@ -113,11 +113,32 @@ class HomePage {
     ));
     await tester.pump();
   }
+
+  /// Tap the 'Home' bottom-nav item. No-op on the Home screen itself; from
+  /// the Ark screen it `context.go('/')` (replacing the stack).
+  static Future<void> tapHomeTab(WidgetTester tester) async {
+    await tester.tap(find.descendant(
+      of: find.byType(BottomNavigationBar),
+      matching: find.text('Home'),
+    ));
+    await tester.pumpAndSettle();
+  }
 }
 
 class PoliciesPage {
   static Future<void> tapAdd(WidgetTester tester) =>
       _tapKey(tester, 'addPolicyBtn');
+  static Future<void> tapDelete(WidgetTester tester, {int index = 0}) =>
+      _tapKey(tester, 'deletePolicyBtn_$index');
+  static Future<void> confirmDelete(WidgetTester tester) =>
+      _tapKey(tester, 'confirmDeletePolicyBtn');
+}
+
+class RecoveryPasswordDialog {
+  static Future<void> enterAndOk(WidgetTester tester, String password) async {
+    await _enterText(tester, 'recoveryPasswordField', password);
+    await _tapKey(tester, 'recoveryPasswordOkBtn');
+  }
 }
 
 class EditPolicyPage {
@@ -127,6 +148,15 @@ class EditPolicyPage {
       const Offset(-1000, 0),
     );
     await tester.pump();
+  }
+
+  /// Pick an interval segment by its visible label, e.g. '30 Sec' or 'Daily'.
+  static Future<void> pickInterval(WidgetTester tester, String label) async {
+    await tester.tap(find.descendant(
+      of: find.byKey(const Key('policyIntervalSelector')),
+      matching: find.text(label),
+    ));
+    await tester.pumpAndSettle();
   }
 
   static Future<void> tapSave(WidgetTester tester) =>

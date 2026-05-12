@@ -55,6 +55,7 @@ class _RecoveryPasswordDialogState extends State<_RecoveryPasswordDialog> {
             const SizedBox(height: 12),
           ],
           TextField(
+            key: const Key('recoveryPasswordField'),
             controller: _ctrl,
             obscureText: _obscure,
             autofocus: true,
@@ -76,6 +77,7 @@ class _RecoveryPasswordDialogState extends State<_RecoveryPasswordDialog> {
           child: const Text('Cancel'),
         ),
         TextButton(
+          key: const Key('recoveryPasswordOkBtn'),
           onPressed: () => Navigator.of(context).pop(_ctrl.text),
           child: const Text('OK'),
         ),

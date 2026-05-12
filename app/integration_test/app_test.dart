@@ -234,6 +234,103 @@ void main() {
         );
       }
 
+      // ── Policy: delete, then a fresh 30s-window policy to prove rollover ─
+      // Get back to Home (we may be on the Ark screen).
+      await HomePage.tapHomeTab(tester);
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
+
+      // Delete the 10k policy created earlier (recovery-key authorised).
+      await HomePage.tapPoliciesTab(tester);
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('deletePolicyBtn_0')));
+      await PoliciesPage.tapDelete(tester, index: 0);
+      await tester.pumpAndSettle();
+      await PoliciesPage.confirmDelete(tester);
+      await tester.pumpAndSettle();
+      await pumpUntilFound(
+          tester, find.byKey(const Key('recoveryPasswordField')));
+      await RecoveryPasswordDialog.enterAndOk(tester, password);
+      await pumpUntilFound(
+        tester,
+        find.byKey(const Key('addPolicyBtn')),
+        timeout: const Duration(seconds: 60),
+      );
+      await tester.pumpAndSettle();
+      final delCtx = tester.element(find.byKey(const Key('addPolicyBtn')));
+      final delSvc = Provider.of<MpcService>(delCtx, listen: false);
+      await pumpUntilTrue(
+        tester,
+        () => delSvc.policies.isEmpty && delSvc.activePolicy == null,
+        timeout: const Duration(seconds: 30),
+        reason: 'policy should be gone after delete',
+      );
+
+      // Verify the deleted policy is not enforced: a send of any size, no PIN.
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
+      await Flows.doOnChainSend(
+        tester,
+        destination: await btc.getNewAddress(),
+        amountSats: '6000',
+        expectPin: false,
+        pin: pin,
+      );
+
+      // Create a 30s-window, min-threshold (~10k) policy.
+      await HomePage.tapPoliciesTab(tester);
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('addPolicyBtn')));
+      await PoliciesPage.tapAdd(tester);
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('thresholdSlider')));
+      await EditPolicyPage.pickInterval(tester, '30 Sec');
+      await EditPolicyPage.dragThresholdToMin(tester);
+      await EditPolicyPage.tapSave(tester);
+      await pumpUntilFound(
+          tester, find.byKey(const Key('createPolicyPinField')));
+      await EditPolicyPage.enterPinAndAuthorize(tester, pin);
+      await pumpUntilFound(
+        tester,
+        find.byKey(const Key('addPolicyBtn')),
+        timeout: const Duration(seconds: 60),
+      );
+      await tester.pumpAndSettle();
+      await tester.pageBack();
+      await tester.pumpAndSettle();
+      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
+
+      // Inside the 30s window: 6k alone is under threshold (no PIN), but a
+      // second 6k makes the cumulative 12k > 10k → PIN. Proves aggregation.
+      await Flows.doOnChainSend(
+        tester,
+        destination: await btc.getNewAddress(),
+        amountSats: '6000',
+        expectPin: false,
+        pin: pin,
+      );
+      await Flows.doOnChainSend(
+        tester,
+        destination: await btc.getNewAddress(),
+        amountSats: '6000',
+        expectPin: true,
+        pin: pin,
+      );
+
+      // Let the 30s window roll over (real wall-clock — the policy engine
+      // reads SystemTime, not the test's frame clock). Cumulative resets to 0.
+      await Future<void>.delayed(const Duration(seconds: 35));
+      await tester.pump();
+      await Flows.doOnChainSend(
+        tester,
+        destination: await btc.getNewAddress(),
+        amountSats: '6000',
+        expectPin: false, // cumulative reset → 0 + 6000 < 10000
+        pin: pin,
+      );
+      await btc.generateToAddress(1, minerAddr);
+
       // ── Recovery: wipe, re-restore from the blob `store` already holds ──
       await tearDownTree(tester);
       await resetAppState();
