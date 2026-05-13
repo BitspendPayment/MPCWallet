@@ -28,9 +28,14 @@ Future<void> _enterText(
 
 /// Closes the on-screen keyboard. On the small CI emulator (320x640) the IME
 /// covers buttons that sit below a text field, so dismiss it before tapping.
+///
+/// Uses pump(), NOT pumpAndSettle(): some screens (e.g. the signing screen)
+/// keep a CircularProgressIndicator running, so pumpAndSettle() would block
+/// until the test times out. ~500ms is enough for the IME-hide animation and
+/// the viewInsets reflow.
 Future<void> _dismissKeyboard(WidgetTester tester) async {
   FocusManager.instance.primaryFocus?.unfocus();
-  await tester.pumpAndSettle();
+  await tester.pump(const Duration(milliseconds: 500));
 }
 
 class WelcomePage {
