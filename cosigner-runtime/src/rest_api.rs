@@ -13,6 +13,7 @@ use tonic::Status;
 
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
+use crate::dkg_coordinator::DkgCoordinator;
 use crate::wallet_proto::{self};
 
 /// Per-route extractor types pull what they need from this struct via
@@ -20,6 +21,7 @@ use crate::wallet_proto::{self};
 #[derive(Clone)]
 pub struct AppState {
     pub registry: Arc<CosignerRegistry>,
+    pub dkg_coordinator: Arc<DkgCoordinator>,
     /// Public deployment metadata served by `/api/server-info`. Built once
     /// at startup from `ServerConfig::bitcoin_network`.
     pub server_info: Arc<wallet_proto::GetServerInfoResponse>,
@@ -28,6 +30,12 @@ pub struct AppState {
 impl FromRef<AppState> for Arc<CosignerRegistry> {
     fn from_ref(s: &AppState) -> Self {
         s.registry.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<DkgCoordinator> {
+    fn from_ref(s: &AppState) -> Self {
+        s.dkg_coordinator.clone()
     }
 }
 
@@ -215,42 +223,54 @@ async fn get_server_info(
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step1", fields(user_id = %user_id))]
 async fn dkg_step1(
-    State(reg): State<Arc<CosignerRegistry>>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep1, wallet_proto::DkgStep1Request {
+    let req = wallet_proto::DkgStep1Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
         is_restore: bool_field(&body, "is_restore"),
-    })
+    };
+    match coord.dkg_step1(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step2", fields(user_id = %user_id))]
 async fn dkg_step2(
-    State(reg): State<Arc<CosignerRegistry>>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep2, wallet_proto::DkgStep2Request {
+    let req = wallet_proto::DkgStep2Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
-    })
+    };
+    match coord.dkg_step2(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step3", fields(user_id = %user_id))]
 async fn dkg_step3(
-    State(reg): State<Arc<CosignerRegistry>>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep3, wallet_proto::DkgStep3Request {
+    let req = wallet_proto::DkgStep3Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
-    })
+    };
+    match coord.dkg_step3(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -403,3 +403,68 @@ Net deletion. Five sources of truth collapse to one.
   reporting `bitcoin_network = "mutinynet"` is a label, not a different
   encoding. `parseBitcoinNetwork` already maps both to `BitcoinNetwork.signet`
   (correct).
+
+---
+
+## 4. `device_tokens` written to sled but never loaded back
+
+### Symptoms
+
+After the cosigner-runtime restarts, FCM pushes for newly-received VTXOs
+silently no-op for any user who hasn't reopened their app since the restart.
+The app does call `registerDeviceToken` on every launch, so users who
+*are* opening the app re-register fine — but a user whose VTXO arrives
+*while their app is closed* and the cosigner happens to have restarted will
+never get a wake push.
+
+### Root cause
+
+[`device_token.rs::register_device_token`](cosigner-runtime/src/cosigner/handlers/device_token.rs)
+writes through `save_user_device_tokens` to sled at
+[`helpers.rs::save_user_device_tokens`](cosigner-runtime/src/cosigner/handlers/helpers.rs),
+but no code path reads it back. `CosignerState::new(user_id_hex)` initializes
+`device_tokens: Vec::new()` and only `register_device_token` ever mutates it.
+
+When an actor (re)spawns post-restart, its `device_tokens` is empty until
+the client makes a fresh `register_device_token` call. The `vtxo_stream`'s
+push fan-out walks the empty vec and skips silently.
+
+(This is the same "written but not read" pattern as `vtxo_store` and
+`ark_tx_history`. Those happen to work — `vtxo_store` because the stream
+reconstructs it on subscription, and `ark_tx_history` is acknowledged as a
+pre-existing gap. `device_tokens` has no such reconstruction.)
+
+### Plan
+
+Load `device_tokens` from sled when the actor spawns. Two surgical edits:
+
+1. Add `load_user_device_tokens` in
+   [helpers.rs](cosigner-runtime/src/cosigner/handlers/helpers.rs) mirroring
+   `save_user_device_tokens` — `persistence.get("device_tokens", user_id_hex)`
+   then `serde_json::from_str::<Vec<DeviceToken>>`.
+
+2. Call it from `CosignerRegistry::get_or_spawn` after `CosignerState::new`,
+   before `tokio::spawn(run_actor(...))`. Best-effort: log a warning on
+   parse failure and continue with an empty vec rather than failing the
+   spawn.
+
+### Files to touch
+
+- [cosigner-runtime/src/cosigner/handlers/helpers.rs](cosigner-runtime/src/cosigner/handlers/helpers.rs)
+  — add `load_user_device_tokens` (~10 lines).
+- [cosigner-runtime/src/cosigner/registry.rs](cosigner-runtime/src/cosigner/registry.rs)
+  — populate `state.device_tokens` before spawning the actor (~5 lines).
+
+### Verification
+
+- Register a token, restart the cosigner-runtime, send a VTXO to the user
+  *without* the client re-opening the app first. Cosigner log should show
+  the FCM push fire to the persisted token.
+- e2e test: register a fake token via REST, kill+restart the cosigner-runtime
+  process, call `listVtxos` (which respawns the actor), then assert the
+  cosigner's debug-level log mentions the token in `push_vtxo_received`.
+
+### Cost
+
+~15 lines Rust. No proto change, no migration (existing sled rows are
+already valid `Vec<DeviceToken>` JSON).

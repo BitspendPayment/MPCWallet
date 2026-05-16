@@ -579,11 +579,33 @@ pub fn settle_delegate(
             let total_amount: u64 = state.vtxos.iter().map(|e| e.amount).sum();
 
             let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
-            let exit_delay = info.unilateral_exit_delay as u32;
+            // Two different delays in play:
+            //   * `input_exit_delay` — used to reconstruct the EXISTING VTXO's
+            //     script in the PSBT input. A freshly-boarded VTXO has
+            //     `boarding_exit_delay`; a refreshed one has
+            //     `unilateral_exit_delay`. `vtxo_stream::resolve_exit_delay`
+            //     stores the correct value per VTXO. `generate_delegate` only
+            //     accepts a single exit_delay so we require all inputs to share
+            //     it (typical case: 1 VTXO).
+            //   * `output_exit_delay` — `unilateral_exit_delay`, always: the
+            //     refreshed VTXO landing post-settle is in the tree, not at the
+            //     boarding script.
+            let input_exit_delay = state
+                .vtxos
+                .first()
+                .map(|e| e.exit_delay)
+                .unwrap_or(info.unilateral_exit_delay as u32);
+            if state.vtxos.iter().any(|e| e.exit_delay != input_exit_delay) {
+                return Err(Status::failed_precondition(
+                    "settle_delegate cannot mix VTXOs with different exit_delays; \
+                     refresh first by sending a no-op or by manual settle",
+                ));
+            }
+            let output_exit_delay = info.unilateral_exit_delay as u32;
             let ark_addr = ark::client::ark_address(
                 &owner_pk_hex,
                 &info.signer_pubkey,
-                exit_delay,
+                output_exit_delay,
                 network,
             )
             .map_err(|e| Status::internal(format!("ark_address: {e}")))?;
@@ -592,11 +614,17 @@ pub fn settle_delegate(
                 amount_sats: total_amount,
             }];
 
-            let forfeit_pk = ark::client::address::parse_xonly_pubkey(&info.forfeit_pubkey)
-                .map_err(|e| Status::internal(format!("forfeit_pubkey: {e}")))?;
-            let secp = bitcoin::key::Secp256k1::new();
-            let (forfeit_xonly, _) = forfeit_pk.inner.x_only_public_key();
-            let forfeit_addr = bitcoin::Address::p2tr(&secp, forfeit_xonly, None, network);
+            // The ASP publishes its canonical forfeit address via `getInfo`.
+            // Reconstructing it from `info.forfeit_pubkey` as a plain P2TR
+            // keyspend can drift from what the ASP actually uses (taproot
+            // script-tree differences yield a different output script and
+            // thus a different forfeit txid). Always use the address the ASP
+            // gives us directly.
+            if info.forfeit_address.is_empty() {
+                return Err(Status::internal(
+                    "ASP info missing forfeit_address; cannot build forfeit PSBTs",
+                ));
+            }
 
             let (session, sighashes) =
                 ark::client::batch::DelegateSettleSession::generate_delegate(
@@ -606,9 +634,9 @@ pub fn settle_delegate(
                     &dkg_secret_hex,
                     &vtxo_inputs,
                     &outputs,
-                    &forfeit_addr.to_string(),
+                    &info.forfeit_address,
                     info.dust as u64,
-                    exit_delay,
+                    input_exit_delay,
                     &info.network,
                 )
                 .map_err(|e| Status::internal(format!("generate_delegate: {e}")))?;

@@ -1280,7 +1280,10 @@ impl DelegateSettleSession {
                         .map_err(|e| format!("confirm_registration: {e}"))?;
                 }
                 Event::TreeTx(e) => {
-                    eprintln!("delegate: TreeTx txid={} topic={:?}", e.txid, e.topic);
+                    eprintln!(
+                        "delegate: TreeTx batch_index={} txid={} topic={:?}",
+                        e.batch_index, e.txid, e.topic
+                    );
                     let psbt = decode_psbt_b64(&e.tx)?;
                     let children: HashMap<u32, Txid> = e
                         .children
@@ -1298,14 +1301,18 @@ impl DelegateSettleSession {
                         Some(e.txid.parse().map_err(|e| format!("invalid txid: {e}"))?)
                     };
 
-                    // Determine if this is a VTXO graph chunk or connector chunk.
-                    // Connector chunks have topic containing the cosigner key.
-                    let cosigner_pk_hex = self.delegate_cosigner_kp.public_key().to_string();
+                    // ASP discriminates the two trees via `batch_index`:
+                    //   0 → VTXO graph (refresh tree, cosigner co-signs MuSig2)
+                    //   1 → connector graph (forfeit-spend tree)
+                    // Matches `BatchTreeEventType::{Vtxo,Connector}` in the
+                    // upstream Rust SDK at ark-grpc::client.
                     let chunk = TxGraphChunk { txid, tx: psbt, children };
-                    if e.topic.iter().any(|t| t == &cosigner_pk_hex) {
-                        self.connector_graph_chunks.push(chunk);
-                    } else {
-                        self.vtxo_graph_chunks.push(chunk);
+                    match e.batch_index {
+                        0 => self.vtxo_graph_chunks.push(chunk),
+                        1 => self.connector_graph_chunks.push(chunk),
+                        n => {
+                            return Err(format!("unsupported TreeTx batch_index: {n}"));
+                        }
                     }
                 }
                 Event::TreeSigningStarted(e) => {
@@ -1411,20 +1418,22 @@ impl DelegateSettleSession {
                 Event::BatchFinalization(e) => {
                     eprintln!("delegate: BatchFinalization id={}", e.id);
 
-                    // Build connectors graph from collected connector chunks.
-                    let connector_leaves: Vec<Psbt> = self
-                        .connector_graph_chunks
-                        .iter()
-                        .map(|c| c.tx.clone())
-                        .collect();
-                    let connector_refs: Vec<&Psbt> =
-                        connector_leaves.iter().collect();
+                    // `complete_delegate_forfeit_txs` expects the connector
+                    // graph's LEAVES (the leaf txs whose outputs feed each
+                    // forfeit PSBT), not all chunks. The ASP reconstructs the
+                    // forfeit txid from these specific leaves; passing all
+                    // chunks produces a different completed PSBT and a txid
+                    // the ASP doesn't recognize.
+                    let connectors_graph = TxGraph::new(
+                        self.connector_graph_chunks.drain(..).collect(),
+                    )
+                    .map_err(|e| format!("TxGraph::new (connectors): {e}"))?;
+                    let connector_leaves = connectors_graph.leaves();
 
-                    // Complete the pre-signed forfeit PSBTs by adding connector inputs.
                     let completed_forfeits =
                         ark_core::batch::complete_delegate_forfeit_txs(
                             &self.delegate.forfeit_psbts,
-                            &connector_refs,
+                            &connector_leaves,
                         )
                         .map_err(|e| format!("complete_delegate_forfeit_txs: {e}"))?;
 

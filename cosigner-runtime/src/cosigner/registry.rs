@@ -113,7 +113,6 @@ impl CosignerRegistry {
             round1_secret: None,
             round2_secret: None,
             signing_nonce: None,
-            dkg_session: None,
             signing_session: None,
             refresh_session: None,
             script_path_spend: false,

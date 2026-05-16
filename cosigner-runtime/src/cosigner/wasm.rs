@@ -38,13 +38,12 @@ pub struct CosignerInstance {
     pub bindings: ThresholdWorld,
 
     pub session: Option<ResourceAny>,
-    /// Round1 secret handle, lives between DKG / refresh steps.
+    /// Round1 secret handle, lives between refresh steps.
     pub round1_secret: Option<ResourceAny>,
-    /// Round2 secret handle, lives between DKG / refresh steps.
+    /// Round2 secret handle, lives between refresh steps.
     pub round2_secret: Option<ResourceAny>,
     /// Signing nonce handle, lives between sign step1 and step2.
     pub signing_nonce: Option<ResourceAny>,
-    pub dkg_session: Option<ResourceAny>,
     pub signing_session: Option<ResourceAny>,
     pub refresh_session: Option<ResourceAny>,
 

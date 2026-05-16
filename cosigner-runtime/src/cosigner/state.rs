@@ -75,11 +75,6 @@ pub struct CosignerState {
 
     // Rendezvous: each multi-participant step stashes replies here until the
     // round completes, then drains and fulfils.
-    pub pending_dkg_step1: Vec<oneshot::Sender<Result<DkgStep1Response, Status>>>,
-    pub pending_dkg_step2: Vec<oneshot::Sender<Result<DkgStep2Response, Status>>>,
-    /// `(caller_identifier_hex, reply)` — step3 needs the caller identifier
-    /// to build the per-recipient relay package.
-    pub pending_dkg_step3: Vec<(String, oneshot::Sender<Result<DkgStep3Response, Status>>)>,
     pub pending_sign_step1: Vec<oneshot::Sender<Result<SignStep1Response, Status>>>,
     pub pending_sign_step2: Vec<oneshot::Sender<Result<SignStep2Response, Status>>>,
     pub pending_refresh_step1: Vec<oneshot::Sender<Result<RefreshStep1Response, Status>>>,
@@ -99,9 +94,6 @@ impl CosignerState {
             ark_tx_history: Vec::new(),
             owned_scripts: Vec::new(),
             device_tokens: Vec::new(),
-            pending_dkg_step1: Vec::new(),
-            pending_dkg_step2: Vec::new(),
-            pending_dkg_step3: Vec::new(),
             pending_sign_step1: Vec::new(),
             pending_sign_step2: Vec::new(),
             pending_refresh_step1: Vec::new(),

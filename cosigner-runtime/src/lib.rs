@@ -6,6 +6,7 @@ pub mod bitcoin;
 pub mod config;
 pub mod cosigner;
 pub mod crypto_ops;
+pub mod dkg_coordinator;
 pub mod fcm_client;
 pub mod persistence;
 pub mod policy;

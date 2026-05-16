@@ -10,11 +10,6 @@ use crate::wallet_proto::*;
 pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
 pub enum CosignerCommand {
-    // --- DKG ---
-    DkgStep1 { req: DkgStep1Request, reply: Reply<DkgStep1Response> },
-    DkgStep2 { req: DkgStep2Request, reply: Reply<DkgStep2Response> },
-    DkgStep3 { req: DkgStep3Request, reply: Reply<DkgStep3Response> },
-
     // --- Signing ---
     SignStep1 { req: SignStep1Request, reply: Reply<SignStep1Response> },
     SignStep2 { req: SignStep2Request, reply: Reply<SignStep2Response> },

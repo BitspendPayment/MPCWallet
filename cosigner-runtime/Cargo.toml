@@ -63,6 +63,9 @@ tokio-util = { version = "0.7", features = ["codec"] }
 
 # Crypto
 sha2 = "0.10"
+threshold = { path = "../crates/threshold", features = ["std"] }
+parking_lot = "0.12"
+k256 = { version = "0.13", features = ["arithmetic"] }
 
 # HTTP/REST
 axum = "0.8"

@@ -3,8 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, cosigner, fcm_client, persistence, rest_api, shared, telemetry,
-    vtxo_stream,
+    bitcoin, config, cosigner, dkg_coordinator, fcm_client, persistence, rest_api, shared,
+    telemetry, vtxo_stream,
 };
 
 #[derive(Parser)]
@@ -149,6 +149,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Auto-settle tick: every 60 seconds, fan TickAutoSettle out to all
     // spawned actors. Only meaningful when ASP is configured.
+    //
+    // TODO: under lazy actor spawn, users without a live actor are skipped
+    // here. `delegate_session` is in-memory only today, so behaviour matches
+    // the pre-restart status quo. When `DelegateRecord` is persisted to sled,
+    // switch this loop to iterate sled and `get_or_spawn` per user.
     if shared.asp_client.is_some() {
         let registry_clone = registry.clone();
         tokio::spawn(async move {
@@ -169,6 +174,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // DKG coordinator: short-lived per-user ceremony sessions, evicted on
+    // TTL. Spawned independently of the per-user registry — the post-DKG
+    // actor is lazy-spawned by the first sign/ark/refresh/policy call.
+    let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
+    let dkg_coord = dkg_coordinator::DkgCoordinator::new(shared.clone(), dkg_ttl);
+    {
+        let coord = dkg_coord.clone();
+        tokio::spawn(async move {
+            coord.run_eviction_loop().await;
+        });
+    }
+
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
         std::env::var("PORT")
@@ -178,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let app_state = rest_api::AppState {
         registry: registry.clone(),
+        dkg_coordinator: dkg_coord.clone(),
         server_info: std::sync::Arc::new(
             cosigner_runtime::wallet_proto::GetServerInfoResponse {
                 bitcoin_network: cfg.bitcoin_network.clone(),

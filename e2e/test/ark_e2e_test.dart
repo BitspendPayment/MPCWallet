@@ -673,7 +673,24 @@ void main() {
     final minerAddr = await btc.getNewAddress();
     await btc.sendToAddress(boardingAddress, 0.005);
     await btc.generateToAddress(1, minerAddr);
-    await Future.delayed(Duration(seconds: 5));
+
+    // Wait until the cosigner can see the boarding UTXO through Electrum.
+    // Bitcoind sees it immediately after the block; Electrum needs a few
+    // seconds to index. checkBoardingBalance routes through the cosigner's
+    // Electrum client so this is the right sync barrier.
+    bool boardingSeen = false;
+    for (int i = 0; i < 30; i++) {
+      try {
+        final bal = await alice.checkBoardingBalance();
+        if (bal.balance.toInt() >= 500000) {
+          boardingSeen = true;
+          break;
+        }
+      } catch (_) {}
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(boardingSeen, isTrue,
+        reason: 'Electrum should index the boarding UTXO within 30s');
 
     bool stillMining = true;
     final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {

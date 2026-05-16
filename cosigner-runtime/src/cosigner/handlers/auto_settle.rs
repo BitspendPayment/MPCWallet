@@ -25,16 +25,33 @@ pub fn tick_auto_settle(
     let Some(record) = state.delegate_session.as_ref() else {
         return Ok(());
     };
-    if record.earliest_expires_at == 0 {
-        // Conservative: a covered VTXO has unknown expiry. The next stream
-        // update with a known timestamp will replace this record; until then
-        // we don't auto-settle.
+    // Resolve `earliest_expires_at` against current state: the value stored
+    // on the record at Phase 1 time may be 0 if the vtxo_stream backfill
+    // hadn't landed yet. If state.vtxos now has a non-zero timestamp for
+    // any covered outpoint, use that. Outpoints missing from state.vtxos
+    // mean the VTXO has been spent — the invalidation hooks should have
+    // cleared the delegate, but if we see it here we skip to be safe.
+    let effective_expiry = if record.earliest_expires_at > 0 {
+        record.earliest_expires_at
+    } else {
+        record
+            .covered_outpoints
+            .iter()
+            .filter_map(|(t, v)| {
+                state
+                    .vtxos
+                    .iter()
+                    .find(|e| &e.txid == t && e.vout == *v)
+                    .and_then(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+            })
+            .min()
+            .unwrap_or(0)
+    };
+    if effective_expiry == 0 {
         return Ok(());
     }
     let now = now_secs();
-    let threshold = record
-        .earliest_expires_at
-        .saturating_sub(shared.auto_settle_safety_margin_secs);
+    let threshold = effective_expiry.saturating_sub(shared.auto_settle_safety_margin_secs);
     if now < threshold {
         return Ok(());
     }
@@ -46,9 +63,9 @@ pub fn tick_auto_settle(
 
     let record = state.delegate_session.take().expect("checked above");
     tracing::info!(
-        "auto-settle: driving stored intent for {} VTXO(s), earliest_expires_at={} now={}",
+        "auto-settle: driving stored intent for {} VTXO(s), effective_expiry={} now={}",
         record.covered_outpoints.len(),
-        record.earliest_expires_at,
+        effective_expiry,
         now
     );
 

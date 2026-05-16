@@ -74,26 +74,6 @@ macro_rules! dispatch_with_registry {
     }};
 }
 
-/// Rendezvous dispatch: handler owns the reply sender so it can fire inline or
-/// stash it in `CosignerState.pending_*`. Used by multi-participant flows (DKG).
-macro_rules! dispatch_rendezvous {
-    ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
-        let s = $shared.clone();
-        let span = tracing::Span::current();
-        let (u, st) = tokio::task::spawn_blocking(move || {
-            let _enter = span.enter();
-            let mut user = $user;
-            let mut state = $state;
-            $handler(&mut user, &mut state, &s, $req, $reply);
-            (user, state)
-        })
-        .await
-        .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
-        $user = u;
-        $state = st;
-    }};
-}
-
 pub async fn run_actor(
     mut user: CosignerInstance,
     mut state: CosignerState,
@@ -114,17 +94,6 @@ pub async fn run_actor(
             }
             CosignerCommand::DeletePolicy { req, reply } => {
                 dispatch!(user, state, shared, req, reply, handlers::policy::delete_policy);
-            }
-
-            // -------- DKG (rendezvous) --------
-            CosignerCommand::DkgStep1 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step1);
-            }
-            CosignerCommand::DkgStep2 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step2);
-            }
-            CosignerCommand::DkgStep3 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step3);
             }
 
             // -------- Signing --------

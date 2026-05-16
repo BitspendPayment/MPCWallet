@@ -1,9 +1,10 @@
 {
   "rust-analyzer.linkedProjects": [
-    "server/Cargo.toml",
-    "threshold/Cargo.toml",
-    "threshold-ffi/Cargo.toml",
-
+    "cosigner-runtime/Cargo.toml",
+    "crates/threshold/Cargo.toml",
+    "crates/ark/Cargo.toml",
+    "crates/enclave-client/Cargo.toml",
+    "ffi/Cargo.toml",
     "e2e/signer-server/Cargo.toml"
   ]
 }
