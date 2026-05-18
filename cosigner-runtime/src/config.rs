@@ -32,6 +32,13 @@ pub struct ServerConfig {
     /// inactivity the session is evicted and any waiting participants get a
     /// "restart from step1" error. Default 300 (5 minutes).
     pub dkg_session_ttl_secs: u64,
+    /// Per-user actor idle threshold. Actors with no `recv()` activity for
+    /// this many seconds are evicted from the registry. Default 1800
+    /// (30 min). With the auto-settle tick task firing every 60s and
+    /// counting as activity, ASP-connected deployments effectively never
+    /// idle out; the knob exists primarily for ASP-down deployments and
+    /// for tests that exercise the eviction path.
+    pub actor_idle_threshold_secs: i64,
 }
 
 impl ServerConfig {
@@ -49,25 +56,28 @@ impl ServerConfig {
                 format!("{}/.mpc_wallet/server", home)
             }),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
-            bitcoin_network: env::var("BITCOIN_NETWORK")
-                .unwrap_or_else(|_| "regtest".to_string()),
+            bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             persistence_backend: env::var("PERSISTENCE_BACKEND")
                 .unwrap_or_else(|_| "sled".to_string()),
             supervisor_url: env::var("SUPERVISOR_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:7073".to_string()),
             enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
-            cosigner_wasm_path: env::var("COSIGNER_WASM_PATH")
-                .unwrap_or_else(|_| "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()),
+            cosigner_wasm_path: env::var("COSIGNER_WASM_PATH").unwrap_or_else(|_| {
+                "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()
+            }),
             auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800),
-            fcm_service_account_json: env::var("FCM_SERVICE_ACCOUNT_JSON")
-                .unwrap_or_default(),
+            fcm_service_account_json: env::var("FCM_SERVICE_ACCOUNT_JSON").unwrap_or_default(),
             dkg_session_ttl_secs: env::var("DKG_SESSION_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(300),
+            actor_idle_threshold_secs: env::var("ACTOR_IDLE_THRESHOLD_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1800),
         }
     }
 }

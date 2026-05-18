@@ -125,6 +125,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         asp_client,
         fcm,
         cfg.auto_settle_safety_margin_secs,
+        cfg.actor_idle_threshold_secs,
     ));
 
     // WASM source: CLI > env > config default.
@@ -158,9 +159,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let registry_clone = registry.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-            interval.set_missed_tick_behavior(
-                tokio::time::MissedTickBehavior::Delay,
-            );
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             // Skip the immediate fire so existing actors have time to finish boot.
             interval.tick().await;
             loop {
@@ -169,6 +168,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Err(e) = handle.try_send(cosigner::CosignerCommand::TickAutoSettle) {
                         tracing::debug!("auto-settle tick: skip {user_id}: {e}");
                     }
+                }
+            }
+        });
+    }
+
+    // Idle-eviction sweep (issue #30 gap 3): every 60s, drop actors that
+    // haven't recv'd anything for `ACTOR_IDLE_THRESHOLD_SECS`. Runs
+    // independently of ASP — purely a memory-pressure relief mechanism.
+    //
+    // Per the design choice that ALL recv() events count as activity, the
+    // auto-settle tick above will keep every spawned actor's `last_active`
+    // fresh in ASP-connected deployments. So this sweep is effectively
+    // dormant in production but engages in ASP-down dev/tests and in
+    // future configurations that make the auto-settle tick selective.
+    {
+        let registry_clone = registry.clone();
+        let threshold = shared.actor_idle_threshold_secs;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await; // skip immediate fire
+            loop {
+                interval.tick().await;
+                let snapshot = registry_clone.snapshot_handles();
+                for (user_id, _handle) in snapshot {
+                    registry_clone.try_evict(&user_id, threshold);
                 }
             }
         });
@@ -196,11 +221,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = rest_api::AppState {
         registry: registry.clone(),
         dkg_coordinator: dkg_coord.clone(),
-        server_info: std::sync::Arc::new(
-            cosigner_runtime::wallet_proto::GetServerInfoResponse {
-                bitcoin_network: cfg.bitcoin_network.clone(),
-            },
-        ),
+        server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
+            bitcoin_network: cfg.bitcoin_network.clone(),
+        }),
     };
     let rest_app = axum::Router::new()
         .nest("/api", rest_api::routes(app_state))

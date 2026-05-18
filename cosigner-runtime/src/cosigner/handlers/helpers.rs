@@ -39,13 +39,7 @@ pub fn auth_check(
     let iface = user.bindings.component_threshold_types();
     let is_valid = iface
         .threshold_session()
-        .call_verify_schnorr_signature(
-            &mut user.store,
-            *session,
-            &pk_hex,
-            &auth_message,
-            &sig_hex,
-        )
+        .call_verify_schnorr_signature(&mut user.store, *session, &pk_hex, &auth_message, &sig_hex)
         .map_err(|e| Status::internal(format!("WASM error: {e}")))?
         .map_err(|_| Status::internal("signature verification failed"))?;
 
@@ -110,9 +104,7 @@ pub fn ensure_policy_loaded(
     }
     if let Ok(Some(canonical)) = persistence.get("policy_owner_idx", user_id_hex) {
         if try_load_policy(user, persistence, secret_store, &canonical)? {
-            tracing::info!(
-                "[{user_id_hex}] Resolved via policy_owner_idx → {canonical}"
-            );
+            tracing::info!("[{user_id_hex}] Resolved via policy_owner_idx → {canonical}");
             return Ok(());
         }
     }
@@ -132,9 +124,7 @@ fn try_load_policy(
     if let Ok(Some(json_str)) = persistence.get("policies", key) {
         match serde_json::from_str::<PolicyState>(&json_str) {
             Ok(mut ps) => {
-                if let Ok(Some(secret)) =
-                    secret_store.get_secret(&format!("dkg-secret.{key}"))
-                {
+                if let Ok(Some(secret)) = secret_store.get_secret(&format!("dkg-secret.{key}")) {
                     ps.server_dkg_secret_hex = Some(secret);
                 }
                 user.policy_state = Some(ps);
@@ -250,6 +240,63 @@ pub fn save_user_ark_history(
     }
 }
 
+/// Read back a user's Ark transaction history from persistence. Returns an
+/// empty vec on miss or parse failure (best-effort — history isn't safety-
+/// critical, just user-facing).
+pub fn load_user_ark_history(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::types::ArkTxEntry> {
+    match persistence.get("ark_tx_history", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!("parse ark_tx_history/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Read back a user's stored VTXOs from persistence. Returns an empty vec on
+/// miss or parse failure. The vtxo_stream subscription will reconcile via its
+/// own dedup as ASP events arrive, so a stale read here is self-healing.
+pub fn load_user_vtxos(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::state::VtxoEntry> {
+    match persistence.get("vtxo_store", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(vtxos) => vtxos,
+            Err(e) => {
+                tracing::warn!("parse vtxo_store/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Read back a user's registered FCM device tokens from persistence. Closes
+/// the gap from TODO #4 — without this, pushes silently no-op after a
+/// cosigner restart for any user who hasn't reopened the app since.
+pub fn load_user_device_tokens(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::state::DeviceToken> {
+    match persistence.get("device_tokens", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                tracing::warn!("parse device_tokens/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
 /// Seconds since the Unix epoch.
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()
@@ -304,7 +351,10 @@ pub fn calculate_spent_amount(
     let spent = crate::bitcoin::tx_parser::calculate_spent_amount(
         full_tx,
         &script_hex,
-        user.utxo_state.as_ref().map(|u| &u.utxos[..]).unwrap_or(&[]),
+        user.utxo_state
+            .as_ref()
+            .map(|u| &u.utxos[..])
+            .unwrap_or(&[]),
     )
     .map_err(|e| Status::internal(format!("tx parse: {e}")))?;
     Ok(spent)

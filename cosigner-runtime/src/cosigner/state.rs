@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tonic::Status;
 
-use crate::wallet_proto::*;
 use crate::cosigner::types::ArkTxEntry;
+use crate::wallet_proto::*;
 
 /// One VTXO owned by the user. Persisted in `vtxo_store`. `created_at` and
 /// `expires_at` come from the ASP `Vtxo` event and feed the auto-settle
@@ -111,10 +111,85 @@ impl CosignerState {
         }
         self.used_nonces.insert(ts);
     }
+
+    /// Drain every `pending_*` rendezvous queue, fulfilling each parked
+    /// reply with `Err(Status::internal(msg))`. Called from the actor's
+    /// panic-recovery path so multi-party callers (sign, refresh) get a
+    /// definitive error instead of hanging on a reply that will never come.
+    pub fn drain_pending_replies_with_err(&mut self, msg: &str) {
+        fn drain<T>(pool: &mut Vec<oneshot::Sender<Result<T, Status>>>, msg: &str) {
+            for tx in pool.drain(..) {
+                let _ = tx.send(Err(Status::internal(msg.to_string())));
+            }
+        }
+        drain(&mut self.pending_sign_step1, msg);
+        drain(&mut self.pending_sign_step2, msg);
+        drain(&mut self.pending_refresh_step1, msg);
+        drain(&mut self.pending_refresh_step2, msg);
+        drain(&mut self.pending_refresh_step3, msg);
+    }
 }
 
 impl Default for CosignerState {
     fn default() -> Self {
         Self::new(String::new())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drain_pending_replies_sends_err_to_every_parked_sender() {
+        let mut state = CosignerState::default();
+
+        // Stage one parked sender per pending_* pool so we can prove every
+        // pool drains, not just the first one.
+        let (tx_s1, rx_s1) = oneshot::channel::<Result<SignStep1Response, Status>>();
+        let (tx_s2, rx_s2) = oneshot::channel::<Result<SignStep2Response, Status>>();
+        let (tx_r1, rx_r1) = oneshot::channel::<Result<RefreshStep1Response, Status>>();
+        let (tx_r2, rx_r2) = oneshot::channel::<Result<RefreshStep2Response, Status>>();
+        let (tx_r3, rx_r3) = oneshot::channel::<Result<RefreshStep3Response, Status>>();
+        state.pending_sign_step1.push(tx_s1);
+        state.pending_sign_step2.push(tx_s2);
+        state.pending_refresh_step1.push(tx_r1);
+        state.pending_refresh_step2.push(tx_r2);
+        state.pending_refresh_step3.push(tx_r3);
+
+        state.drain_pending_replies_with_err("test panic");
+
+        // All pools emptied.
+        assert!(state.pending_sign_step1.is_empty());
+        assert!(state.pending_sign_step2.is_empty());
+        assert!(state.pending_refresh_step1.is_empty());
+        assert!(state.pending_refresh_step2.is_empty());
+        assert!(state.pending_refresh_step3.is_empty());
+
+        // Every parked receiver resolves with the expected error.
+        // (Each oneshot is monomorphic in its response type, so we can't
+        //  fold these into a single closure call without erasing types.)
+        macro_rules! assert_drained {
+            ($rx:expr) => {{
+                let inner = $rx.blocking_recv().expect("sender dropped");
+                let status = inner.expect_err("expected Err, got Ok");
+                assert_eq!(status.code(), tonic::Code::Internal);
+                assert_eq!(status.message(), "test panic");
+            }};
+        }
+        assert_drained!(rx_s1);
+        assert_drained!(rx_s2);
+        assert_drained!(rx_r1);
+        assert_drained!(rx_r2);
+        assert_drained!(rx_r3);
+    }
+
+    #[test]
+    fn drain_pending_replies_is_idempotent() {
+        let mut state = CosignerState::default();
+        // No pending replies — drain should be a no-op and not panic.
+        state.drain_pending_replies_with_err("no-op test");
+        state.drain_pending_replies_with_err("second drain");
+        assert!(state.pending_sign_step1.is_empty());
     }
 }

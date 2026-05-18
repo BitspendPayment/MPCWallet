@@ -20,6 +20,9 @@ pub struct SharedServices {
     /// Auto-settle threshold: submit a stored intent when
     /// `now > earliest_expires_at - auto_settle_safety_margin_secs`.
     pub auto_settle_safety_margin_secs: i64,
+    /// Per-user actor idle threshold (seconds). Read by the eviction sweep
+    /// in the auto-settle tick task.
+    pub actor_idle_threshold_secs: i64,
 }
 
 impl SharedServices {
@@ -30,6 +33,7 @@ impl SharedServices {
         asp_client: Option<ark::client::AspClient>,
         fcm: Option<Arc<FcmClient>>,
         auto_settle_safety_margin_secs: i64,
+        actor_idle_threshold_secs: i64,
     ) -> Self {
         Self {
             persistence,
@@ -38,6 +42,7 @@ impl SharedServices {
             asp_client: asp_client.map(|c| Arc::new(tokio::sync::Mutex::new(c))),
             fcm,
             auto_settle_safety_margin_secs,
+            actor_idle_threshold_secs,
         }
     }
 }

@@ -66,6 +66,8 @@ sha2 = "0.10"
 threshold = { path = "../crates/threshold", features = ["std"] }
 parking_lot = "0.12"
 k256 = { version = "0.13", features = ["arithmetic"] }
+# FutureExt::catch_unwind for actor panic recovery
+futures = "0.3"
 
 # HTTP/REST
 axum = "0.8"

@@ -71,6 +71,84 @@ class ArkdAdmin {
   }
 }
 
+/// Spawn the cosigner-runtime binary against the shared regtest fixtures.
+/// Same `serverTempDir` across calls reuses the same sled `data_dir`, so
+/// killing + restarting exercises persistence rehydration paths.
+/// Returns the spawned Process; throws if it doesn't report "listening on"
+/// within 30s or exits before becoming ready.
+Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
+  final serverReady = Completer<void>();
+  final serverFailed = Completer<void>();
+  final proc = await Process.start(
+    '../cosigner-runtime/target/release/cosigner-runtime',
+    [
+      '--wasm',
+      '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',
+      '--port',
+      port.toString(),
+    ],
+    mode: ProcessStartMode.normal,
+    environment: {
+      'ELECTRUM_URL': '127.0.0.1',
+      'ELECTRUM_PORT': '50001',
+      'BITCOIN_RPC_USER': 'admin1',
+      'BITCOIN_RPC_PASSWORD': '123',
+      'ASP_URL': 'http://127.0.0.1:7070',
+      // Asserted by the GetServerInfo test — set explicitly so the
+      // expectation isn't dependent on the cosigner-runtime default.
+      'BITCOIN_NETWORK': 'regtest',
+      // Force the auto-settle threshold to be "always crossed" for any
+      // realistic VTXO_TREE_EXPIRY. The tick task fires when
+      // `now > expires_at - safety_margin`; with 1 hour margin and the
+      // docker-compose's 512s expiry that's always true, so the next
+      // 60-second tick after the intent is stored will drive the batch.
+      'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
+      'HOME': dataDir.path,
+    },
+  );
+  final stdoutBuffer = StringBuffer();
+  final stderrBuffer = StringBuffer();
+  proc.stdout.transform(utf8.decoder).listen((data) {
+    stdoutBuffer.write(data);
+    print('[Server]: $data');
+    if (!serverReady.isCompleted &&
+        stdoutBuffer.toString().contains('MPC Wallet Server listening on')) {
+      serverReady.complete();
+    }
+  }, onDone: () {
+    if (!serverReady.isCompleted && !serverFailed.isCompleted) {
+      serverFailed.complete();
+    }
+  });
+  proc.stderr.transform(utf8.decoder).listen((data) {
+    stderrBuffer.write(data);
+    print('[Server]: $data');
+    if (!serverReady.isCompleted &&
+        stderrBuffer.toString().contains('MPC Wallet Server listening on')) {
+      serverReady.complete();
+    }
+  }, onDone: () {
+    if (!serverReady.isCompleted && !serverFailed.isCompleted) {
+      serverFailed.complete();
+    }
+  });
+
+  try {
+    await Future.any([
+      serverReady.future,
+      serverFailed.future.then((_) {
+        throw Exception('MPC Server failed to start');
+      }),
+    ]).timeout(Duration(seconds: 30), onTimeout: () {
+      throw Exception('MPC Server did not become ready in time');
+    });
+  } catch (e) {
+    proc.kill();
+    rethrow;
+  }
+  return proc;
+}
+
 void main() {
   Process? serverProcess;
   late RegtestHelper btc;
@@ -165,78 +243,7 @@ void main() {
     serverPort = portSocket.port;
     await portSocket.close();
     serverTempDir = await Directory.systemTemp.createTemp('mpc_ark_server_');
-    final serverReady = Completer<void>();
-    final serverFailed = Completer<void>();
-    serverProcess = await Process.start(
-      '../cosigner-runtime/target/release/cosigner-runtime',
-      [
-        '--wasm',
-        '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',
-        '--port',
-        serverPort.toString(),
-      ],
-      mode: ProcessStartMode.normal,
-      environment: {
-        'ELECTRUM_URL': '127.0.0.1',
-        'ELECTRUM_PORT': '50001',
-        'BITCOIN_RPC_USER': 'admin1',
-        'BITCOIN_RPC_PASSWORD': '123',
-        'ASP_URL': 'http://127.0.0.1:7070',
-        // Asserted by the GetServerInfo test below — set explicitly so the
-        // expectation isn't dependent on the cosigner-runtime default.
-        'BITCOIN_NETWORK': 'regtest',
-        // Force the auto-settle threshold to be "always crossed" for any
-        // realistic VTXO_TREE_EXPIRY. The tick task fires when
-        // `now > expires_at - safety_margin`; with 1 hour margin and the
-        // docker-compose's 512s expiry that's always true, so the next
-        // 60-second tick after the intent is stored will drive the batch.
-        'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
-        'HOME': serverTempDir.path,
-      },
-    );
-    final stdoutBuffer = StringBuffer();
-    final stderrBuffer = StringBuffer();
-    serverProcess!.stdout.transform(utf8.decoder).listen((data) {
-      stdoutBuffer.write(data);
-      print('[Server]: $data');
-      if (!serverReady.isCompleted &&
-          stdoutBuffer.toString().contains('MPC Wallet Server listening on')) {
-        serverReady.complete();
-      }
-    }, onDone: () {
-      if (!serverReady.isCompleted && !serverFailed.isCompleted) {
-        serverFailed.complete();
-      }
-    });
-    serverProcess!.stderr.transform(utf8.decoder).listen((data) {
-      stderrBuffer.write(data);
-      print('[Server]: $data');
-      if (!serverReady.isCompleted &&
-          stderrBuffer.toString().contains('MPC Wallet Server listening on')) {
-        serverReady.complete();
-      }
-    }, onDone: () {
-      if (!serverReady.isCompleted && !serverFailed.isCompleted) {
-        serverFailed.complete();
-      }
-    });
-
-    try {
-      await Future.any([
-        serverReady.future,
-        serverFailed.future.then((_) {
-          throw Exception("MPC Server failed to start");
-        }),
-      ]).timeout(Duration(seconds: 30), onTimeout: () {
-        throw Exception("MPC Server did not become ready in time");
-      });
-    } catch (e) {
-      serverProcess?.kill();
-      try {
-        await serverTempDir.delete(recursive: true);
-      } catch (_) {}
-      rethrow;
-    }
+    serverProcess = await startCosignerRuntime(serverPort, serverTempDir);
     print('--- Ark E2E Setup Complete ---');
   });
 
@@ -780,5 +787,109 @@ void main() {
         reason: 'cosigner must clear the delegate after a successful settle');
     print(
         '6. Auto-settle complete: new txid=$newTxid (was $originalTxid), balance preserved');
+  }, timeout: Timeout(Duration(minutes: 4)));
+
+  // Cosigner-runtime restart: kill the process, restart against the same
+  // data_dir, and prove that persisted state survives. Specifically:
+  //   * VTXOs reload (`load_user_vtxos`) before the vtxo_stream catches up
+  //   * Ark transaction history reloads (`load_user_ark_history`) — the
+  //     previously-gone-on-restart entries we just wired up
+  //   * Policy is still discoverable via `ensure_policy_loaded` (existing
+  //     code path; this test guards against regressions)
+  test('Ark: cosigner-runtime restart preserves rehydrated state', () async {
+    print('1. Alice DKG');
+    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await aliceSigner.connect();
+    final alice = createClient(aliceSigner);
+    await alice.doDkg();
+
+    print('2. Fund boarding + settle');
+    final boardingAddress = await alice.getBoardingAddress();
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.003);
+    await btc.generateToAddress(1, minerAddr);
+
+    bool boardingSeen = false;
+    for (int i = 0; i < 30; i++) {
+      try {
+        final bal = await alice.checkBoardingBalance();
+        if (bal.balance.toInt() >= 300000) {
+          boardingSeen = true;
+          break;
+        }
+      } catch (_) {}
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(boardingSeen, isTrue,
+        reason: 'Electrum should index the boarding UTXO within 30s');
+
+    bool stillMining = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!stillMining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    final commitment = await alice.settle();
+    expect(commitment, isNotEmpty);
+    stillMining = false;
+    miningTimer.cancel();
+
+    print('3. Capture pre-restart state');
+    final preVtxos = await alice.listVtxos();
+    final preTxs = await alice.listArkTransactions();
+    expect(preVtxos.vtxos, isNotEmpty,
+        reason: 'pre-restart should have at least one VTXO');
+    expect(preTxs.transactions, isNotEmpty,
+        reason: 'pre-restart should have at least the boarding settle entry');
+    final preVtxoOutpoints =
+        preVtxos.vtxos.map((v) => '${v.txid}:${v.vout}').toSet();
+    final preTxTxids = preTxs.transactions.map((t) => t.txid).toSet();
+    print(
+        '   pre-restart: ${preVtxos.vtxos.length} VTXOs, ${preTxs.transactions.length} history entries');
+
+    print('4. Kill cosigner-runtime');
+    final oldProcess = serverProcess!;
+    serverProcess = null;
+    oldProcess.kill(ProcessSignal.sigterm);
+    // Wait for actual exit so the sled lock releases before we restart.
+    await oldProcess.exitCode;
+    print('   cosigner-runtime exited; sled lock should be released');
+
+    print('5. Restart cosigner-runtime against the same data_dir');
+    serverProcess = await startCosignerRuntime(serverPort, serverTempDir);
+
+    print('6. Recapture post-restart state');
+    // First listVtxos call spawns a fresh actor; `get_or_spawn` rehydrates
+    // vtxos / ark_tx_history / device_tokens from sled. The vtxo_stream
+    // subscription will also reconnect and reconcile, but the rehydration
+    // load means the first listVtxos call already returns valid state.
+    final postVtxos = await alice.listVtxos();
+    final postTxs = await alice.listArkTransactions();
+
+    print(
+        '   post-restart: ${postVtxos.vtxos.length} VTXOs, ${postTxs.transactions.length} history entries');
+
+    final postVtxoOutpoints =
+        postVtxos.vtxos.map((v) => '${v.txid}:${v.vout}').toSet();
+    final postTxTxids = postTxs.transactions.map((t) => t.txid).toSet();
+
+    expect(postVtxoOutpoints, equals(preVtxoOutpoints),
+        reason:
+            'VTXOs should be rehydrated from vtxo_store after restart (pre-restart set must match post-restart set)');
+    expect(postTxTxids, equals(preTxTxids),
+        reason:
+            'ark_tx_history should be rehydrated from sled after restart — without the new load_user_ark_history path this set would be empty');
+
+    print('7. Sanity: post-restart RPCs work (policy still loads)');
+    final addr = await alice.getArkAddress();
+    expect(addr, isNotEmpty,
+        reason:
+            'getArkAddress requires the policy to be loadable post-restart via ensure_policy_loaded');
+
+    print('Restart-survival test complete!');
   }, timeout: Timeout(Duration(minutes: 4)));
 }
