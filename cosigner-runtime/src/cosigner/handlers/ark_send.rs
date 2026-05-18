@@ -310,6 +310,19 @@ pub fn settle(
     let has_signatures = !req.signed_messages.is_empty();
     let existing = state.settle_session.take();
 
+    // A client polling without sigs while a session exists has abandoned
+    // a prior Phase 1 (force-quit, network drop). Drop the stale session
+    // so the match falls into Phase 1 rebuild — pre-fix this deadlocked
+    // because the (Some, false) arm parked the session back.
+    let existing = if existing.is_some() && !has_signatures {
+        tracing::info!(
+            "[{user_id_hex}] Settle: dropping stale session on poll-without-sigs, rebuilding Phase 1"
+        );
+        None
+    } else {
+        existing
+    };
+
     match (existing, has_signatures) {
         // Phase 1: build session by scanning boarding UTXOs.
         (None, false) => {
@@ -319,6 +332,7 @@ pub fn settle(
                 shared.secret_store.as_ref(),
                 &user_id_hex,
             )?;
+            tracing::info!("[{user_id_hex}] Settle: awaiting asp.get_info()");
             let info = fetch_asp_info(&asp)?;
             let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
             let exit_delay = info.boarding_exit_delay as u32;
@@ -344,8 +358,10 @@ pub fn settle(
                 "[{user_id_hex}] Settle: scanning electrum for boarding={boarding_addr} script_hex={script_hex} script_hash={script_hash}"
             );
             let bh = shared.bitcoin_history.clone();
+            let user_id_for_log = user_id_hex.clone();
             let utxos = Handle::current()
                 .block_on(async move {
+                    tracing::info!("[{user_id_for_log}] Settle: awaiting electrum.list_unspent");
                     let guard = bh.lock().await;
                     guard.list_unspent_by_script_hash(&script_hash).await
                 })
@@ -394,20 +410,27 @@ pub fn settle(
         (Some((session, boarding_amount, exit_delay)), true) => {
             let signatures = parse_signatures(&req.signed_messages)?;
             let asp = asp.clone();
+            let user_id_for_log = user_id_hex.clone();
             // Drive the batch state machine inside one block_on so the
             // ASP guard stays held across drive() iterations.
             let outcome = Handle::current().block_on(async move {
+                tracing::info!("[{user_id_for_log}] Settle: awaiting asp.lock()");
                 let mut guard = asp.lock().await;
+                tracing::info!("[{user_id_for_log}] Settle: got asp.lock()");
                 let mut session = session;
 
                 // Try register first; fall back to submit_commitment_sigs if the
                 // session is in the wrong phase.
+                tracing::info!("[{user_id_for_log}] Settle: register_with_signatures");
                 let registered = match session
                     .register_with_signatures(&mut *guard, signatures.clone())
                     .await
                 {
                     Ok(()) => true,
                     Err(e) if e.contains("wrong phase") => {
+                        tracing::info!(
+                            "[{user_id_for_log}] Settle: register wrong phase, falling back to submit_commitment_signatures"
+                        );
                         session
                             .submit_commitment_signatures(&mut *guard, signatures)
                             .await
@@ -419,23 +442,38 @@ pub fn settle(
                     Err(e) => return Err(Status::internal(format!("register error: {e}"))),
                 };
                 if registered {
-                    tracing::info!("Settle: intent registered, driving batch");
+                    tracing::info!("[{user_id_for_log}] Settle: intent registered, driving batch");
                 } else {
                     tracing::info!(
-                        "Settle: commitment sigs submitted, driving to finalize"
+                        "[{user_id_for_log}] Settle: commitment sigs submitted, driving to finalize"
                     );
                 }
 
+                let mut iter: u64 = 0;
                 loop {
+                    iter += 1;
+                    tracing::info!("[{user_id_for_log}] Settle: drive() iter={iter}");
                     match session.drive(&mut *guard).await {
-                        Ok(ark::client::batch::SettleAction::WaitingForBatch) => continue,
+                        Ok(ark::client::batch::SettleAction::WaitingForBatch) => {
+                            tracing::info!(
+                                "[{user_id_for_log}] Settle: drive() iter={iter} → WaitingForBatch"
+                            );
+                            continue;
+                        }
                         Ok(ark::client::batch::SettleAction::NeedSignatures { sighashes }) => {
+                            tracing::info!(
+                                "[{user_id_for_log}] Settle: drive() iter={iter} → NeedSignatures ({} sighashes)",
+                                sighashes.len()
+                            );
                             return Ok(SettleOutcome::NeedSignatures { sighashes, session });
                         }
                         Ok(ark::client::batch::SettleAction::Settled {
                             commitment_txid,
                             vtxo_outpoint,
                         }) => {
+                            tracing::info!(
+                                "[{user_id_for_log}] Settle: drive() iter={iter} → Settled commitment_txid={commitment_txid}"
+                            );
                             return Ok(SettleOutcome::Settled {
                                 commitment_txid,
                                 vtxo_outpoint,
@@ -500,19 +538,8 @@ pub fn settle(
             }
         }
 
-        // Polling without signatures while a session is live.
-        (Some((session, boarding_amount, exit_delay)), false) => {
-            state.settle_session = Some((session, boarding_amount, exit_delay));
-            Ok(SettleResponse {
-                status: settle_response::Status::WaitingForBatch as i32,
-                messages_to_sign: vec![],
-                script_path_spend: false,
-                commitment_txid: String::new(),
-                error_message: String::new(),
-            })
-        }
-
         (None, true) => Err(Status::failed_precondition("no active settle session")),
+        (Some(_), false) => unreachable!("coerced to (None, false) by recovery guard above"),
     }
 }
 

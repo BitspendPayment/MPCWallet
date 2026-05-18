@@ -7,6 +7,20 @@ the root cause, and a concrete plan.
 
 ## 1. Boarding `Settle` deadlocks on `(Some, false)` poll arm
 
+**Status:** ✅ fixed in
+[cosigner-runtime/src/cosigner/handlers/ark_send.rs](cosigner-runtime/src/cosigner/handlers/ark_send.rs)
+— stale-session-recovery guard coerces `existing` to `None` when the
+client polls without sigs, so the match falls straight into the Phase 1
+rebuild arm (one round-trip recovery, not two). The dead `(Some, false)`
+arm is now `unreachable!` for exhaustiveness — any future regression that
+parks a session back without sigs will trip the panic.
+
+Manual verification (the practical recovery test): force-quit the app
+mid-boarding (after Phase 1 returns `SIGNING_REQUIRED`, before sigs sent),
+reopen, retry — boarding should succeed without an emulator wipe. The
+existing happy-path e2e test guards against regressions in the rebuild
+arm itself.
+
 ### Symptoms
 
 User taps **Board** in the app. The spinner runs forever. The `enclave log`
