@@ -68,6 +68,10 @@ pub fn tick_auto_settle(
         effective_expiry,
         now
     );
+    // The in-memory record is gone; the sled row must follow whether the
+    // drive succeeds or fails (failure → client re-delegates next refresh).
+    let user_id_hex = state.user_id_hex.clone();
+    super::helpers::delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
 
     let mut session = record.session;
     let outcome = Handle::current().block_on(async move {
@@ -115,7 +119,6 @@ pub fn tick_auto_settle(
         txid: vtxo_txid.clone(),
         timestamp: now_secs(),
     });
-    let user_id_hex = state.user_id_hex.clone();
     save_user_vtxos(shared.persistence.as_ref(), &user_id_hex, &state.vtxos);
     save_user_ark_history(
         shared.persistence.as_ref(),

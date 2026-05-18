@@ -6,6 +6,7 @@ import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:app_core/hardware_signer.dart';
+import 'package:e2e/mock_fcm_server.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
@@ -74,11 +75,35 @@ class ArkdAdmin {
 /// Spawn the cosigner-runtime binary against the shared regtest fixtures.
 /// Same `serverTempDir` across calls reuses the same sled `data_dir`, so
 /// killing + restarting exercises persistence rehydration paths.
-/// Returns the spawned Process; throws if it doesn't report "listening on"
-/// within 30s or exits before becoming ready.
-Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
+/// `extraEnv` lets the caller layer additional env vars on top (used by
+/// setUpAll to point FCM at the local `MockFcmServer`). Returns the spawned
+/// Process; throws if it doesn't report "listening on" within 30s or exits
+/// before becoming ready.
+Future<Process> startCosignerRuntime(
+  int port,
+  Directory dataDir, {
+  Map<String, String> extraEnv = const {},
+}) async {
   final serverReady = Completer<void>();
   final serverFailed = Completer<void>();
+  final env = {
+    'ELECTRUM_URL': '127.0.0.1',
+    'ELECTRUM_PORT': '50001',
+    'BITCOIN_RPC_USER': 'admin1',
+    'BITCOIN_RPC_PASSWORD': '123',
+    'ASP_URL': 'http://127.0.0.1:7070',
+    // Asserted by the GetServerInfo test — set explicitly so the
+    // expectation isn't dependent on the cosigner-runtime default.
+    'BITCOIN_NETWORK': 'regtest',
+    // Force the auto-settle threshold to be "always crossed" for any
+    // realistic VTXO_TREE_EXPIRY. The tick task fires when
+    // `now > expires_at - safety_margin`; with 1 hour margin and the
+    // docker-compose's 512s expiry that's always true, so the next
+    // 60-second tick after the intent is stored will drive the batch.
+    'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
+    'HOME': dataDir.path,
+    ...extraEnv,
+  };
   final proc = await Process.start(
     '../cosigner-runtime/target/release/cosigner-runtime',
     [
@@ -88,23 +113,7 @@ Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
       port.toString(),
     ],
     mode: ProcessStartMode.normal,
-    environment: {
-      'ELECTRUM_URL': '127.0.0.1',
-      'ELECTRUM_PORT': '50001',
-      'BITCOIN_RPC_USER': 'admin1',
-      'BITCOIN_RPC_PASSWORD': '123',
-      'ASP_URL': 'http://127.0.0.1:7070',
-      // Asserted by the GetServerInfo test — set explicitly so the
-      // expectation isn't dependent on the cosigner-runtime default.
-      'BITCOIN_NETWORK': 'regtest',
-      // Force the auto-settle threshold to be "always crossed" for any
-      // realistic VTXO_TREE_EXPIRY. The tick task fires when
-      // `now > expires_at - safety_margin`; with 1 hour margin and the
-      // docker-compose's 512s expiry that's always true, so the next
-      // 60-second tick after the intent is stored will drive the batch.
-      'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
-      'HOME': dataDir.path,
-    },
+    environment: env,
   );
   final stdoutBuffer = StringBuffer();
   final stderrBuffer = StringBuffer();
@@ -156,6 +165,9 @@ void main() {
   late Directory tempDir;
   late Directory serverTempDir;
   late int serverPort;
+  late MockFcmServer mockFcm;
+  late String fcmTestProjectId;
+  late Map<String, String> cosignerExtraEnv;
 
   MpcClient createClient(HardwareSignerInterface signer, {String? storageId}) {
     return MpcClient.rest(
@@ -237,18 +249,60 @@ void main() {
       print('  Warning: Could not fund ASP: $e');
     }
 
-    // 4. Start MPC Server with ASP_URL
+    // 4. Mock Firebase Cloud Messaging
+    //
+    // Stand up a local HTTP server that impersonates both endpoints the
+    // cosigner-runtime hits during a push: the OAuth2 token endpoint and
+    // the `messages:send` endpoint. The cosigner signs an OAuth JWT with
+    // the fixture private key — the mock doesn't verify the signature,
+    // since real Firebase isn't in the loop.
+    //
+    // Pushes only fire when a user has registered a device token AND a
+    // new VTXO arrives. Existing tests don't register tokens, so the
+    // mock sits idle for them. The dedicated FCM test below is the only
+    // consumer.
+    print('Starting MockFcmServer...');
+    mockFcm = MockFcmServer();
+    await mockFcm.start();
+    print('  MockFcmServer listening on ${mockFcm.baseUrl}');
+
+    fcmTestProjectId = 'mpc-wallet-e2e-test';
+    final keyPemPath = '../e2e/fixtures/fcm_test_key.pem';
+    final keyPem = await File(keyPemPath).readAsString();
+    final fcmServiceAccountJson = jsonEncode({
+      'type': 'service_account',
+      'project_id': fcmTestProjectId,
+      'private_key_id': 'e2e-mock',
+      'private_key': keyPem,
+      'client_email': 'fcm-e2e@$fcmTestProjectId.iam.gserviceaccount.com',
+      // Both `aud` claim in the JWT and the POST destination are derived
+      // from this — see fcm_client.rs::mint_token.
+      'token_uri': mockFcm.tokenUri,
+    });
+    cosignerExtraEnv = {
+      'FCM_SERVICE_ACCOUNT_JSON': fcmServiceAccountJson,
+      'FCM_BASE_URL': mockFcm.baseUrl,
+    };
+
+    // 5. Start MPC Server with ASP_URL
     print('Starting MPC Server with ASP...');
     final portSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     serverPort = portSocket.port;
     await portSocket.close();
     serverTempDir = await Directory.systemTemp.createTemp('mpc_ark_server_');
-    serverProcess = await startCosignerRuntime(serverPort, serverTempDir);
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
     print('--- Ark E2E Setup Complete ---');
   });
 
   tearDownAll(() async {
     serverProcess?.kill();
+    try {
+      await mockFcm.stop();
+    } catch (_) {}
     try {
       await serverTempDir.delete(recursive: true);
     } catch (_) {}
@@ -860,7 +914,11 @@ void main() {
     print('   cosigner-runtime exited; sled lock should be released');
 
     print('5. Restart cosigner-runtime against the same data_dir');
-    serverProcess = await startCosignerRuntime(serverPort, serverTempDir);
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
 
     print('6. Recapture post-restart state');
     // First listVtxos call spawns a fresh actor; `get_or_spawn` rehydrates
@@ -892,4 +950,425 @@ void main() {
 
     print('Restart-survival test complete!');
   }, timeout: Timeout(Duration(minutes: 4)));
+
+  // FCM push delivery: the cosigner-runtime is configured (via setUpAll) to
+  // direct all FCM traffic at `MockFcmServer`. This test:
+  //   1. Registers a fake device token for the recipient (Bob)
+  //   2. Triggers a receive (Alice → Bob via off-chain send)
+  //   3. Asserts the mock recorded a `messages:send` POST with the right
+  //      bearer token, project id, target token, and data payload shape
+  //
+  // Pre-conditions covered:
+  //   * OAuth round-trip happens (cosigner sets Authorization: Bearer <mock>)
+  //   * payload is data-only with `type=vtxo_received`
+  //   * Android `priority: HIGH` + APNS background headers present
+  //   * `user_id` field in data matches the recipient
+  test('FCM push fires on VTXO receive with correct payload shape', () async {
+    // Use a port for Bob's signer that isn't already taken by other tests in
+    // this suite (9090 is the universal one most tests use; we use it too
+    // here since each test does its own DKG and there's no signer-state
+    // overlap between tests).
+    print('1. Alice + Bob DKG');
+    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await aliceSigner.connect();
+    final alice = createClient(aliceSigner);
+    await alice.doDkg();
+
+    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await bobSigner.connect();
+    final bob = createClient(bobSigner);
+    await bob.doDkg();
+
+    // Snapshot mock sends BEFORE registering — prior tests may have left
+    // residue (they shouldn't, but be defensive).
+    mockFcm.clearSends();
+
+    print('2. Register fake FCM token for Bob');
+    const fakeBobToken = 'fake-fcm-token-for-bob-e2e';
+    await bob.registerDeviceToken(
+      fcmToken: fakeBobToken,
+      platform: 'android',
+      appVersion: '1.0.0-e2e',
+    );
+
+    print('3. Fund Alice + settle into VTXO');
+    final boardingAddress = await alice.getBoardingAddress();
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.003);
+    await btc.generateToAddress(1, minerAddr);
+
+    bool boardingSeen = false;
+    for (int i = 0; i < 30; i++) {
+      try {
+        final bal = await alice.checkBoardingBalance();
+        if (bal.balance.toInt() >= 300000) {
+          boardingSeen = true;
+          break;
+        }
+      } catch (_) {}
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(boardingSeen, isTrue);
+
+    bool stillMining = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!stillMining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+
+    final commitment = await alice.settle();
+    expect(commitment, isNotEmpty);
+
+    print('4. Alice sends to Bob (triggers receive on Bob → push fires)');
+    final bobArkAddress = await bob.getArkAddress();
+    final aliceArkWallet = MpcArkWallet(alice);
+    final unsigned = await aliceArkWallet.createTransaction(
+      destination: bobArkAddress,
+      amountSats: 100000,
+    );
+    final signed = await aliceArkWallet.signTransaction(unsigned);
+    final arkTxid = await aliceArkWallet.submit(signed);
+    expect(arkTxid, isNotEmpty);
+    print('   send ark_txid=$arkTxid');
+
+    // 5. Wait for the mock to record the push. The cosigner's stream
+    // fan-out runs after the vtxo_stream event arrives at Bob's actor,
+    // which is async w.r.t. the send completing.
+    print('5. Wait for FCM mock to record the push');
+    final push = await mockFcm.waitForFirstSend(timeout: Duration(seconds: 15));
+    stillMining = false;
+    miningTimer.cancel();
+
+    expect(push, isNotNull,
+        reason:
+            'FCM mock should have received a messages:send call within 15s of Bob receiving a VTXO');
+    final p = push!;
+
+    // 6. Assert the OAuth happened — the bearer token must be the mock's
+    // canonical access token, NOT the raw JWT assertion.
+    expect(p.bearerToken, equals(MockFcmServer.mockAccessToken),
+        reason:
+            'Cosigner must complete the OAuth round-trip and use the access_token from the mock token endpoint');
+
+    // 7. The path's project_id must match what we configured the cosigner
+    // with — proves the URL template uses sa.project_id.
+    expect(p.projectId, equals(fcmTestProjectId),
+        reason:
+            'POST path must be /v1/projects/${fcmTestProjectId}/messages:send');
+
+    // 8. The push must target Bob's registered token.
+    expect(p.targetToken, equals(fakeBobToken),
+        reason:
+            'cosigner should push to the FCM token Bob registered, not Alice or some default');
+
+    // 9. Payload shape — must be data-only, type=vtxo_received, with Bob's
+    // user_id (no notification body for silent background wake).
+    final data = p.data;
+    expect(data, isNotNull, reason: 'message.data must be present');
+    expect(data!['type'], equals('vtxo_received'),
+        reason: 'data.type identifies what woke the app');
+    expect(data['user_id'], isNotEmpty,
+        reason: 'data.user_id lets the app scope its refresh to the right user');
+
+    // 10. Android + APNS routing headers — these are what make the device
+    // wake silently in the background.
+    final message = p.body['message'] as Map<String, dynamic>;
+    expect(message['notification'], isNull,
+        reason:
+            'must be data-only — a `notification` field would force a visible banner and could change OS routing');
+    expect((message['android'] as Map?)?['priority'], equals('HIGH'),
+        reason: 'Android needs HIGH priority to wake from idle');
+    final apns = message['apns'] as Map<String, dynamic>?;
+    expect(apns, isNotNull);
+    expect((apns!['headers'] as Map?)?['apns-priority'], equals('5'),
+        reason: 'APNS requires <=5 for content-available silent pushes');
+    expect((apns['headers'] as Map?)?['apns-push-type'], equals('background'),
+        reason: 'apns-push-type=background is required by iOS 13+');
+    expect(
+        ((apns['payload'] as Map?)?['aps'] as Map?)?['content-available'],
+        equals(1),
+        reason: 'content-available=1 is the iOS background-wake flag');
+
+    print('FCM push test complete!');
+  }, timeout: Timeout(Duration(minutes: 4)));
+
+  // Delegate persistence across cosigner restart (Phase 2, issue #31).
+  //
+  // Verifies the full round-trip:
+  //   1. Alice stores a signed delegate intent via settleDelegate(storeOnly).
+  //   2. Cosigner-runtime is killed + restarted against the same data_dir.
+  //   3. listVtxos confirms `has_active_delegate=true` — rehydration ran
+  //      `DelegateSettleSession::from_persisted` with the dkg_secret pulled
+  //      from `SecretStore`, NOT from the persisted record.
+  //   4. The auto-settle tick fires on the rehydrated session and drives
+  //      it through a batch, producing a new VTXO with the same balance.
+  //
+  // The key correctness claim: the cosigner secret was never written to
+  // the sled `delegate_sessions` tree. The rehydration path reattaches
+  // it from `SecretStore` (`dkg-secret.<canonical>`), which already
+  // existed in sled from the original DKG.
+  test('Ark: delegate intent survives cosigner-runtime restart + auto-settles',
+      () async {
+    print('1. Alice DKG');
+    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await aliceSigner.connect();
+    final alice = createClient(aliceSigner);
+    await alice.doDkg();
+
+    print('2. Fund boarding + settle');
+    final boardingAddress = await alice.getBoardingAddress();
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.003);
+    await btc.generateToAddress(1, minerAddr);
+
+    bool boardingSeen = false;
+    for (int i = 0; i < 30; i++) {
+      try {
+        final bal = await alice.checkBoardingBalance();
+        if (bal.balance.toInt() >= 300000) {
+          boardingSeen = true;
+          break;
+        }
+      } catch (_) {}
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(boardingSeen, isTrue);
+
+    bool stillMining = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!stillMining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    final commitment = await alice.settle();
+    expect(commitment, isNotEmpty);
+
+    print('3. Wait for expires_at backfill');
+    int originalExpiresAt = 0;
+    String originalTxid = '';
+    int originalBalance = 0;
+    for (int i = 0; i < 20; i++) {
+      final r = await alice.listVtxos();
+      if (r.vtxos.isNotEmpty) {
+        originalExpiresAt = r.vtxos.first.expiresAt.toInt();
+        originalTxid = r.vtxos.first.txid;
+        originalBalance = r.totalBalance.toInt();
+      }
+      if (originalExpiresAt > 0) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(originalExpiresAt, greaterThan(0));
+
+    print('4. settleDelegate(storeOnly: true) — persist signed intent to sled');
+    final delegatedTxid = await alice.settleDelegate(storeOnly: true);
+    expect(delegatedTxid, isEmpty);
+    final beforeRestart = await alice.listVtxos();
+    expect(beforeRestart.hasActiveDelegate, isTrue,
+        reason: 'pre-restart: cosigner should report delegate as active');
+
+    print('5. Kill cosigner-runtime');
+    final oldProcess = serverProcess!;
+    serverProcess = null;
+    oldProcess.kill(ProcessSignal.sigterm);
+    await oldProcess.exitCode;
+    print('   cosigner-runtime exited; sled lock should be released');
+
+    print('6. Restart against same data_dir — must rehydrate delegate');
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
+
+    print('7. listVtxos confirms delegate rehydrated from sled');
+    final afterRestart = await alice.listVtxos();
+    expect(afterRestart.hasActiveDelegate, isTrue,
+        reason:
+            'POST-RESTART: cosigner must rehydrate the signed delegate intent from sled. '
+            'If false, either (a) delegate_sessions sled row missing, '
+            '(b) SecretStore dkg-secret lookup failed, or '
+            '(c) DelegateSettleSession::from_persisted rejected the record.');
+    expect(afterRestart.vtxos.length, equals(1),
+        reason: 'pre-restart VTXO must still be present post-restart');
+    expect(afterRestart.vtxos.first.txid, equals(originalTxid),
+        reason: 'rehydrated VTXO outpoint must match pre-restart');
+
+    print(
+        '8. Wait up to 4 minutes for tick to drive the rehydrated intent through a batch');
+    String? newTxid;
+    int newBalance = 0;
+    bool stillActive = true;
+    final deadline = DateTime.now().add(Duration(minutes: 4));
+    while (DateTime.now().isBefore(deadline)) {
+      await Future.delayed(Duration(seconds: 5));
+      try {
+        final resp = await alice.listVtxos();
+        stillActive = resp.hasActiveDelegate;
+        if (resp.vtxos.isNotEmpty) {
+          newTxid = resp.vtxos.first.txid;
+          newBalance = resp.totalBalance.toInt();
+        }
+        if (newTxid != null && newTxid != originalTxid && !stillActive) {
+          break;
+        }
+      } catch (e) {
+        print('   listVtxos error (will retry): $e');
+      }
+    }
+    stillMining = false;
+    miningTimer.cancel();
+
+    expect(newTxid, isNotNull,
+        reason: 'rehydrated auto-settle did not produce a VTXO update');
+    expect(newTxid, isNot(equals(originalTxid)),
+        reason:
+            'rehydrated auto-settle must replace the original VTXO with a fresh one');
+    expect(newBalance, equals(originalBalance),
+        reason: 'rehydrated auto-settle must preserve the balance');
+    expect(stillActive, isFalse,
+        reason:
+            'cosigner must clear the rehydrated delegate (sled + in-memory) after settle completes');
+
+    print(
+        '9. Delegate-persistence + rehydrated auto-settle complete: txid=$originalTxid → $newTxid');
+  }, timeout: Timeout(Duration(minutes: 7)));
+
+  // Cold-spawn auto-settle: prove the tick task itself spawns the actor
+  // from sled, not by reading the in-memory DashMap.
+  //
+  // The previous test ('delegate intent survives cosigner-runtime restart')
+  // calls `listVtxos` immediately after restart, which warms Alice's actor.
+  // The tick would find her in the DashMap and fire — even if the sled-
+  // iteration code were broken. This test instead waits for the tick to
+  // happen WITHOUT any prior RPC against Alice. The first `listVtxos`
+  // happens AFTER the wait; if it shows the new VTXO, the only thing
+  // that could have driven the settle is the tick task spawning Alice
+  // cold via the sled `delegate_sessions` iteration.
+  //
+  // Failure mode this guards against: a regression that switches the
+  // tick back to `snapshot_handles()` (in-memory only). With that change,
+  // a restarted Alice whose client hasn't reopened the app would still
+  // have her delegate intent in sled but the tick would never find her
+  // and her VTXO would eventually expire.
+  test(
+      'Ark: auto-settle tick cold-spawns user from sled after restart, no prior RPC',
+      () async {
+    print('1. Alice DKG');
+    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
+    await aliceSigner.connect();
+    final alice = createClient(aliceSigner);
+    await alice.doDkg();
+
+    print('2. Fund boarding + settle');
+    final boardingAddress = await alice.getBoardingAddress();
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.003);
+    await btc.generateToAddress(1, minerAddr);
+
+    bool boardingSeen = false;
+    for (int i = 0; i < 30; i++) {
+      try {
+        final bal = await alice.checkBoardingBalance();
+        if (bal.balance.toInt() >= 300000) {
+          boardingSeen = true;
+          break;
+        }
+      } catch (_) {}
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(boardingSeen, isTrue);
+
+    bool stillMining = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!stillMining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    final commitment = await alice.settle();
+    expect(commitment, isNotEmpty);
+
+    print('3. Wait for expires_at backfill, then store delegate intent');
+    int expiresAt = 0;
+    String originalTxid = '';
+    int originalBalance = 0;
+    for (int i = 0; i < 20; i++) {
+      final r = await alice.listVtxos();
+      if (r.vtxos.isNotEmpty) {
+        expiresAt = r.vtxos.first.expiresAt.toInt();
+        originalTxid = r.vtxos.first.txid;
+        originalBalance = r.totalBalance.toInt();
+      }
+      if (expiresAt > 0) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(expiresAt, greaterThan(0));
+
+    await alice.settleDelegate(storeOnly: true);
+    final pre = await alice.listVtxos();
+    expect(pre.hasActiveDelegate, isTrue);
+
+    print('4. Kill cosigner-runtime');
+    final oldProcess = serverProcess!;
+    serverProcess = null;
+    oldProcess.kill(ProcessSignal.sigterm);
+    await oldProcess.exitCode;
+
+    print('5. Restart cosigner-runtime');
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
+
+    // Critical: the next ~3 minutes must pass with NO RPC against Alice.
+    // The only legitimate way her actor can spawn is via the sled-iterating
+    // tick task we're testing. We keep mining so the ASP scheduler can
+    // form batches once the cosigner-driven settle starts.
+    //
+    // Timing: the tick task skips its immediate fire, then ticks every
+    // 60s, so the first tick lands ~60s after restart. If the sled
+    // iteration finds Alice, it cold-spawns her and sends TickAutoSettle.
+    // The handler then drives the batch (10-30s with active mining).
+    // Total expected wall-clock: ~90-120s. We wait up to 3 minutes for
+    // slack.
+    print('6. Wait 3 minutes for cold-spawn tick to drive the settle');
+    print('   (NOT calling any RPC against Alice during this window)');
+    await Future.delayed(Duration(minutes: 3));
+
+    print('7. First post-restart RPC against Alice — assert tick did the work');
+    final post = await alice.listVtxos();
+    stillMining = false;
+    miningTimer.cancel();
+
+    expect(post.vtxos, isNotEmpty,
+        reason: 'Alice should still have a VTXO after the tick drove the settle');
+    expect(post.vtxos.first.txid, isNot(equals(originalTxid)),
+        reason:
+            'COLD-SPAWN PROOF: if the tick task only iterated the in-memory '
+            'DashMap, Alice would never have been spawned (no prior RPC), '
+            'her delegate would never have fired, and the VTXO txid would '
+            'still match the pre-restart original.');
+    expect(post.totalBalance.toInt(), equals(originalBalance),
+        reason: 'cold-spawn auto-settle must preserve balance');
+    expect(post.hasActiveDelegate, isFalse,
+        reason:
+            'cold-spawn auto-settle must clear the delegate (sled + in-memory) on success');
+
+    print(
+        '8. Cold-spawn auto-settle proven: ${originalTxid.substring(0, 12)}…');
+    print('   → ${post.vtxos.first.txid.substring(0, 12)}…');
+  }, timeout: Timeout(Duration(minutes: 6)));
 }

@@ -23,6 +23,7 @@ version = "0.1.0"
 dependencies = [
  "ark-core",
  "bitcoin",
+ "hex",
  "prost",
  "rand 0.8.5",
  "serde",

@@ -83,6 +83,7 @@ pub fn apply_stream_update(
     if spendable.is_empty() {
         if delegate_invalidated {
             state.delegate_session = None;
+            super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
             tracing::info!("[{user_id_hex}] delegate invalidated: covered VTXO spent");
         }
         save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
@@ -169,6 +170,7 @@ pub fn apply_stream_update(
 
     if delegate_invalidated {
         state.delegate_session = None;
+        super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
     }
 
     save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);

@@ -297,6 +297,55 @@ pub fn load_user_device_tokens(
     }
 }
 
+/// Persist a stored signed delegate intent. The on-disk record carries no
+/// secret material — the cosigner secret stays in `SecretStore` and is
+/// reattached only at rehydration time (issue #31).
+pub fn save_user_delegate(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+    record: &crate::cosigner::state::PersistedDelegateRecord,
+) {
+    match serde_json::to_string(record) {
+        Ok(json) => {
+            if let Err(e) = persistence.put("delegate_sessions", user_id_hex, &json) {
+                tracing::warn!("persist delegate_sessions/{user_id_hex} failed: {e}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("serialize delegate_sessions/{user_id_hex} failed: {e}");
+        }
+    }
+}
+
+/// Read back a stored delegate. Returns `None` on miss, parse failure, or
+/// any other error — caller treats absence as "no delegate, client should
+/// re-delegate on next refresh."
+pub fn load_user_delegate(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Option<crate::cosigner::state::PersistedDelegateRecord> {
+    match persistence.get("delegate_sessions", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(record) => Some(record),
+            Err(e) => {
+                tracing::warn!("parse delegate_sessions/{user_id_hex} failed: {e}");
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Drop the stored delegate. Called from every invalidation site — once
+/// the in-memory `DelegateRecord` is cleared, the sled row must go too,
+/// otherwise the next actor spawn would rehydrate a stale intent that no
+/// longer matches `state.vtxos`.
+pub fn delete_user_delegate(persistence: &dyn KvStore, user_id_hex: &str) {
+    if let Err(e) = persistence.delete("delegate_sessions", user_id_hex) {
+        tracing::warn!("delete delegate_sessions/{user_id_hex} failed: {e}");
+    }
+}
+
 /// Seconds since the Unix epoch.
 pub fn now_secs() -> i64 {
     std::time::SystemTime::now()

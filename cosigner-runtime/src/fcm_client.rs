@@ -18,6 +18,7 @@ use tokio::sync::Mutex;
 
 const FCM_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const FCM_BASE_URL: &str = "https://fcm.googleapis.com";
 const SAFETY_SLACK_SECS: i64 = 5 * 60;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -37,12 +38,19 @@ pub struct FcmClient {
     sa: ServiceAccount,
     http: reqwest::Client,
     encoding_key: EncodingKey,
+    /// FCM messages:send base URL. Defaults to `FCM_BASE_URL`; overridable
+    /// for e2e mock-server tests via `FCM_BASE_URL` env var.
+    base_url: String,
     cache: Arc<Mutex<Option<CachedToken>>>,
 }
 
 impl FcmClient {
-    /// Parse a service-account JSON string and build a client.
-    pub fn from_service_account_json(json: &str) -> Result<Self, String> {
+    /// Parse a service-account JSON string and build a client. `base_url`
+    /// is `None` for real Firebase or `Some(mock_url)` for tests.
+    pub fn from_service_account_json(
+        json: &str,
+        base_url_override: Option<String>,
+    ) -> Result<Self, String> {
         let sa: ServiceAccount =
             serde_json::from_str(json).map_err(|e| format!("parse service account: {e}"))?;
         let encoding_key = EncodingKey::from_rsa_pem(sa.private_key.as_bytes())
@@ -51,10 +59,12 @@ impl FcmClient {
             .timeout(std::time::Duration::from_secs(15))
             .build()
             .map_err(|e| format!("build reqwest client: {e}"))?;
+        let base_url = base_url_override.unwrap_or_else(|| FCM_BASE_URL.to_string());
         Ok(Self {
             sa,
             http,
             encoding_key,
+            base_url,
             cache: Arc::new(Mutex::new(None)),
         })
     }
@@ -68,8 +78,8 @@ impl FcmClient {
     ) -> Result<(), String> {
         let access = self.access_token().await?;
         let url = format!(
-            "https://fcm.googleapis.com/v1/projects/{}/messages:send",
-            self.sa.project_id
+            "{}/v1/projects/{}/messages:send",
+            self.base_url, self.sa.project_id
         );
         let body = serde_json::json!({
             "message": {
@@ -133,10 +143,18 @@ impl FcmClient {
 
     async fn mint_token(&self) -> Result<TokenResponse, String> {
         let now = unix_secs();
+        let token_uri = self
+            .sa
+            .token_uri
+            .clone()
+            .unwrap_or_else(|| TOKEN_URL.to_string());
         let claims = JwtClaims {
             iss: self.sa.client_email.clone(),
             scope: FCM_SCOPE.to_string(),
-            aud: self.sa.token_uri.clone().unwrap_or_else(|| TOKEN_URL.to_string()),
+            // OAuth audience must match the endpoint the assertion is POSTed
+            // to; real Google verifies this. We use the same `token_uri` for
+            // both so dev (real Firebase) and test (mock server) stay in sync.
+            aud: token_uri.clone(),
             iat: now,
             exp: now + 3600,
         };
@@ -145,7 +163,7 @@ impl FcmClient {
             .map_err(|e| format!("sign JWT: {e}"))?;
         let resp = self
             .http
-            .post(TOKEN_URL)
+            .post(&token_uri)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
                 ("assertion", &jwt),

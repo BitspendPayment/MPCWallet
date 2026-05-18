@@ -16,8 +16,8 @@ use crate::cosigner::types::ArkTxEntry;
 use crate::cosigner::wasm::CosignerInstance;
 
 use super::helpers::{
-    auth_check, get_user_ark_keys, get_user_xonly_pubkey, now_secs, save_user_ark_history,
-    save_user_vtxos,
+    auth_check, delete_user_delegate, get_user_ark_keys, get_user_xonly_pubkey, now_secs,
+    save_user_ark_history, save_user_delegate, save_user_vtxos,
 };
 
 fn require_asp(
@@ -212,6 +212,7 @@ pub fn send_vtxo(
             let change = session.change_vtxo();
             state.vtxos.clear();
             state.delegate_session = None;
+            delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
             if let Some((change_txid, change_vout, change_amount)) = change {
                 tracing::info!(
                     "[{user_id_hex}] SendVtxo: change VTXO txid={}, vout={}, amount={}, exit_delay={}",
@@ -686,6 +687,30 @@ pub fn settle_delegate(
                     record.covered_outpoints.len(),
                     record.earliest_expires_at
                 );
+                // Persist the intent so it survives a cosigner-runtime
+                // restart. `to_persisted` only succeeds in ReadyToSettle
+                // phase — `sign_with_frost` above just moved us there.
+                // Best-effort: if persistence fails we still keep the
+                // in-memory copy so the current process can fire it.
+                match record.session.to_persisted() {
+                    Ok(persisted_session) => {
+                        let persisted = crate::cosigner::state::PersistedDelegateRecord {
+                            session: persisted_session,
+                            covered_outpoints: record.covered_outpoints.clone(),
+                            earliest_expires_at: record.earliest_expires_at,
+                        };
+                        save_user_delegate(
+                            shared.persistence.as_ref(),
+                            &user_id_hex,
+                            &persisted,
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "[{user_id_hex}] failed to serialize delegate for persistence: {e}; in-memory only"
+                        );
+                    }
+                }
                 state.delegate_session = Some(record);
                 return Ok(SettleDelegateResponse {
                     status: settle_delegate_response::Status::Delegated as i32,
@@ -732,6 +757,9 @@ pub fn settle_delegate(
                 "[{user_id_hex}] SettleDelegate: settled, new VTXO txid={vtxo_txid}:{vtxo_vout} amount={total_amount}"
             );
             save_user_vtxos(shared.persistence.as_ref(), &user_id_hex, &state.vtxos);
+            // The session was consumed by `settle()` — its sled row (if
+            // any from a previous store_only) must go too.
+            delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
             state.ark_tx_history.push(ArkTxEntry {
                 tx_type: "settle".into(),
                 amount_sats: total_amount as i64,
@@ -913,6 +941,7 @@ pub fn submit_ark_send(
         });
         if any_covered_spent {
             state.delegate_session = None;
+            delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
             tracing::info!(
                 "[{user_id_hex}] delegate invalidated: covered VTXO consumed by off-chain send"
             );

@@ -101,15 +101,71 @@ impl CosignerRegistry {
             super::handlers::helpers::load_user_ark_history(persistence, user_id);
         fresh_state.device_tokens =
             super::handlers::helpers::load_user_device_tokens(persistence, user_id);
+
+        // Rehydrate a persisted delegate intent if one is present. The
+        // sled row doesn't carry the cosigner secret (issue #31) — we look
+        // it up from `SecretStore` here and pass it into `from_persisted`.
+        // On any failure (missing secret, parse error, pubkey mismatch),
+        // delete the sled row so the next actor spawn doesn't keep
+        // retrying — the client will re-delegate on its next refresh.
+        let mut delegate_loaded = false;
+        if let Some(persisted_record) =
+            super::handlers::helpers::load_user_delegate(persistence, user_id)
+        {
+            match self
+                .shared
+                .secret_store
+                .get_secret(&format!("dkg-secret.{user_id}"))
+            {
+                Ok(Some(dkg_secret_hex)) => {
+                    match ark::client::batch::DelegateSettleSession::from_persisted(
+                        &persisted_record.session,
+                        &dkg_secret_hex,
+                    ) {
+                        Ok(session) => {
+                            fresh_state.delegate_session =
+                                Some(crate::cosigner::state::DelegateRecord {
+                                    session,
+                                    covered_outpoints: persisted_record
+                                        .covered_outpoints
+                                        .clone(),
+                                    earliest_expires_at: persisted_record.earliest_expires_at,
+                                });
+                            delegate_loaded = true;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Rehydrate delegate for {user_id} failed: {e}; dropping sled row"
+                            );
+                            super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        "Rehydrate delegate for {user_id}: SecretStore missing dkg-secret entry; dropping sled row"
+                    );
+                    super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Rehydrate delegate for {user_id}: SecretStore error {e}; leaving sled row in place"
+                    );
+                }
+            }
+        }
+
         if !fresh_state.vtxos.is_empty()
             || !fresh_state.ark_tx_history.is_empty()
             || !fresh_state.device_tokens.is_empty()
+            || delegate_loaded
         {
             tracing::info!(
-                "Rehydrated actor {user_id}: vtxos={}, history={}, device_tokens={}",
+                "Rehydrated actor {user_id}: vtxos={}, history={}, device_tokens={}, delegate={}",
                 fresh_state.vtxos.len(),
                 fresh_state.ark_tx_history.len(),
                 fresh_state.device_tokens.len(),
+                delegate_loaded,
             );
         }
         let state = Arc::new(Mutex::new(fresh_state));

@@ -106,8 +106,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
         None
     } else {
-        match fcm_client::FcmClient::from_service_account_json(&cfg.fcm_service_account_json) {
+        let base_url_override = if cfg.fcm_base_url.is_empty() {
+            None
+        } else {
+            Some(cfg.fcm_base_url.clone())
+        };
+        match fcm_client::FcmClient::from_service_account_json(
+            &cfg.fcm_service_account_json,
+            base_url_override,
+        ) {
             Ok(client) => {
+                if !cfg.fcm_base_url.is_empty() {
+                    tracing::warn!(
+                        "FCM_BASE_URL override active: {} — push traffic NOT going to real Firebase",
+                        cfg.fcm_base_url
+                    );
+                }
                 tracing::info!("FCM client initialized");
                 Some(Arc::new(client))
             }
@@ -148,15 +162,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Auto-settle tick: every 60 seconds, fan TickAutoSettle out to all
-    // spawned actors. Only meaningful when ASP is configured.
+    // Auto-settle tick: every 60s, find users with a stored delegate
+    // intent in sled and send TickAutoSettle to their actor (cold-spawning
+    // if needed).
     //
-    // TODO: under lazy actor spawn, users without a live actor are skipped
-    // here. `delegate_session` is in-memory only today, so behaviour matches
-    // the pre-restart status quo. When `DelegateRecord` is persisted to sled,
-    // switch this loop to iterate sled and `get_or_spawn` per user.
+    // Sled is the source of truth for "this user has a stored intent the
+    // cosigner needs to drive." Iterating the in-memory DashMap would miss
+    // users whose actor isn't spawned — which is exactly the post-restart
+    // case Phase 2 of the persistence work was meant to fix. Iterating
+    // sled lets the tick fire for any user with a delegate row regardless
+    // of whether they've made a request since the last cosigner-runtime
+    // boot.
+    //
+    // Cost: `get_or_spawn` for a cold user instantiates a new WASM Store.
+    // We only pay this for users with a delegate row — which is exactly
+    // the set that has work to do. Auto-settle either succeeds (sled row
+    // and in-memory record both clear, the actor settles back into idle
+    // and eventually evicts) or fails (same outcome — client re-delegates
+    // on next refresh).
     if shared.asp_client.is_some() {
         let registry_clone = registry.clone();
+        let persistence_clone = shared.persistence.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -164,8 +190,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                for (user_id, handle) in registry_clone.snapshot_handles() {
-                    if let Err(e) = handle.try_send(cosigner::CosignerCommand::TickAutoSettle) {
+                let candidates = match persistence_clone.get_all("delegate_sessions") {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(
+                            "auto-settle tick: get_all delegate_sessions failed: {e}"
+                        );
+                        continue;
+                    }
+                };
+                if candidates.is_empty() {
+                    continue;
+                }
+                tracing::debug!(
+                    "auto-settle tick: {} user(s) with stored delegate",
+                    candidates.len()
+                );
+                for (user_id, _value) in candidates {
+                    let handle = match registry_clone.get_or_spawn(&user_id) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::debug!("auto-settle tick: spawn {user_id} failed: {e}");
+                            continue;
+                        }
+                    };
+                    if let Err(e) =
+                        handle.try_send(cosigner::CosignerCommand::TickAutoSettle)
+                    {
                         tracing::debug!("auto-settle tick: skip {user_id}: {e}");
                     }
                 }
@@ -177,11 +228,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // haven't recv'd anything for `ACTOR_IDLE_THRESHOLD_SECS`. Runs
     // independently of ASP — purely a memory-pressure relief mechanism.
     //
-    // Per the design choice that ALL recv() events count as activity, the
-    // auto-settle tick above will keep every spawned actor's `last_active`
-    // fresh in ASP-connected deployments. So this sweep is effectively
-    // dormant in production but engages in ASP-down dev/tests and in
-    // future configurations that make the auto-settle tick selective.
+    // The auto-settle tick above now only sends to users with a stored
+    // delegate row in sled, so it no longer keeps every spawned actor's
+    // `last_active` fresh. Idle actors (no client RPCs, no stream events,
+    // no stored delegate) will now eventually evict in production —
+    // exactly the behaviour the sweep was designed for.
     {
         let registry_clone = registry.clone();
         let threshold = shared.actor_idle_threshold_secs;

@@ -28,6 +28,11 @@ pub struct ServerConfig {
     /// In production this is filled by the enclave KMS-decrypt step before
     /// the runtime starts; in dev set `FCM_SERVICE_ACCOUNT_JSON` directly.
     pub fcm_service_account_json: String,
+    /// Override the FCM base URL (default `https://fcm.googleapis.com`).
+    /// Set in e2e tests to point at a local mock server. The OAuth token
+    /// endpoint is overridden separately via the `token_uri` field of the
+    /// service-account JSON itself.
+    pub fcm_base_url: String,
     /// TTL for in-flight DKG ceremony sessions. After this many seconds of
     /// inactivity the session is evicted and any waiting participants get a
     /// "restart from step1" error. Default 300 (5 minutes).
@@ -70,6 +75,7 @@ impl ServerConfig {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800),
             fcm_service_account_json: env::var("FCM_SERVICE_ACCOUNT_JSON").unwrap_or_default(),
+            fcm_base_url: env::var("FCM_BASE_URL").unwrap_or_default(),
             dkg_session_ttl_secs: env::var("DKG_SESSION_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())

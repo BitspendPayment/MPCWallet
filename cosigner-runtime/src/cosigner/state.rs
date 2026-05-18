@@ -38,6 +38,17 @@ pub struct DelegateRecord {
     pub earliest_expires_at: i64,
 }
 
+/// Sled-persisted projection of a `DelegateRecord`. Mirrors the in-memory
+/// shape but uses `PersistedDelegate` (no cosigner secret — looked up from
+/// `SecretStore` at rehydration time) so the on-disk JSON contains no
+/// long-lived key material. See GitHub issue #31 for the rationale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PersistedDelegateRecord {
+    pub session: ark::client::batch::PersistedDelegate,
+    pub covered_outpoints: Vec<(String, u32)>,
+    pub earliest_expires_at: i64,
+}
+
 /// One device the user has registered for FCM push notifications.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceToken {
