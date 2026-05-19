@@ -130,6 +130,10 @@ impl CosignerRegistry {
                                         .covered_outpoints
                                         .clone(),
                                     earliest_expires_at: persisted_record.earliest_expires_at,
+                                    // Rehydrated records carry signed
+                                    // sighashes already — the bypass must
+                                    // not fire on unrelated SignStep1.
+                                    awaiting_signatures: false,
                                 });
                             delegate_loaded = true;
                         }

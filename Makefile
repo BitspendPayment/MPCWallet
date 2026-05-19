@@ -29,8 +29,7 @@
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
 	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down \
-	integration-test integration-test-ci integration-test-ci-ark \
-	integration-test-lifecycle-ark cosigner-lifecycle-run cosigner-lifecycle-stop
+	integration-test integration-test-ci integration-test-ci-ark
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 
@@ -177,7 +176,7 @@ down:
 	-pkill -f "bob_proxy" || true
 	-sudo fuser -k 7074/tcp 2>/dev/null || true
 	-sudo fuser -k 7090/tcp 2>/dev/null || true
-	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down 2>/dev/null || true
+	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v 2>/dev/null || true
 	sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
 	sudo rm -rf $(DATA_DIR) 2>/dev/null || true
 	@echo "All stopped."
@@ -380,7 +379,7 @@ arkd-up:
 
 arkd-down:
 	@echo "Stopping arkd services..."
-	docker compose -f docker-compose.yml -f docker-compose.ark.yml down
+	docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v
 
 arkd-init:
 	@echo "Initializing arkd wallet..."
@@ -511,48 +510,6 @@ integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init
 	cd app && flutter pub get && \
 		flutter test integration_test/app_test.dart
 	$(MAKE) runtime-stop
-	$(MAKE) signer-stop
-	$(MAKE) arkd-down
-
-# Spawn the cosigner-runtime lifecycle helper (scripts/cosigner_lifecycle.py).
-# Run as a backgrounded subprocess; its PID is stashed at /tmp/cosigner-lifecycle.pid.
-# UI integration tests POST to localhost:7099/start|kill|restart to drive the
-# cosigner subprocess between phases.
-cosigner-lifecycle-run:
-	@if [ -f /tmp/cosigner-lifecycle.pid ] && kill -0 $$(cat /tmp/cosigner-lifecycle.pid) 2>/dev/null; then \
-		echo "cosigner-lifecycle already running (pid=$$(cat /tmp/cosigner-lifecycle.pid))"; \
-	else \
-		echo "Starting cosigner-lifecycle helper on :7099..."; \
-		python3 scripts/cosigner_lifecycle.py > /tmp/cosigner-lifecycle.log 2>&1 & \
-		echo $$! > /tmp/cosigner-lifecycle.pid; \
-		sleep 1; \
-	fi
-
-cosigner-lifecycle-stop:
-	@if [ -f /tmp/cosigner-lifecycle.pid ]; then \
-		kill $$(cat /tmp/cosigner-lifecycle.pid) 2>/dev/null || true; \
-		rm -f /tmp/cosigner-lifecycle.pid; \
-		echo "cosigner-lifecycle stopped"; \
-	fi
-
-# Integration tests that need to start/kill/restart the cosigner-runtime
-# mid-test (restart resilience, delegate persistence across restart, cold-spawn
-# auto-settle). The Makefile doesn't start the cosigner here — the lifecycle
-# helper owns it. Tests POST to :7099 to drive it.
-integration-test-lifecycle-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init \
-	signer-run ffi-android-x86_64 cosigner-build runtime-build cosigner-lifecycle-run
-	@echo "Running lifecycle integration tests..."
-	-adb reverse tcp:7074 tcp:7074
-	-adb reverse tcp:7099 tcp:7099
-	-adb reverse tcp:50001 tcp:50001
-	-adb reverse tcp:18443 tcp:18443
-	-adb reverse tcp:7090 tcp:7090
-	cd app && flutter pub get && \
-		flutter test integration_test/ark_auto_delegate_test.dart \
-		             integration_test/ark_restart_test.dart \
-		             integration_test/ark_delegate_persistence_test.dart \
-		             integration_test/ark_background_push_test.dart
-	$(MAKE) cosigner-lifecycle-stop
 	$(MAKE) signer-stop
 	$(MAKE) arkd-down
 

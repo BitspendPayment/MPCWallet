@@ -36,6 +36,14 @@ pub struct DelegateRecord {
     /// Earliest `expires_at` across `covered_outpoints` — what the tick
     /// task compares `now` against.
     pub earliest_expires_at: i64,
+    /// True while the cosigner is still waiting on the client's FROST
+    /// signature shares for this delegate's sighashes — i.e. between
+    /// `SettleDelegate` Phase 1 (returns sighashes) and Phase 2 (receives
+    /// signatures). The sign-step1 policy bypass only applies during this
+    /// window. Once signatures are stored, the record persists for the
+    /// tick task but subsequent unrelated `SignStep1` calls (e.g. an
+    /// off-chain Ark send) must again be policy-gated.
+    pub awaiting_signatures: bool,
 }
 
 /// Sled-persisted projection of a `DelegateRecord`. Mirrors the in-memory

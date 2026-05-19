@@ -688,6 +688,7 @@ pub fn settle_delegate(
                 session,
                 covered_outpoints,
                 earliest_expires_at,
+                awaiting_signatures: true,
             });
             Ok(SettleDelegateResponse {
                 status: settle_delegate_response::Status::SigningRequired as i32,
@@ -707,6 +708,11 @@ pub fn settle_delegate(
                 .session
                 .sign_with_frost(signatures)
                 .map_err(|e| Status::internal(format!("sign_with_frost: {e}")))?;
+            // Sign-with-frost succeeded; this record is no longer in the
+            // "client is signing my sighashes right now" state, so the
+            // sign-step1 policy bypass must stop applying to subsequent
+            // unrelated sign calls (e.g. off-chain Ark sends).
+            record.awaiting_signatures = false;
 
             if req.store_only {
                 tracing::info!(
