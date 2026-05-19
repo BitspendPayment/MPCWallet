@@ -27,7 +27,8 @@ fn make_shared() -> (Arc<SharedServices>, TempDir) {
         bitcoin_history,
         None,
         None,
-        1800,
+        1800, // auto_settle_safety_margin_secs
+        1800, // actor_idle_threshold_secs
     ));
     (shared, tmp)
 }
