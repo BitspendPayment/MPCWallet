@@ -1249,14 +1249,12 @@ class MpcClient {
 
   /// Settle on-chain boarding UTXOs into Ark VTXOs.
   /// Returns the commitment txid when settled.
-  /// Settle (board on-chain UTXOs into VTXOs).
   ///
-  /// If the user has an active spending policy and the boarding output's value
-  /// exceeds its threshold, the server switches to the protected key package
-  /// for FROST signing. Pass [pin] and [policyId] so the client signs with the
-  /// matching protected key — otherwise FROST aggregation will fail with
-  /// "invalid signature".
-  Future<String> settle({String? pin, String? policyId}) async {
+  /// Spending policies do NOT gate settling — they gate fund egress (sends
+  /// and redeems), not "promote my boarding UTXO into a VTXO." Server-side
+  /// `SignStep1` forces the normal key package whenever an active settle
+  /// or delegate session is in flight, so no PIN is required.
+  Future<String> settle() async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settle.");
     }
@@ -1291,12 +1289,12 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // FROST sign — sign() picks the protected policy KP when
-          // pin+policyId are supplied, or _normalPolicy otherwise.
+          // Settling always signs with the normal policy KP. Server-side
+          // SignStep1 forces this when a settle session is active, so
+          // passing pin/policyId here would only cause a key mismatch
+          // and a FROST aggregation failure.
           final sig = await sign(
             sighashBytes,
-            pin: pin,
-            policyId: policyId,
             applyTweak: !scriptPath,
           );
 
@@ -1334,13 +1332,10 @@ class MpcClient {
   /// DELEGATED, commitment txid is empty). When false, the cosigner joins
   /// the next batch immediately (returns SETTLED with the commitment txid).
   ///
-  /// Same caveat as [settle]: pass [pin] + [policyId] when an active policy
-  /// covers the VTXO amounts being refreshed.
-  Future<String> settleDelegate({
-    bool storeOnly = false,
-    String? pin,
-    String? policyId,
-  }) async {
+  /// Like [settle], no PIN/policy is required. Settling is a re-packaging of
+  /// the user's own funds, not egress; server-side `SignStep1` forces the
+  /// normal key package while a delegate session is active.
+  Future<String> settleDelegate({bool storeOnly = false}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settleDelegate.");
     }
@@ -1367,10 +1362,9 @@ class MpcClient {
 
     for (final sighash in resp1.messagesToSign) {
       final sighashBytes = Uint8List.fromList(sighash);
+      // Always sign with normal policy KP — see class docstring above.
       final sig = await sign(
         sighashBytes,
-        pin: pin,
-        policyId: policyId,
         applyTweak: !scriptPath,
       );
 

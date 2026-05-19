@@ -68,12 +68,31 @@ pub fn sign_step1(
     let spent_amount =
         calculate_spent_amount(user, &req.full_transaction, &pkp_json).unwrap_or(0);
     tracing::info!("[{user_id_hex}] SignStep1: spent_amount={spent_amount}");
-    let selected_policy_id =
-        parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
-    tracing::info!(
-        "[{user_id_hex}] SignStep1: selected_policy_id={:?}",
-        selected_policy_id
-    );
+
+    // Policy bypass for settle/settleDelegate: when there's an active
+    // settle session (boarding) or delegate session (auto-settle), we
+    // force the normal key package. Spending policies gate fund egress
+    // (sends + redeems); they don't gate "promote my UTXO into a fresh
+    // VTXO" or "re-delegate so my VTXO doesn't expire." Auto-settle
+    // happens from a background isolate / cosigner tick task where no
+    // user PIN is available, so requiring a protected policy would
+    // break the whole class of unattended settlements.
+    let in_settle_context =
+        state.settle_session.is_some() || state.delegate_session.is_some();
+    let selected_policy_id = if in_settle_context {
+        tracing::info!(
+            "[{user_id_hex}] SignStep1: settle/delegate context active — \
+             skipping policy evaluation"
+        );
+        None
+    } else {
+        let id = parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
+        tracing::info!(
+            "[{user_id_hex}] SignStep1: selected_policy_id={:?}",
+            id
+        );
+        id
+    };
     if let Some(ref policy_id) = selected_policy_id {
         if let Some(pp) = policy_state.protected_policies.get(policy_id) {
             server_kp_json = pp.key_package_json.clone();

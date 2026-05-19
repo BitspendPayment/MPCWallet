@@ -704,9 +704,9 @@ class MpcService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String> boardFunds({String? pin, String? policyId}) async {
+  Future<String> boardFunds() async {
     if (_client == null) throw StateError("Client not initialized");
-    final txid = await _client!.settle(pin: pin, policyId: policyId);
+    final txid = await _client!.settle();
     await refreshVtxos();
     return txid;
   }
@@ -720,10 +720,9 @@ class MpcService extends ChangeNotifier {
     return arkTxid;
   }
 
-  Future<String> settleDelegate({String? pin, String? policyId}) async {
+  Future<String> settleDelegate() async {
     if (_client == null) throw StateError("Client not initialized");
-    final txid =
-        await _client!.settleDelegate(pin: pin, policyId: policyId);
+    final txid = await _client!.settleDelegate();
     await refreshVtxos();
     return txid;
   }

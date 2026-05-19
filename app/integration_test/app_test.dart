@@ -162,15 +162,10 @@ void main() {
 
         await ArkBoardPage.waitForFundsDetected(tester);
         await ArkBoardPage.tapBoardNow(tester);
-        // With an active policy, ark_board_screen prompts for PIN before
-        // sending the FROST signs to the server (so client uses the same
-        // protected key package the server will use).
-        await pumpUntilFound(
-          tester,
-          find.byKey(const Key('boardingPinField')),
-          timeout: const Duration(seconds: 30),
-        );
-        await ArkBoardPage.enterBoardingPinAndAuthorize(tester, pin);
+        // Boarding no longer prompts for PIN even when an active policy
+        // exists — settling never applies a spending policy. The server's
+        // SignStep1 forces the normal key package whenever a settle
+        // session is in flight (see sign.rs).
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkBoardDoneBtn')),

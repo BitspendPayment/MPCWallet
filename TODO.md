@@ -532,7 +532,7 @@ explicitly support it). Monitor first, refactor only if needed.
 
 ---
 
-## 6. Background handler: attested-mode + non-software signer paths
+## 6. Background handler: attested-mode for production deployment
 
 ### Context
 
@@ -541,41 +541,41 @@ attestation. Sufficient for the development + test stack where the
 cosigner is `http://10.0.2.2:7074`, but production deployment routes
 through `MpcClient.attested(...)` for enclave PCR0 verification.
 
-Also: the background handler uses no hardware signer. This is fine
-because day-to-day FROST signing uses `_normalPolicy.keyPackage` (the
-wallet's stored share). But:
+### Status of the policy-bypass concern (the original second half of #6)
 
-- If a wallet uses a **protected** policy (PIN-gated), `client.sign`
-  picks the protected `KeyPackage` and applies the PIN-derived
-  correction. The user's PIN isn't available in a background isolate
-  — there's no UI. So a delegate falling under a protected policy
-  cannot be stored from the background path.
-- `settleDelegate` doesn't accept a `policyId` directly, and the
-  cosigner's `settle_delegate` handler doesn't authenticate under a
-  protected policy currently. But if that ever changes (e.g. require
-  PIN for delegate storage), the background path breaks silently.
+**Resolved**: settling never applies a spending policy.
 
-### Plan
+- `MpcClient.settle()` and `MpcClient.settleDelegate({storeOnly})` no
+  longer accept `pin`/`policyId` — those params were a footgun that
+  could produce a FROST aggregation mismatch.
+- Server-side
+  [sign.rs::sign_step1](cosigner-runtime/src/cosigner/handlers/sign.rs)
+  forces `selected_policy_id = None` whenever the actor has an active
+  `settle_session` or `delegate_session`. This is the source-of-truth
+  enforcement — even if a future client tried to send pin/policyId via
+  some other call, the settle context wins.
+- `ark_board_screen` no longer shows a PIN prompt before boarding.
+- `app_test.dart` updated to drop boarding-PIN expectations.
 
-Two small follow-up tasks, both gated on production deployment becoming
-attested:
+Rationale: spending policies gate fund egress (sends + redeems), not
+"promote my UTXO into a fresh VTXO" or "re-delegate so it doesn't
+expire." Auto-settle happens in the background isolate / cosigner tick
+task where no user PIN is available; requiring policy authorization
+would break the whole class of unattended settlements.
 
-1. **Attested mode in background**: detect from persisted state whether
-   the foreground was running attested; if so, construct
-   `MpcClient.attested(...)` instead. `AttestedWalletApi.create()` is
-   FFI-heavy but doesn't need a UI thread.
-2. **Document PIN-gated delegate gap**: add a runtime check at the top
-   of `_runBackgroundDelegate` — if the user has any active protected
-   policy AND no plain-policy fallback covers the new VTXO's amount,
-   skip the background work and rely on the foreground refresh.
+### Remaining plan (attested mode in background)
+
+Detect from persisted state whether the foreground was running attested;
+if so, construct `MpcClient.attested(...)` instead in
+`_runBackgroundDelegate`. `AttestedWalletApi.create()` is FFI-heavy but
+doesn't need a UI thread.
 
 ### Verification
 
 Run the existing background-push UI test
 (`app/integration_test/ark_background_push_test.dart`) against an
-attested deployment after the attested-mode flag lands. Pin-protected
-delegate test would be a new addition.
+attested deployment after the attested-mode flag lands.
 
 ### Cost
 
-~30-40 LoC Dart, no proto changes. Pure deployment-mode wiring.
+~20-30 LoC Dart. Pure deployment-mode wiring.
