@@ -270,6 +270,37 @@ class MpcService extends ChangeNotifier {
     super.dispose();
   }
 
+  /// Fetch deployment metadata from the cosigner-runtime with bounded
+  /// retry. Address rendering depends on `bitcoinNetwork`, so we refuse
+  /// to proceed without a non-empty value — silently defaulting was the
+  /// regression that the empty-string check guards against.
+  Future<GetServerInfoResponse> _fetchServerInfoWithRetry() async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final info = await _client!.getServerInfo();
+        if (info.bitcoinNetwork.isEmpty) {
+          throw StateError(
+              "Server returned empty bitcoin_network; refusing to construct "
+              "wallet without a known HRP source");
+        }
+        return info;
+      } catch (e) {
+        lastError = e;
+        debugPrint(
+            "getServerInfo attempt $attempt/3 failed: $e; "
+            "${attempt < 3 ? 'retrying in ${attempt}s' : 'giving up'}");
+        if (attempt < 3) {
+          await Future.delayed(Duration(seconds: attempt));
+        }
+      }
+    }
+    throw StateError(
+        "Cosigner unreachable: getServerInfo failed after 3 attempts. "
+        "Last error: $lastError. Check that the server is running and "
+        "reachable at $_host.");
+  }
+
   /// Set the server endpoint. The Bitcoin network is no longer carried in
   /// app state — it's fetched from the server via `getServerInfo()` at the
   /// moment the wallet is constructed (see `restoreSession`/`doDkg`).
@@ -373,7 +404,7 @@ class MpcService extends ChangeNotifier {
         hardwareSigner: signer,
         storageId: storageId,
       );
-      final serverInfo = await _client!.getServerInfo();
+      final serverInfo = await _fetchServerInfoWithRetry();
       _wallet = MpcBitcoinWallet(_client!,
           networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
@@ -452,7 +483,7 @@ class MpcService extends ChangeNotifier {
           );
       debugPrint("[RESTORE] Re-DKG complete.");
 
-      final serverInfo = await _client!.getServerInfo();
+      final serverInfo = await _fetchServerInfoWithRetry();
       _wallet = MpcBitcoinWallet(_client!,
           networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
@@ -514,7 +545,7 @@ class MpcService extends ChangeNotifier {
       hardwareSigner: _hardwareSigner, // null for software mode — that's fine
       storageId: storageId,
     );
-    final serverInfo = await _client!.getServerInfo();
+    final serverInfo = await _fetchServerInfoWithRetry();
     _wallet = MpcBitcoinWallet(_client!,
         networkName: serverInfo.bitcoinNetwork, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
