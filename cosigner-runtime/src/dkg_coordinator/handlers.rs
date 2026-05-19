@@ -6,6 +6,14 @@
 //! caller whose round isn't yet complete has its reply oneshot stashed in
 //! `DkgSession.pending_*`; the participant whose arrival closes the round
 //! fulfils every stashed sender, then its own.
+//!
+//! DKG handlers deliberately do NOT call `auth_check`/`timestamp_check`
+//! (the per-RPC Schnorr-auth path in `cosigner/handlers/helpers.rs`).
+//! The user's owner key only exists once DKG completes, so there's no
+//! shared secret to verify a request signature against during the
+//! ceremony. Integrity comes from FROST itself (verifiable secret shares
+//! in round1, commitment proofs in round2) plus TTL-bounded session
+//! state — see `DkgCoordinator::sweep_stale`.
 
 use std::collections::HashMap;
 use std::time::Instant;

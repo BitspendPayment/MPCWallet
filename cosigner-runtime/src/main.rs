@@ -37,6 +37,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.bitcoin_network
     );
 
+    // Refuse to boot with an empty `bitcoin_network`. The client uses this
+    // string verbatim as the HRP source for rendering wallet addresses; an
+    // empty value would silently fall through to a wrong-network default
+    // on the client side. ServerConfig::from_environment already defaults
+    // to "regtest" on a missing var, so this check only fires when the
+    // operator explicitly set BITCOIN_NETWORK="" (a configuration mistake).
+    const VALID_NETWORKS: [&str; 5] = ["mainnet", "testnet", "signet", "mutinynet", "regtest"];
+    if !VALID_NETWORKS.contains(&cfg.bitcoin_network.as_str()) {
+        return Err(format!(
+            "Invalid BITCOIN_NETWORK={:?}; expected one of {:?}",
+            cfg.bitcoin_network, VALID_NETWORKS
+        )
+        .into());
+    }
+
     // Persistence backend.
     let (persistence, secret_store): (
         Arc<dyn persistence::KvStore>,
