@@ -7,17 +7,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
+use crate::cosigner::state::CosignerState;
+use crate::cosigner::wasm::CosignerInstance;
 use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
-use crate::shared::SharedServices;
-use crate::cosigner::state::CosignerState;
-use crate::cosigner::wasm::CosignerInstance;
 
 const NONCE_CACHE_CAP: usize = 10_000;
 
-/// Per-user Schnorr-auth check. Replaces the global `AuthVerifier` for cases
-/// that carry a single-key signature.
+/// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature
+/// against the URL `user_id` (owner pubkey) via the actor's WASM session.
 pub fn auth_check(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
@@ -40,13 +39,7 @@ pub fn auth_check(
     let iface = user.bindings.component_threshold_types();
     let is_valid = iface
         .threshold_session()
-        .call_verify_schnorr_signature(
-            &mut user.store,
-            *session,
-            &pk_hex,
-            &auth_message,
-            &sig_hex,
-        )
+        .call_verify_schnorr_signature(&mut user.store, *session, &pk_hex, &auth_message, &sig_hex)
         .map_err(|e| Status::internal(format!("WASM error: {e}")))?
         .map_err(|_| Status::internal("signature verification failed"))?;
 
@@ -111,9 +104,7 @@ pub fn ensure_policy_loaded(
     }
     if let Ok(Some(canonical)) = persistence.get("policy_owner_idx", user_id_hex) {
         if try_load_policy(user, persistence, secret_store, &canonical)? {
-            tracing::info!(
-                "[{user_id_hex}] Resolved via policy_owner_idx → {canonical}"
-            );
+            tracing::info!("[{user_id_hex}] Resolved via policy_owner_idx → {canonical}");
             return Ok(());
         }
     }
@@ -133,9 +124,7 @@ fn try_load_policy(
     if let Ok(Some(json_str)) = persistence.get("policies", key) {
         match serde_json::from_str::<PolicyState>(&json_str) {
             Ok(mut ps) => {
-                if let Ok(Some(secret)) =
-                    secret_store.get_secret(&format!("dkg-secret.{key}"))
-                {
+                if let Ok(Some(secret)) = secret_store.get_secret(&format!("dkg-secret.{key}")) {
                     ps.server_dkg_secret_hex = Some(secret);
                 }
                 user.policy_state = Some(ps);
@@ -150,47 +139,7 @@ fn try_load_policy(
     Ok(false)
 }
 
-/// Persist policy state, the recovery-id index, and the DKG secret.
-/// Recovery lookups read `policy_recovery_idx` from sled directly — no
-/// in-memory cache to keep in sync.
-pub fn persist_policy(
-    shared: &SharedServices,
-    user_id_hex: &str,
-    policy: &PolicyState,
-) -> Result<(), Status> {
-    let json = serde_json::to_string(policy)
-        .map_err(|e| Status::internal(format!("serialization error: {e}")))?;
-    shared
-        .persistence
-        .put("policies", user_id_hex, &json)
-        .map_err(|e| {
-            tracing::error!(error = %e, user_id = %user_id_hex, "persistence put policies failed");
-            Status::internal(format!("persistence write error: {e}"))
-        })?;
-    if !policy.recovery_id.is_empty() {
-        if let Err(e) =
-            shared
-                .persistence
-                .put("policy_recovery_idx", &policy.recovery_id, user_id_hex)
-        {
-            tracing::warn!(
-                "persist policy_recovery_idx/{} failed: {e}",
-                policy.recovery_id
-            );
-        }
-    }
-    if let Some(ref secret) = policy.server_dkg_secret_hex {
-        if let Err(e) = shared
-            .secret_store
-            .put_secret(&format!("dkg-secret.{user_id_hex}"), secret)
-        {
-            tracing::error!(
-                "persist dkg-secret.{user_id_hex} failed: {e} — wallet may not be restorable"
-            );
-        }
-    }
-    Ok(())
-}
+pub use crate::policy::store::persist_policy;
 
 /// Fetch the user's group x-only pubkey (64 hex chars) for Ark address derivation.
 /// The compressed key from the policy is 33 bytes (66 hex); strip the parity byte.
@@ -256,11 +205,24 @@ pub fn get_user_ark_keys(
 pub fn save_user_vtxos(
     persistence: &dyn KvStore,
     user_id_hex: &str,
-    vtxos: &[(String, u32, u64, u32)],
+    vtxos: &[crate::cosigner::state::VtxoEntry],
 ) {
     if let Ok(json) = serde_json::to_string(vtxos) {
         if let Err(e) = persistence.put("vtxo_store", user_id_hex, &json) {
             tracing::warn!("persist vtxo_store/{user_id_hex} failed: {e}");
+        }
+    }
+}
+
+/// Persist a user's registered device tokens.
+pub fn save_user_device_tokens(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+    tokens: &[crate::cosigner::state::DeviceToken],
+) {
+    if let Ok(json) = serde_json::to_string(tokens) {
+        if let Err(e) = persistence.put("device_tokens", user_id_hex, &json) {
+            tracing::warn!("persist device_tokens/{user_id_hex} failed: {e}");
         }
     }
 }
@@ -275,6 +237,112 @@ pub fn save_user_ark_history(
         if let Err(e) = persistence.put("ark_tx_history", user_id_hex, &json) {
             tracing::warn!("persist ark_tx_history/{user_id_hex} failed: {e}");
         }
+    }
+}
+
+/// Read back a user's Ark transaction history from persistence. Returns an
+/// empty vec on miss or parse failure (best-effort — history isn't safety-
+/// critical, just user-facing).
+pub fn load_user_ark_history(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::types::ArkTxEntry> {
+    match persistence.get("ark_tx_history", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!("parse ark_tx_history/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Read back a user's stored VTXOs from persistence. Returns an empty vec on
+/// miss or parse failure. The vtxo_stream subscription will reconcile via its
+/// own dedup as ASP events arrive, so a stale read here is self-healing.
+pub fn load_user_vtxos(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::state::VtxoEntry> {
+    match persistence.get("vtxo_store", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(vtxos) => vtxos,
+            Err(e) => {
+                tracing::warn!("parse vtxo_store/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Read back a user's registered FCM device tokens from persistence. Closes
+/// the gap from TODO #4 — without this, pushes silently no-op after a
+/// cosigner restart for any user who hasn't reopened the app since.
+pub fn load_user_device_tokens(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Vec<crate::cosigner::state::DeviceToken> {
+    match persistence.get("device_tokens", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                tracing::warn!("parse device_tokens/{user_id_hex} failed: {e}");
+                Vec::new()
+            }
+        },
+        _ => Vec::new(),
+    }
+}
+
+/// Persist a stored signed delegate intent. The on-disk record carries no
+/// secret material — the cosigner secret stays in `SecretStore` and is
+/// reattached only at rehydration time (issue #31).
+pub fn save_user_delegate(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+    record: &crate::cosigner::state::PersistedDelegateRecord,
+) {
+    match serde_json::to_string(record) {
+        Ok(json) => {
+            if let Err(e) = persistence.put("delegate_sessions", user_id_hex, &json) {
+                tracing::warn!("persist delegate_sessions/{user_id_hex} failed: {e}");
+            }
+        }
+        Err(e) => {
+            tracing::warn!("serialize delegate_sessions/{user_id_hex} failed: {e}");
+        }
+    }
+}
+
+/// Read back a stored delegate. Returns `None` on miss, parse failure, or
+/// any other error — caller treats absence as "no delegate, client should
+/// re-delegate on next refresh."
+pub fn load_user_delegate(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+) -> Option<crate::cosigner::state::PersistedDelegateRecord> {
+    match persistence.get("delegate_sessions", user_id_hex) {
+        Ok(Some(json)) => match serde_json::from_str(&json) {
+            Ok(record) => Some(record),
+            Err(e) => {
+                tracing::warn!("parse delegate_sessions/{user_id_hex} failed: {e}");
+                None
+            }
+        },
+        _ => None,
+    }
+}
+
+/// Drop the stored delegate. Called from every invalidation site — once
+/// the in-memory `DelegateRecord` is cleared, the sled row must go too,
+/// otherwise the next actor spawn would rehydrate a stale intent that no
+/// longer matches `state.vtxos`.
+pub fn delete_user_delegate(persistence: &dyn KvStore, user_id_hex: &str) {
+    if let Err(e) = persistence.delete("delegate_sessions", user_id_hex) {
+        tracing::warn!("delete delegate_sessions/{user_id_hex} failed: {e}");
     }
 }
 
@@ -349,7 +417,10 @@ pub fn calculate_spent_amount(
     let spent = crate::bitcoin::tx_parser::calculate_spent_amount(
         full_tx,
         &script_hex,
-        user.utxo_state.as_ref().map(|u| &u.utxos[..]).unwrap_or(&[]),
+        user.utxo_state
+            .as_ref()
+            .map(|u| &u.utxos[..])
+            .unwrap_or(&[]),
     )
     .map_err(|e| Status::internal(format!("tx parse: {e}")))?;
     Ok(spent)

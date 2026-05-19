@@ -63,6 +63,20 @@ class RestWalletApi implements WalletApi {
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }
 
+  /// GET helper for unauthenticated read-only endpoints (e.g. /server-info).
+  /// Falls back to a POST through `customPost` when one is configured, since
+  /// the enclave-FFI transport only models POST.
+  Future<Map<String, dynamic>> _get(String path) async {
+    if (customPost != null) {
+      return customPost!(path, {});
+    }
+    final resp = await _http!.get(Uri.parse('$baseUrl$path'));
+    if (resp.statusCode != 200) {
+      throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
+    }
+    return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
   /// Common auth fields present on most requests.
   Map<String, dynamic> _authFields(
       List<int> userId, List<int> signature, Int64 timestampMs) {
@@ -361,7 +375,8 @@ class RestWalletApi implements WalletApi {
       ..._authFields(r.userId, r.signature, r.timestampMs),
     });
     final result = ListVtxosResponse()
-      ..totalBalance = Int64(resp['total_balance'] as int? ?? 0);
+      ..totalBalance = Int64(resp['total_balance'] as int? ?? 0)
+      ..hasActiveDelegate = resp['has_active_delegate'] as bool? ?? false;
     for (final v in (resp['vtxos'] as List? ?? [])) {
       result.vtxos.add(VtxoInfo()
         ..txid = v['txid'] as String? ?? ''
@@ -461,6 +476,7 @@ class RestWalletApi implements WalletApi {
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
       'signed_messages': r.signedMessages.map((m) => _hex(m)).toList(),
+      'store_only': r.storeOnly,
     });
     final result = SettleDelegateResponse()
       ..status = SettleDelegateResponse_Status.valueOf(
@@ -490,6 +506,28 @@ class RestWalletApi implements WalletApi {
       ..changeTxid = resp['change_txid'] as String? ?? ''
       ..changeVout = (resp['change_vout'] as num?)?.toInt() ?? 0
       ..changeAmount = Int64(resp['change_amount'] as int? ?? 0);
+  }
+
+  @override
+  Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) async {
+    final resp = await _get('/api/server-info');
+    return GetServerInfoResponse()
+      ..bitcoinNetwork = resp['bitcoin_network'] as String? ?? '';
+  }
+
+  @override
+  Future<RegisterDeviceTokenResponse> registerDeviceToken(
+      RegisterDeviceTokenRequest r) async {
+    final resp = await _post(
+      '/api/u/${_hex(r.userId)}/push/register-device-token',
+      {
+        ..._authFields(r.userId, r.signature, r.timestampMs),
+        'fcm_token': r.fcmToken,
+        'platform': r.platform,
+        'app_version': r.appVersion,
+      },
+    );
+    return RegisterDeviceTokenResponse()..ok = resp['ok'] as bool? ?? false;
   }
 
   @override

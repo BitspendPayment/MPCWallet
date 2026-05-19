@@ -1,21 +1,31 @@
 //! Concurrent registry of per-user actors. `DashMap` of mpsc senders;
 //! lookup, dispatch, and stream fan-out are lock-free across distinct users.
 
+use std::sync::atomic::AtomicI64;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use dashmap::DashMap;
+use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tonic::Status;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
+use crate::cosigner::wasm::{CosignerInstance, CosignerWasiView, ThresholdWorld};
 use crate::shared::SharedServices;
-use crate::cosigner::wasm::{ThresholdWorld, CosignerInstance, CosignerWasiView};
 
 use super::actor::run_actor;
 use super::command::CosignerCommand;
-use super::handle::{OwnedHandle, CosignerHandle};
+use super::handle::{CosignerHandle, OwnedHandle};
 use super::state::CosignerState;
+
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Per-actor mailbox depth. Sized for normal request bursts plus a margin for
 /// stream fan-in (VTXO updates, indexer events).
@@ -66,19 +76,121 @@ impl CosignerRegistry {
         if let Some(entry) = self.actors.get(user_id) {
             return Ok(entry.handle.clone());
         }
-        // Slow path: instantiate WASM and spawn the actor task.
+        // Slow path: instantiate WASM and spawn the actor task. State and
+        // instance are wrapped in `Arc<Mutex<>>` so the actor's panic-recovery
+        // path can rebuild the wedged WASM instance while keeping the
+        // `CosignerState` (vtxos, delegate_session, history, device_tokens)
+        // intact across a caught panic.
         let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
         let user = self
             .new_user_instance()
             .map_err(|e| Status::internal(format!("WASM init error: {e}")))?;
-        let state = CosignerState::new();
+        let user = Arc::new(Mutex::new(user));
+
+        // Rehydrate persistable state from sled. `vtxos` is also reconciled
+        // by the vtxo_stream subscription as events arrive, but loading the
+        // last-saved set keeps the actor coherent for any RPC that fires
+        // before the first stream event. `ark_tx_history` and
+        // `device_tokens` have no other reconstruction path — without these
+        // loads they would be empty until new events accrued (history) or
+        // the client re-registered (push tokens).
+        let persistence = self.shared.persistence.as_ref();
+        let mut fresh_state = CosignerState::new(user_id.to_string());
+        fresh_state.vtxos = super::handlers::helpers::load_user_vtxos(persistence, user_id);
+        fresh_state.ark_tx_history =
+            super::handlers::helpers::load_user_ark_history(persistence, user_id);
+        fresh_state.device_tokens =
+            super::handlers::helpers::load_user_device_tokens(persistence, user_id);
+
+        // Rehydrate a persisted delegate intent if one is present. The
+        // sled row doesn't carry the cosigner secret (issue #31) — we look
+        // it up from `SecretStore` here and pass it into `from_persisted`.
+        // On any failure (missing secret, parse error, pubkey mismatch),
+        // delete the sled row so the next actor spawn doesn't keep
+        // retrying — the client will re-delegate on its next refresh.
+        let mut delegate_loaded = false;
+        if let Some(persisted_record) =
+            super::handlers::helpers::load_user_delegate(persistence, user_id)
+        {
+            match self
+                .shared
+                .secret_store
+                .get_secret(&format!("dkg-secret.{user_id}"))
+            {
+                Ok(Some(dkg_secret_hex)) => {
+                    match ark::client::batch::DelegateSettleSession::from_persisted(
+                        &persisted_record.session,
+                        &dkg_secret_hex,
+                    ) {
+                        Ok(session) => {
+                            fresh_state.delegate_session =
+                                Some(crate::cosigner::state::DelegateRecord {
+                                    session,
+                                    covered_outpoints: persisted_record
+                                        .covered_outpoints
+                                        .clone(),
+                                    earliest_expires_at: persisted_record.earliest_expires_at,
+                                    // Rehydrated records carry signed
+                                    // sighashes already — the bypass must
+                                    // not fire on unrelated SignStep1.
+                                    awaiting_signatures: false,
+                                });
+                            delegate_loaded = true;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Rehydrate delegate for {user_id} failed: {e}; dropping sled row"
+                            );
+                            super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                        }
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!(
+                        "Rehydrate delegate for {user_id}: SecretStore missing dkg-secret entry; dropping sled row"
+                    );
+                    super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Rehydrate delegate for {user_id}: SecretStore error {e}; leaving sled row in place"
+                    );
+                }
+            }
+        }
+
+        if !fresh_state.vtxos.is_empty()
+            || !fresh_state.ark_tx_history.is_empty()
+            || !fresh_state.device_tokens.is_empty()
+            || delegate_loaded
+        {
+            tracing::info!(
+                "Rehydrated actor {user_id}: vtxos={}, history={}, device_tokens={}, delegate={}",
+                fresh_state.vtxos.len(),
+                fresh_state.ark_tx_history.len(),
+                fresh_state.device_tokens.len(),
+                delegate_loaded,
+            );
+        }
+        let state = Arc::new(Mutex::new(fresh_state));
+
+        let last_active = Arc::new(AtomicI64::new(now_secs()));
         let shared = self.shared.clone();
         let registry = self.clone();
-        let join = tokio::spawn(run_actor(user, state, rx, shared, registry));
+        let last_active_for_task = last_active.clone();
+        let join = tokio::spawn(run_actor(
+            user,
+            state,
+            rx,
+            shared,
+            registry,
+            last_active_for_task,
+        ));
         let handle = CosignerHandle::new(tx);
         let owned = OwnedHandle {
             handle: handle.clone(),
             join,
+            last_active,
         };
         // Insert; if a concurrent caller beat us to it, drop ours and use theirs.
         match self.actors.entry(user_id.to_string()) {
@@ -96,8 +208,38 @@ impl CosignerRegistry {
         }
     }
 
+    /// Evict an actor if it has been idle past the threshold. Atomic
+    /// re-check inside `remove_if` prevents a race with a new `recv()`
+    /// landing between the snapshot and the removal.
+    ///
+    /// On removal: best-effort `try_send(Shutdown)` to nudge the actor's
+    /// recv loop to exit gracefully. Even if that fails, dropping the
+    /// `OwnedHandle` drops the sender side; the actor's `rx.recv()` will
+    /// return `None` once all senders are dropped and the task ends
+    /// naturally.
+    pub fn try_evict(&self, user_id_hex: &str, threshold_secs: i64) -> bool {
+        let now = now_secs();
+        let removed = self.actors.remove_if(user_id_hex, |_, owned| {
+            now - owned.last_active_secs() >= threshold_secs
+        });
+        match removed {
+            Some((_, owned)) => {
+                let idle_for = now - owned.last_active_secs();
+                tracing::info!("Evicting idle actor {user_id_hex} (idle for {idle_for}s)");
+                let _ = owned.handle.try_send(CosignerCommand::Shutdown);
+                // Drop the handle to release the last sender, so the actor's
+                // recv loop unblocks if it's waiting.
+                drop(owned);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Build a fresh `CosignerInstance` from the cached engine/component/linker.
-    fn new_user_instance(&self) -> Result<CosignerInstance, Box<dyn std::error::Error>> {
+    /// Public(crate) so the actor's panic-recovery path can rebuild a wedged
+    /// WASM instance without losing the actor's `CosignerState`.
+    pub(crate) fn new_user_instance(&self) -> Result<CosignerInstance, Box<dyn std::error::Error>> {
         use wasmtime::Store;
         use wasmtime_wasi::{ResourceTable, WasiCtxBuilder};
         let wasi_ctx = WasiCtxBuilder::new().inherit_stdio().build();
@@ -113,7 +255,6 @@ impl CosignerRegistry {
             round1_secret: None,
             round2_secret: None,
             signing_nonce: None,
-            dkg_session: None,
             signing_session: None,
             refresh_session: None,
             script_path_spend: false,
@@ -164,5 +305,15 @@ impl CosignerRegistry {
             self.script_idx.insert(script_hex, user_id);
         }
         Ok(())
+    }
+
+    /// Snapshot every spawned actor's mailbox sender. Used by the global
+    /// auto-settle tick task to fan out `TickAutoSettle` without holding the
+    /// DashMap across an `await`.
+    pub fn snapshot_handles(&self) -> Vec<(String, CosignerHandle)> {
+        self.actors
+            .iter()
+            .map(|e| (e.key().clone(), e.value().handle.clone()))
+            .collect()
     }
 }

@@ -10,11 +10,6 @@ use crate::wallet_proto::*;
 pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
 pub enum CosignerCommand {
-    // --- DKG ---
-    DkgStep1 { req: DkgStep1Request, reply: Reply<DkgStep1Response> },
-    DkgStep2 { req: DkgStep2Request, reply: Reply<DkgStep2Response> },
-    DkgStep3 { req: DkgStep3Request, reply: Reply<DkgStep3Response> },
-
     // --- Signing ---
     SignStep1 { req: SignStep1Request, reply: Reply<SignStep1Response> },
     SignStep2 { req: SignStep2Request, reply: Reply<SignStep2Response> },
@@ -46,6 +41,15 @@ pub enum CosignerCommand {
     Settle { req: SettleRequest, reply: Reply<SettleResponse> },
     SettleDelegate { req: SettleDelegateRequest, reply: Reply<SettleDelegateResponse> },
     SubmitArkSend { req: SubmitArkSendRequest, reply: Reply<SubmitArkSendResponse> },
+
+    // --- Push registration ---
+    RegisterDeviceToken { req: RegisterDeviceTokenRequest, reply: Reply<RegisterDeviceTokenResponse> },
+
+    // --- Auto-settle ---
+    /// Tick from the global 60-second task. The actor checks its stored
+    /// delegate intent and submits it if `now > earliest_expires_at - margin`.
+    /// Fire-and-forget — errors are logged inside the handler.
+    TickAutoSettle,
 
     // --- Stream fan-in (no reply) ---
     /// VTXO stream notification: union of spent + new entries for a single user.

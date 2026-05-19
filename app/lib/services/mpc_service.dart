@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math';
 
-import 'package:fixnum/fixnum.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
@@ -30,7 +29,6 @@ class MpcService extends ChangeNotifier {
   bool _dkgComplete = false;
   bool _isConnected = false;
   Box? _identityBox;
-  String _network = 'regtest';
 
   String? _storageId;
 
@@ -87,14 +85,6 @@ class MpcService extends ChangeNotifier {
   List<ArkTransactionSummary> _arkTransactions = [];
   List<ArkTransactionSummary> get arkTransactions => _arkTransactions;
 
-  // Synthesised "receive" entries observed during this session, keyed by the
-  // VTXO txid. Persisted in this map (not just `_arkTransactions`) so they
-  // survive the receive VTXO being spent — once a VTXO leaves `_vtxos`, we'd
-  // otherwise lose the row entirely on the next refresh. Cleared per-entry
-  // only when the server eventually picks up the receive in its own history.
-  // Workaround for the server-side ark_tx_history gate at vtxo_stream.rs:109
-  // (see TODO.md "Server-side ark_tx_history drops receives").
-  final Map<String, ArkTransactionSummary> _localReceives = {};
   int _boardingBalance = 0;
   int get boardingBalance => _boardingBalance;
   int _boardingUtxoCount = 0;
@@ -232,16 +222,17 @@ class MpcService extends ChangeNotifier {
       }
 
       _dkgComplete = _identityBox!.get('dkgComplete', defaultValue: false);
-      // Network is set explicitly via setHost() at server-connect time; we
-      // just read what was persisted. The default 'regtest' covers fresh
-      // installs that haven't reached the connect screen yet.
-      _network = _identityBox!.get('network', defaultValue: 'regtest') as String;
       _storageId = _identityBox!.get('storageId') as String?;
       if (_storageId == null || _storageId!.isEmpty) {
         _storageId = 'mpc_wallet_state_${_generateSessionId()}';
         await _identityBox!.put('storageId', _storageId);
       }
-      _loadLocalReceives();
+
+      // Migrate from the old client-side network selection: the wallet
+      // network now comes from the server via `getServerInfo()`, so any
+      // persisted 'network' key from prior versions is dead weight.
+      // No-op if the key isn't present.
+      await _identityBox!.delete('network');
 
       // Restore signer kind. Default to software (hardware signer is opt-in
       // for users who own the device).
@@ -279,14 +270,45 @@ class MpcService extends ChangeNotifier {
     super.dispose();
   }
 
-  /// Set the server endpoint and the Bitcoin network this deployment uses.
-  /// Both must be specified by the user — there is no inference.
-  Future<void> setHost({required String host, required String network}) async {
-    if (_host == host && _network == network && _isInitialized) return;
+  /// Fetch deployment metadata from the cosigner-runtime with bounded
+  /// retry. Address rendering depends on `bitcoinNetwork`, so we refuse
+  /// to proceed without a non-empty value — silently defaulting was the
+  /// regression that the empty-string check guards against.
+  Future<GetServerInfoResponse> _fetchServerInfoWithRetry() async {
+    Object? lastError;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        final info = await _client!.getServerInfo();
+        if (info.bitcoinNetwork.isEmpty) {
+          throw StateError(
+              "Server returned empty bitcoin_network; refusing to construct "
+              "wallet without a known HRP source");
+        }
+        return info;
+      } catch (e) {
+        lastError = e;
+        debugPrint(
+            "getServerInfo attempt $attempt/3 failed: $e; "
+            "${attempt < 3 ? 'retrying in ${attempt}s' : 'giving up'}");
+        if (attempt < 3) {
+          await Future.delayed(Duration(seconds: attempt));
+        }
+      }
+    }
+    throw StateError(
+        "Cosigner unreachable: getServerInfo failed after 3 attempts. "
+        "Last error: $lastError. Check that the server is running and "
+        "reachable at $_host.");
+  }
 
-    debugPrint("MPC Service: Switching host to $host (network: $network)");
+  /// Set the server endpoint. The Bitcoin network is no longer carried in
+  /// app state — it's fetched from the server via `getServerInfo()` at the
+  /// moment the wallet is constructed (see `restoreSession`/`doDkg`).
+  Future<void> setHost(String host) async {
+    if (_host == host && _isInitialized) return;
+
+    debugPrint("MPC Service: Switching host to $host");
     _host = host;
-    _network = network;
 
     // Remote hosts require attestation. If we switched in from a local host
     // where manifest fetch was skipped or silently failed, refresh now so the
@@ -301,35 +323,6 @@ class MpcService extends ChangeNotifier {
       _identityBox = await Hive.openBox('mpc_service_identity');
     }
     await _identityBox!.put('serverHost', host);
-    await _identityBox!.put('network', network);
-  }
-
-  /// Currently configured Bitcoin network (e.g. 'mutinynet', 'signet').
-  /// Settings UI reads this to populate the network selector.
-  String get network => _network;
-
-  /// Change the rendering network for an existing wallet. Persists the
-  /// choice and rebuilds `_wallet` so its final `networkName` field reflects
-  /// the new value. Requires DKG to have already completed; for fresh
-  /// installs use `setHost(...)` instead.
-  Future<void> setNetwork(String network) async {
-    if (_network == network) return;
-    if (!_dkgComplete) {
-      throw StateError('Cannot change network before DKG completes');
-    }
-
-    debugPrint("MPC Service: Changing network to $network");
-    _network = network;
-
-    await _ensurePersistenceInitialized();
-    if (_identityBox == null || !_identityBox!.isOpen) {
-      _identityBox = await Hive.openBox('mpc_service_identity');
-    }
-    await _identityBox!.put('network', network);
-
-    // Rebuild the wallet so its `final` networkName picks up the new value.
-    // Reuse restoreSession which constructs a fresh _wallet from current state.
-    await restoreSession();
   }
 
   /// For hardware mode: return a live USB signer. For software mode we
@@ -411,8 +404,9 @@ class MpcService extends ChangeNotifier {
         hardwareSigner: signer,
         storageId: storageId,
       );
+      final serverInfo = await _fetchServerInfoWithRetry();
       _wallet = MpcBitcoinWallet(_client!,
-          networkName: _network, storageId: storageId);
+          networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
 
       await _wallet!.init();
@@ -489,8 +483,9 @@ class MpcService extends ChangeNotifier {
           );
       debugPrint("[RESTORE] Re-DKG complete.");
 
+      final serverInfo = await _fetchServerInfoWithRetry();
       _wallet = MpcBitcoinWallet(_client!,
-          networkName: _network, storageId: storageId);
+          networkName: serverInfo.bitcoinNetwork, storageId: storageId);
       _wallet!.onSyncComplete = _onWalletSyncComplete;
 
       await _wallet!.init();
@@ -550,8 +545,9 @@ class MpcService extends ChangeNotifier {
       hardwareSigner: _hardwareSigner, // null for software mode — that's fine
       storageId: storageId,
     );
-    _wallet =
-        MpcBitcoinWallet(_client!, networkName: _network, storageId: storageId);
+    final serverInfo = await _fetchServerInfoWithRetry();
+    _wallet = MpcBitcoinWallet(_client!,
+        networkName: serverInfo.bitcoinNetwork, storageId: storageId);
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();
@@ -620,99 +616,80 @@ class MpcService extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Outpoints (`txid:vout`) seen on the previous refresh. Used to detect
+  /// "new VTXO arrived" so the auto-settle re-delegation can fire even when
+  /// the push notification path didn't deliver (denied perms, force-quit, etc).
+  final Set<String> _previousVtxoOutpoints = <String>{};
+  bool _serverHasActiveDelegate = false;
+  bool _delegateInFlight = false;
+
+  /// Whether the cosigner currently holds a signed delegate intent for this
+  /// user. Refreshed on every `refreshVtxos()` from `ListVtxosResponse.
+  /// has_active_delegate`. Used by integration tests to verify the auto-
+  /// delegate flow fired.
+  bool get hasActiveDelegate => _serverHasActiveDelegate;
+
   Future<void> refreshVtxos() async {
     if (_client == null) return;
     try {
       final resp = await _client!.listVtxos();
       _vtxos = resp.vtxos;
       _arkBalance = BigInt.from(resp.totalBalance.toInt());
+      _serverHasActiveDelegate = resp.hasActiveDelegate;
     } catch (e) {
       debugPrint("Refresh VTXOs failed: $e");
     }
     await refreshArkTransactions();
     notifyListeners();
+    unawaited(_delegateIfNeeded());
+  }
+
+  /// Re-delegate when either:
+  /// - A new VTXO appeared since the last refresh that wasn't created by us
+  ///   (i.e. an external receive), OR
+  /// - VTXOs exist but the server reports no active delegate (cosigner
+  ///   restart, or first refresh after login).
+  ///
+  /// Self-originated change (txid matches a recent send/board/settle) is
+  /// skipped since the corresponding handler already invalidated the delegate
+  /// on the server side and a fresh re-delegate covers the new change VTXO.
+  Future<void> _delegateIfNeeded() async {
+    if (_client == null || _delegateInFlight || _vtxos.isEmpty) return;
+
+    final current = _vtxos.map((v) => '${v.txid}:${v.vout}').toSet();
+    final newOutpoints = current.difference(_previousVtxoOutpoints);
+    _previousVtxoOutpoints
+      ..clear()
+      ..addAll(current);
+
+    final selfTxids =
+        _arkTransactions.map((t) => t.txid).where((s) => s.isNotEmpty).toSet();
+    final external =
+        newOutpoints.where((op) => !selfTxids.contains(op.split(':').first));
+
+    final needsDelegate = external.isNotEmpty || !_serverHasActiveDelegate;
+    if (!needsDelegate) return;
+
+    _delegateInFlight = true;
+    try {
+      await _client!.settleDelegate(storeOnly: true);
+      _serverHasActiveDelegate = true;
+      notifyListeners();
+    } catch (e) {
+      debugPrint("[auto-settle] re-delegate failed: $e");
+    } finally {
+      _delegateInFlight = false;
+    }
   }
 
   Future<void> refreshArkTransactions() async {
     if (_client == null) return;
     try {
       final resp = await _client!.listArkTransactions();
-      _arkTransactions = _mergeWithLocalReceives(resp.transactions);
+      _arkTransactions = resp.transactions;
     } catch (e) {
       debugPrint("Refresh Ark transactions failed: $e");
     }
-  }
-
-  /// Reconstruct missing "receive" entries client-side. The server's
-  /// `ark_tx_history` skips receive logging while any settle/send/delegate
-  /// session is in flight, including stale ones (see TODO.md). Until that's
-  /// fixed server-side, we synthesise the entries by:
-  ///
-  ///  1. For each currently-live VTXO whose txid isn't claimed by a server
-  ///     entry AND we haven't already cached, record a new local entry.
-  ///  2. Keep cached entries even after the underlying VTXO is spent — the
-  ///     receive happened, the user should still see it in history.
-  ///  3. Drop a cached entry only if the server eventually surfaces it in
-  ///     its own history (avoids double-listing).
-  List<ArkTransactionSummary> _mergeWithLocalReceives(
-      List<ArkTransactionSummary> serverEntries) {
-    final knownTxids = serverEntries.map((e) => e.txid).toSet();
-    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-
-    for (final v in _vtxos) {
-      if (knownTxids.contains(v.txid)) continue; // server has it
-      _localReceives.putIfAbsent(
-        v.txid,
-        () => ArkTransactionSummary(
-          txType: 'receive',
-          txid: v.txid,
-          amountSats: v.amount,
-          timestamp: Int64(now),
-        ),
-      );
-    }
-
-    // If the server eventually surfaces a receive (e.g. once the server-side
-    // gate is fixed), drop the local copy so the row isn't duplicated.
-    _localReceives.removeWhere((txid, _) => knownTxids.contains(txid));
-
-    unawaited(_saveLocalReceives());
-    return [...serverEntries, ..._localReceives.values]
-      ..sort((a, b) => b.timestamp.compareTo(a.timestamp));
-  }
-
-  String get _localReceivesKey =>
-      'localReceives:${_storageId ?? "default"}';
-
-  /// Hydrate `_localReceives` from Hive on startup. Synchronous Hive read,
-  /// so safe to call without `await`.
-  void _loadLocalReceives() {
-    if (_identityBox == null || !_identityBox!.isOpen) return;
-    final raw = _identityBox!.get(_localReceivesKey);
-    if (raw is! Map) return;
-    for (final entry in raw.entries) {
-      final txid = entry.key;
-      final bytes = entry.value;
-      if (txid is! String || bytes is! List) continue;
-      try {
-        _localReceives[txid] = ArkTransactionSummary.fromBuffer(
-          Uint8List.fromList(bytes.cast<int>()),
-        );
-      } catch (e) {
-        debugPrint('Failed to decode local receive $txid: $e');
-      }
-    }
-  }
-
-  /// Persist `_localReceives` to Hive. Each entry is serialised to its
-  /// protobuf wire form for compactness and stability across schema changes.
-  Future<void> _saveLocalReceives() async {
-    if (_identityBox == null || !_identityBox!.isOpen) return;
-    final serialised = <String, List<int>>{};
-    for (final entry in _localReceives.entries) {
-      serialised[entry.key] = entry.value.writeToBuffer();
-    }
-    await _identityBox!.put(_localReceivesKey, serialised);
   }
 
   Future<void> refreshBoardingBalance() async {
@@ -727,9 +704,9 @@ class MpcService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String> boardFunds({String? pin, String? policyId}) async {
+  Future<String> boardFunds() async {
     if (_client == null) throw StateError("Client not initialized");
-    final txid = await _client!.settle(pin: pin, policyId: policyId);
+    final txid = await _client!.settle();
     await refreshVtxos();
     return txid;
   }
@@ -743,12 +720,29 @@ class MpcService extends ChangeNotifier {
     return arkTxid;
   }
 
-  Future<String> settleDelegate({String? pin, String? policyId}) async {
+  Future<String> settleDelegate() async {
     if (_client == null) throw StateError("Client not initialized");
-    final txid =
-        await _client!.settleDelegate(pin: pin, policyId: policyId);
+    final txid = await _client!.settleDelegate();
     await refreshVtxos();
     return txid;
+  }
+
+  /// Register a push notification token. Best-effort — failures are logged.
+  Future<void> registerDeviceToken({
+    required String fcmToken,
+    required String platform,
+    String appVersion = '',
+  }) async {
+    if (_client == null) return;
+    try {
+      await _client!.registerDeviceToken(
+        fcmToken: fcmToken,
+        platform: platform,
+        appVersion: appVersion,
+      );
+    } catch (e) {
+      debugPrint("registerDeviceToken failed: $e");
+    }
   }
 
   String _generateSessionId() {

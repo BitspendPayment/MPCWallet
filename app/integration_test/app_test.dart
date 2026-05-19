@@ -8,6 +8,7 @@
 
 import 'package:app/services/backup_store.dart';
 import 'package:app/services/mpc_service.dart';
+import 'package:app/services/push_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -162,15 +163,19 @@ void main() {
 
         await ArkBoardPage.waitForFundsDetected(tester);
         await ArkBoardPage.tapBoardNow(tester);
-        // With an active policy, ark_board_screen prompts for PIN before
-        // sending the FROST signs to the server (so client uses the same
-        // protected key package the server will use).
-        await pumpUntilFound(
-          tester,
-          find.byKey(const Key('boardingPinField')),
-          timeout: const Duration(seconds: 30),
-        );
-        await ArkBoardPage.enterBoardingPinAndAuthorize(tester, pin);
+        // Policy-bypass regression guard (commit bbb692b). Boarding settles
+        // a boarding output into a VTXO — settling never applies a spending
+        // policy. The server's SignStep1 forces selected_policy_id=None
+        // whenever a settle_session/delegate_session is in flight (see
+        // sign.rs). Confirm no PIN field ever pops during the next ~3s.
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 500));
+          expect(find.byKey(const Key('signingPinField')), findsNothing,
+              reason:
+                  'REGRESSION: boarding (500k sats, well over the 10k '
+                  'policy threshold) prompted for PIN — policies must not '
+                  'gate settling.');
+        }
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkBoardDoneBtn')),
@@ -180,6 +185,24 @@ void main() {
         await pumpUntilFound(tester, find.byKey(const Key('arkSendBtn')));
         expect(svcBoard.arkBalance > BigInt.zero, isTrue,
             reason: 'ark balance should be non-zero after boarding');
+
+        // Auto-delegate regression guard. MpcService.refreshVtxos() ends
+        // with _delegateIfNeeded, which calls settleDelegate(storeOnly:
+        // true) when vtxos are non-empty and no delegate is yet stored.
+        // After boarding settles, both conditions are true → delegate
+        // should be stored within seconds.
+        await svcBoard.refreshVtxos();
+        final delegDeadline =
+            DateTime.now().add(const Duration(seconds: 30));
+        while (!svcBoard.hasActiveDelegate &&
+            DateTime.now().isBefore(delegDeadline)) {
+          await tester.pump(const Duration(seconds: 1));
+        }
+        expect(svcBoard.hasActiveDelegate, isTrue,
+            reason:
+                'after boarding + refresh, _delegateIfNeeded must have '
+                'stored a delegate intent. If false, the foreground '
+                'auto-delegate path regressed.');
 
         // ── Ark send (App → Bob, an external ark-sample wallet) ─────
         final bob = BobClient();
@@ -232,6 +255,38 @@ void main() {
           appArkBalanceMid + BigInt.from(2500),
           timeout: const Duration(seconds: 60),
         );
+
+        // ── Background push handler ─────────────────────────────────
+        // 1500 sats fits Bob's residual budget after the 3000-sat send
+        // above; deliberately no refreshVtxos before the handler call
+        // (it would fire foreground _delegateIfNeeded and steal the work).
+        final preBgArkBalance = svcBoard.arkBalance;
+        await bob.sendTo(myArkAddress, 1500);
+        await Future<void>.delayed(const Duration(seconds: 15));
+
+        await PushService.handleBackgroundMessageForTest(const {
+          'type': 'vtxo_received',
+          'user_id': '',
+        });
+
+        await svcBoard.refreshVtxos();
+        final bgDeadline = DateTime.now().add(const Duration(seconds: 30));
+        while (!svcBoard.hasActiveDelegate &&
+            DateTime.now().isBefore(bgDeadline)) {
+          await tester.pump(const Duration(seconds: 1));
+          await svcBoard.refreshVtxos();
+        }
+        expect(svcBoard.arkBalance, greaterThanOrEqualTo(
+            preBgArkBalance + BigInt.from(1000)),
+            reason: 'Alice should hold Bob\'s 1500-sat VTXO (after fees)');
+        expect(svcBoard.hasActiveDelegate, isTrue,
+            reason:
+                'after PushService.handleBackgroundMessageForTest ran, '
+                'the cosigner should hold a stored delegate covering '
+                'Bob\'s fresh outpoint. If false, _runBackgroundDelegate '
+                'failed somewhere — Hive open in the background isolate, '
+                'MpcClient.restoreState(), or the FROST sign round of '
+                'settleDelegate(storeOnly:true).');
       }
 
       // ── Policy: delete, then a fresh 30s-window policy to prove rollover ─
@@ -363,6 +418,6 @@ void main() {
       expect(svcPost.receiveAddress, equals(originalAddress),
           reason: 'restored wallet should derive the same group verifying key');
     },
-    timeout: const Timeout(Duration(minutes: 10)),
+    timeout: const Timeout(Duration(minutes: 12)),
   );
 }

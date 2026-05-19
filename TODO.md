@@ -7,6 +7,20 @@ the root cause, and a concrete plan.
 
 ## 1. Boarding `Settle` deadlocks on `(Some, false)` poll arm
 
+**Status:** ✅ fixed in
+[cosigner-runtime/src/cosigner/handlers/ark_send.rs](cosigner-runtime/src/cosigner/handlers/ark_send.rs)
+— stale-session-recovery guard coerces `existing` to `None` when the
+client polls without sigs, so the match falls straight into the Phase 1
+rebuild arm (one round-trip recovery, not two). The dead `(Some, false)`
+arm is now `unreachable!` for exhaustiveness — any future regression that
+parks a session back without sigs will trip the panic.
+
+Manual verification (the practical recovery test): force-quit the app
+mid-boarding (after Phase 1 returns `SIGNING_REQUIRED`, before sigs sent),
+reopen, retry — boarding should succeed without an emulator wipe. The
+existing happy-path e2e test guards against regressions in the rebuild
+arm itself.
+
 ### Symptoms
 
 User taps **Board** in the app. The spinner runs forever. The `enclave log`
@@ -127,6 +141,13 @@ Two layered fixes, do both:
 
 ## 2. Server-side `ark_tx_history` drops receives during any active session
 
+**Status:** ✅ fixed — gate removed in
+[cosigner-runtime/src/cosigner/handlers/vtxo_stream.rs](cosigner-runtime/src/cosigner/handlers/vtxo_stream.rs);
+the Dart-side workaround (`_mergeWithLocalReceives`, `_localReceives`,
+load/save helpers, `dart:async` and `fixnum` imports) has been deleted from
+`MpcService`. Pending: rebuild EIF + tofu apply with the new PCR0 to ship
+the server change.
+
 ### Symptoms
 
 Incoming Ark transactions never appear in the user's Ark transaction list.
@@ -225,6 +246,31 @@ this entire file.
 ---
 
 ## 3. Plan A — Server is the source of truth for `bitcoin_network`
+
+**Status:** ✅ fixed.
+
+* Server: `rpc GetServerInfo` added to
+  [protocol/protos/mpc_wallet.proto](protocol/protos/mpc_wallet.proto);
+  unauthenticated handler in
+  [cosigner-runtime/src/rest_api.rs](cosigner-runtime/src/rest_api.rs)
+  serves `bitcoin_network` from `ServerConfig`.
+  `AppState` widened to a struct with `FromRef` impls so existing handlers
+  keep extracting `Arc<CosignerRegistry>` unchanged.
+* Client: `getServerInfo()` added through the api stack
+  (`WalletApi` / `RestWalletApi` / `GrpcWalletApi` / `AttestedWalletApi` /
+  `MpcClient`); `RestWalletApi` gained a `_get` helper for the new
+  unauthenticated GET endpoint.
+* MpcService: dropped `_network` field, the `'network'` Hive read/write,
+  the `network` getter, the `setNetwork` setter. `setHost` is single-arg
+  again. The three wallet-construction sites in `doDkg` / `doRestore` /
+  `restoreSession` now call `_client!.getServerInfo()` and pass
+  `serverInfo.bitcoinNetwork` to `MpcBitcoinWallet` as a local variable.
+* UI: dropdown removed from `server_connect_screen.dart`,
+  `network_settings_screen.dart` deleted, `/settings/network` route gone,
+  globe `IconButton` removed from `home_screen.dart`.
+
+The Hive `'network'` key from older installs is left as harmless leftover
+data (init no longer reads it).
 
 ### Context
 
@@ -371,3 +417,165 @@ Net deletion. Five sources of truth collapse to one.
   reporting `bitcoin_network = "mutinynet"` is a label, not a different
   encoding. `parseBitcoinNetwork` already maps both to `BitcoinNetwork.signet`
   (correct).
+
+---
+
+## 4. `device_tokens` written to sled but never loaded back
+
+### Symptoms
+
+After the cosigner-runtime restarts, FCM pushes for newly-received VTXOs
+silently no-op for any user who hasn't reopened their app since the restart.
+The app does call `registerDeviceToken` on every launch, so users who
+*are* opening the app re-register fine — but a user whose VTXO arrives
+*while their app is closed* and the cosigner happens to have restarted will
+never get a wake push.
+
+### Root cause
+
+[`device_token.rs::register_device_token`](cosigner-runtime/src/cosigner/handlers/device_token.rs)
+writes through `save_user_device_tokens` to sled at
+[`helpers.rs::save_user_device_tokens`](cosigner-runtime/src/cosigner/handlers/helpers.rs),
+but no code path reads it back. `CosignerState::new(user_id_hex)` initializes
+`device_tokens: Vec::new()` and only `register_device_token` ever mutates it.
+
+When an actor (re)spawns post-restart, its `device_tokens` is empty until
+the client makes a fresh `register_device_token` call. The `vtxo_stream`'s
+push fan-out walks the empty vec and skips silently.
+
+(This is the same "written but not read" pattern as `vtxo_store` and
+`ark_tx_history`. Those happen to work — `vtxo_store` because the stream
+reconstructs it on subscription, and `ark_tx_history` is acknowledged as a
+pre-existing gap. `device_tokens` has no such reconstruction.)
+
+### Plan
+
+Load `device_tokens` from sled when the actor spawns. Two surgical edits:
+
+1. Add `load_user_device_tokens` in
+   [helpers.rs](cosigner-runtime/src/cosigner/handlers/helpers.rs) mirroring
+   `save_user_device_tokens` — `persistence.get("device_tokens", user_id_hex)`
+   then `serde_json::from_str::<Vec<DeviceToken>>`.
+
+2. Call it from `CosignerRegistry::get_or_spawn` after `CosignerState::new`,
+   before `tokio::spawn(run_actor(...))`. Best-effort: log a warning on
+   parse failure and continue with an empty vec rather than failing the
+   spawn.
+
+### Files to touch
+
+- [cosigner-runtime/src/cosigner/handlers/helpers.rs](cosigner-runtime/src/cosigner/handlers/helpers.rs)
+  — add `load_user_device_tokens` (~10 lines).
+- [cosigner-runtime/src/cosigner/registry.rs](cosigner-runtime/src/cosigner/registry.rs)
+  — populate `state.device_tokens` before spawning the actor (~5 lines).
+
+### Verification
+
+- Register a token, restart the cosigner-runtime, send a VTXO to the user
+  *without* the client re-opening the app first. Cosigner log should show
+  the FCM push fire to the persisted token.
+- e2e test: register a fake token via REST, kill+restart the cosigner-runtime
+  process, call `listVtxos` (which respawns the actor), then assert the
+  cosigner's debug-level log mentions the token in `push_vtxo_received`.
+
+### Cost
+
+~15 lines Rust. No proto change, no migration (existing sled rows are
+already valid `Vec<DeviceToken>` JSON).
+
+---
+
+## 5. Cross-isolate Hive contention (push background handler)
+
+### Context
+
+[`push_service.dart::_runBackgroundDelegate`](app/lib/services/push_service.dart)
+opens Hive boxes in the FCM background isolate to restore the
+`MpcClient` and call `settleDelegate(storeOnly: true)`. If the foreground
+app is also running, it holds the same boxes open through `MpcService`.
+
+Hive supports multi-isolate access provided each isolate calls
+`Hive.init(<same path>)`, and the background handler does that. Conflicts
+should be rare because:
+
+- The background handler is short-lived (~3-8s)
+- The actor on the cosigner side serializes commands per-user, so
+  concurrent settleDelegate calls queue up at the actor mailbox
+- The stale-session-recovery guard in
+  [ark_send.rs::settle](cosigner-runtime/src/cosigner/handlers/ark_send.rs)
+  (TODO #1's fix) handles "two Phase-1 calls in flight" by dropping the
+  stale session and rebuilding fresh
+
+### Open monitoring
+
+Watch for any of the following symptoms post-deploy:
+
+- `HiveError`s in `_runBackgroundDelegate` log output
+- Foreground app's `_normalPolicy` returning null unexpectedly after a
+  push arrives (would suggest a Hive write from the background isolate
+  corrupted the foreground's view)
+- Two `settleDelegate` Phase 1 calls landing back-to-back in cosigner
+  logs (visible as "dropping stale session on poll-without-sigs")
+
+### If symptoms surface
+
+Switch to a snapshot pattern: foreground writes a stable JSON snapshot
+of the auth/policy/identity material to a separate file every time it
+changes; background reads only that snapshot. No shared Hive boxes
+across isolates.
+
+### Why not preemptively switch
+
+The snapshot file path adds operational complexity, and the multi-isolate
+Hive path is well-trodden in Flutter ecosystem (firebase_messaging docs
+explicitly support it). Monitor first, refactor only if needed.
+
+---
+
+## 6. Background handler: attested-mode for production deployment
+
+### Context
+
+`_handleBackgroundMessage` currently uses `MpcClient.rest()` only — no
+attestation. Sufficient for the development + test stack where the
+cosigner is `http://10.0.2.2:7074`, but production deployment routes
+through `MpcClient.attested(...)` for enclave PCR0 verification.
+
+### Status of the policy-bypass concern (the original second half of #6)
+
+**Resolved**: settling never applies a spending policy.
+
+- `MpcClient.settle()` and `MpcClient.settleDelegate({storeOnly})` no
+  longer accept `pin`/`policyId` — those params were a footgun that
+  could produce a FROST aggregation mismatch.
+- Server-side
+  [sign.rs::sign_step1](cosigner-runtime/src/cosigner/handlers/sign.rs)
+  forces `selected_policy_id = None` whenever the actor has an active
+  `settle_session` or `delegate_session`. This is the source-of-truth
+  enforcement — even if a future client tried to send pin/policyId via
+  some other call, the settle context wins.
+- `ark_board_screen` no longer shows a PIN prompt before boarding.
+- `app_test.dart` updated to drop boarding-PIN expectations.
+
+Rationale: spending policies gate fund egress (sends + redeems), not
+"promote my UTXO into a fresh VTXO" or "re-delegate so it doesn't
+expire." Auto-settle happens in the background isolate / cosigner tick
+task where no user PIN is available; requiring policy authorization
+would break the whole class of unattended settlements.
+
+### Remaining plan (attested mode in background)
+
+Detect from persisted state whether the foreground was running attested;
+if so, construct `MpcClient.attested(...)` instead in
+`_runBackgroundDelegate`. `AttestedWalletApi.create()` is FFI-heavy but
+doesn't need a UI thread.
+
+### Verification
+
+Run the existing background-push UI test
+(`app/integration_test/ark_background_push_test.dart`) against an
+attested deployment after the attested-mode flag lands.
+
+### Cost
+
+~20-30 LoC Dart. Pure deployment-mode wiring.

@@ -176,7 +176,7 @@ down:
 	-pkill -f "bob_proxy" || true
 	-sudo fuser -k 7074/tcp 2>/dev/null || true
 	-sudo fuser -k 7090/tcp 2>/dev/null || true
-	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down 2>/dev/null || true
+	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v 2>/dev/null || true
 	sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
 	sudo rm -rf $(DATA_DIR) 2>/dev/null || true
 	@echo "All stopped."
@@ -379,7 +379,7 @@ arkd-up:
 
 arkd-down:
 	@echo "Stopping arkd services..."
-	docker compose -f docker-compose.yml -f docker-compose.ark.yml down
+	docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v
 
 arkd-init:
 	@echo "Initializing arkd wallet..."

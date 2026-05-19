@@ -4,8 +4,7 @@
 use tonic::Status;
 
 use crate::shared::SharedServices;
-use crate::cosigner::registry::CosignerRegistry;
-use crate::cosigner::state::CosignerState;
+use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
 use crate::cosigner::wasm::CosignerInstance;
 
@@ -39,8 +38,20 @@ fn resolve_exit_delay(
 
 /// Apply a `VtxoStreamUpdate` (or `IndexerUpdate`) to per-user state. Removes
 /// spent entries, adds new spendable VTXOs with the correct exit_delay,
-/// persists, and appends a "receive" history entry when no active settle/send
-/// session is in flight.
+/// persists, and appends a "receive" history entry for any genuinely new VTXO.
+///
+/// Returns a list of newly-added outpoints — the caller (the global stream
+/// task) uses this to fire FCM pushes so the recipient device wakes and
+/// re-delegates.
+///
+/// Self-originated change VTXOs (from the user's own send/settle/board) are
+/// not double-counted: the `send_vtxo` and `settle` handlers push the
+/// resulting VTXO into `state.vtxos` synchronously before returning. Because
+/// the actor processes commands serially, any stream notification queued
+/// during that handler runs *after* the handler completes — so the
+/// `(txid, vout)` already-present check below short-circuits past the entire
+/// block, including the history append. No separate "active session" gate
+/// is needed.
 pub fn apply_stream_update(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
@@ -49,18 +60,34 @@ pub fn apply_stream_update(
     spent: Vec<ark::client::proto::Vtxo>,
     spendable: Vec<ark::client::proto::Vtxo>,
     info: ark::client::types::ArkInfo,
-) -> Result<(), Status> {
+) -> Result<Vec<(String, u32)>, Status> {
+    let mut delegate_invalidated = false;
+
     for v in &spent {
         if let Some(outpoint) = &v.outpoint {
             state
                 .vtxos
-                .retain(|(t, vt, _, _)| !(t == &outpoint.txid && *vt == outpoint.vout));
+                .retain(|e| !(e.txid == outpoint.txid && e.vout == outpoint.vout));
+            if let Some(record) = &state.delegate_session {
+                if record
+                    .covered_outpoints
+                    .iter()
+                    .any(|(t, vt)| t == &outpoint.txid && *vt == outpoint.vout)
+                {
+                    delegate_invalidated = true;
+                }
+            }
         }
     }
 
     if spendable.is_empty() {
+        if delegate_invalidated {
+            state.delegate_session = None;
+            super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
+            tracing::info!("[{user_id_hex}] delegate invalidated: covered VTXO spent");
+        }
         save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
-        return Ok(());
+        return Ok(Vec::new());
     }
 
     let owner_pk = get_user_xonly_pubkey(
@@ -74,17 +101,36 @@ pub fn apply_stream_update(
         Err(e) => return Err(Status::internal(e)),
     };
 
-    let has_active_session = state.settle_session.is_some()
-        || state.delegate_session.is_some()
-        || state.send_session.is_some();
+    let mut newly_added = Vec::new();
 
     for new in &spendable {
         if let Some(outpoint) = &new.outpoint {
-            let already = state
+            // If the handler that produced this VTXO (settle, send,
+            // settle_delegate) has already pushed a placeholder, don't
+            // append it again or re-record a "receive" — but DO patch in
+            // the timestamps the handler couldn't know (`created_at` /
+            // `expires_at` come from the ASP, not from our own settle
+            // session). Without this patch, self-originated VTXOs would
+            // permanently report expires_at=0 and the auto-settle tick
+            // task would never fire on them.
+            let existing_idx = state
                 .vtxos
                 .iter()
-                .any(|(t, vt, _, _)| t == &outpoint.txid && *vt == outpoint.vout);
-            if already {
+                .position(|e| e.txid == outpoint.txid && e.vout == outpoint.vout);
+            if let Some(i) = existing_idx {
+                let entry = &mut state.vtxos[i];
+                if entry.created_at == 0 && new.created_at > 0 {
+                    entry.created_at = new.created_at;
+                }
+                if entry.expires_at == 0 && new.expires_at > 0 {
+                    entry.expires_at = new.expires_at;
+                    tracing::info!(
+                        "[{user_id_hex}] VTXO stream: backfilled expires_at={} for {}:{}",
+                        new.expires_at,
+                        outpoint.txid,
+                        outpoint.vout,
+                    );
+                }
                 continue;
             }
             let exit_delay = resolve_exit_delay(
@@ -95,34 +141,43 @@ pub fn apply_stream_update(
                 network,
             );
             tracing::info!(
-                "[{user_id_hex}] VTXO stream: new spendable {}:{} amount={} exit_delay={exit_delay}",
+                "[{user_id_hex}] VTXO stream: new spendable {}:{} amount={} exit_delay={exit_delay} expires_at={}",
                 outpoint.txid,
                 outpoint.vout,
-                new.amount
-            );
-            state.vtxos.push((
-                outpoint.txid.clone(),
-                outpoint.vout,
                 new.amount,
+                new.expires_at,
+            );
+            state.vtxos.push(VtxoEntry {
+                txid: outpoint.txid.clone(),
+                vout: outpoint.vout,
+                amount: new.amount,
                 exit_delay,
-            ));
-            if !has_active_session {
-                state.ark_tx_history.push(ArkTxEntry {
-                    tx_type: "receive".into(),
-                    amount_sats: new.amount as i64,
-                    txid: outpoint.txid.clone(),
-                    timestamp: now_secs(),
-                });
-            }
+                created_at: new.created_at,
+                expires_at: new.expires_at,
+            });
+            // A new VTXO arriving makes the existing delegate's coverage
+            // stale — the client must re-delegate to include it.
+            delegate_invalidated = true;
+            newly_added.push((outpoint.txid.clone(), outpoint.vout));
+            state.ark_tx_history.push(ArkTxEntry {
+                tx_type: "receive".into(),
+                amount_sats: new.amount as i64,
+                txid: outpoint.txid.clone(),
+                timestamp: now_secs(),
+            });
         }
     }
-    save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
-    if !has_active_session {
-        save_user_ark_history(
-            shared.persistence.as_ref(),
-            user_id_hex,
-            &state.ark_tx_history,
-        );
+
+    if delegate_invalidated {
+        state.delegate_session = None;
+        super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
     }
-    Ok(())
+
+    save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
+    save_user_ark_history(
+        shared.persistence.as_ref(),
+        user_id_hex,
+        &state.ark_tx_history,
+    );
+    Ok(newly_added)
 }

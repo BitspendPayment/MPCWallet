@@ -913,6 +913,64 @@ struct SighashEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Persistence — only valid while in `ReadyToSettle` phase.
+//
+// The live batch-state fields (`batch_id`, `nonce_kps`, `vtxo_graph_chunks`,
+// `connector_graph_chunks`, `commitment_psbt`, `pending_nonces`) are all
+// `None`/empty at `ReadyToSettle` time, so we don't persist them — they'd
+// either be wrong or absent on rehydration. `nonce_kps` specifically is
+// MuSig2 secret-nonce material that MUST NEVER be persisted: rehydrating
+// a partially-settled session would risk nonce re-use.
+//
+// `delegate_cosigner_kp` is the server's MuSig2 cosigner secret. It's the
+// same value as the user's `dkg-secret.<canonical>` already kept in the
+// `SecretStore`. We deliberately do NOT persist it here — the cosigner-
+// runtime looks it up from `SecretStore` at rehydration time and passes
+// it into `from_persisted`. See GitHub issue #31 for why this matters.
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedSighashEntry {
+    pub psbt_type: usize,
+    pub input_idx: usize,
+    /// Hex of `TapLeafHash::to_byte_array()` (32 bytes).
+    pub leaf_hash_hex: String,
+}
+
+/// Serializable snapshot of a `DelegateSettleSession` in `ReadyToSettle`
+/// phase. Does NOT contain the cosigner secret — see module-level note.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PersistedDelegate {
+    pub owner_pk_hex: String,
+    pub asp_pk_hex: String,
+    pub forfeit_pk_hex: String,
+    /// Network string as understood by `ark::client::parse_network` —
+    /// "bitcoin", "testnet", "signet", "regtest", "mutinynet".
+    pub network: String,
+    /// `Sequence` consensus value for unilateral exit.
+    pub exit_delay: u32,
+    /// Base64-encoded PSBT.
+    pub intent_proof_psbt_b64: String,
+    /// JSON-encoded `IntentMessage`.
+    pub intent_message_json: String,
+    /// Base64-encoded forfeit PSBTs.
+    pub forfeit_psbts_b64: Vec<String>,
+    /// Hex of the cosigner public key (33-byte compressed).
+    pub delegate_cosigner_pk_hex: String,
+    pub sighash_meta: Vec<PersistedSighashEntry>,
+}
+
+fn b64_encode(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn b64_decode(s: &str) -> Result<Vec<u8>, String> {
+    base64::engine::general_purpose::STANDARD
+        .decode(s)
+        .map_err(|e| format!("base64 decode: {e}"))
+}
+
+// ---------------------------------------------------------------------------
 // DelegateSettleSession – construction
 // ---------------------------------------------------------------------------
 
@@ -1202,6 +1260,178 @@ impl DelegateSettleSession {
 }
 
 // ---------------------------------------------------------------------------
+// DelegateSettleSession – persistence (ReadyToSettle phase only)
+// ---------------------------------------------------------------------------
+
+impl DelegateSettleSession {
+    /// Serialize a session in `ReadyToSettle` phase for sled storage.
+    ///
+    /// Refuses for any other phase: persisting `AwaitingSignatures` would
+    /// drop FROST sigs the client paid to compute, and persisting `Settling`
+    /// would expose MuSig2 secret nonces in `nonce_kps`. The cosigner-
+    /// runtime calls this from `settle_delegate` Phase 2 (store_only) after
+    /// `sign_with_frost` has moved the session to `ReadyToSettle`.
+    pub fn to_persisted(&self) -> Result<PersistedDelegate, String> {
+        if !matches!(self.phase, DelegatePhase::ReadyToSettle) {
+            return Err(format!(
+                "to_persisted requires ReadyToSettle phase, got {:?}",
+                std::mem::discriminant(&self.phase)
+            ));
+        }
+
+        let intent_proof_b64 = self.delegate.intent.serialize_proof();
+        let intent_message_json = self
+            .delegate
+            .intent
+            .serialize_message()
+            .map_err(|e| format!("serialize intent message: {e}"))?;
+
+        let forfeit_psbts_b64 = self
+            .delegate
+            .forfeit_psbts
+            .iter()
+            .map(|p| b64_encode(&p.serialize()))
+            .collect();
+
+        let delegate_cosigner_pk_hex = hex::encode(
+            self.delegate
+                .delegate_cosigner_pk
+                .serialize(),
+        );
+
+        let sighash_meta = self
+            .sighash_meta
+            .iter()
+            .map(|e| PersistedSighashEntry {
+                psbt_type: e.psbt_type,
+                input_idx: e.input_idx,
+                leaf_hash_hex: hex::encode(e.leaf_hash.to_byte_array()),
+            })
+            .collect();
+
+        Ok(PersistedDelegate {
+            owner_pk_hex: self.owner_pk.to_string(),
+            asp_pk_hex: self.asp_pk.to_string(),
+            forfeit_pk_hex: self.forfeit_pk.to_string(),
+            network: self.network.to_string(),
+            exit_delay: self.exit_delay.to_consensus_u32(),
+            intent_proof_psbt_b64: intent_proof_b64,
+            intent_message_json,
+            forfeit_psbts_b64,
+            delegate_cosigner_pk_hex,
+            sighash_meta,
+        })
+    }
+
+    /// Reconstruct a `ReadyToSettle` session from a `PersistedDelegate` +
+    /// the cosigner secret looked up out-of-band from the `SecretStore`.
+    ///
+    /// The persisted record deliberately doesn't carry the secret — see
+    /// the module-level note and GitHub issue #31 for the security
+    /// rationale.
+    pub fn from_persisted(
+        p: &PersistedDelegate,
+        delegate_cosigner_secret_hex: &str,
+    ) -> Result<Self, String> {
+        let owner_pk = XOnlyPublicKey::from_str(&p.owner_pk_hex)
+            .map_err(|e| format!("parse owner_pk: {e}"))?;
+        let asp_pk = XOnlyPublicKey::from_str(&p.asp_pk_hex)
+            .map_err(|e| format!("parse asp_pk: {e}"))?;
+        let forfeit_pk = XOnlyPublicKey::from_str(&p.forfeit_pk_hex)
+            .map_err(|e| format!("parse forfeit_pk: {e}"))?;
+        let network =
+            Network::from_str(&p.network).map_err(|e| format!("parse network: {e}"))?;
+        let exit_delay = Sequence::from_consensus(p.exit_delay);
+
+        let intent_proof_bytes = b64_decode(&p.intent_proof_psbt_b64)?;
+        let intent_proof = Psbt::deserialize(&intent_proof_bytes)
+            .map_err(|e| format!("deserialize intent proof PSBT: {e}"))?;
+        let intent_message: IntentMessage = serde_json::from_str(&p.intent_message_json)
+            .map_err(|e| format!("parse intent message JSON: {e}"))?;
+        let intent = ark_core::intent::Intent::new(intent_proof, intent_message);
+
+        let forfeit_psbts: Result<Vec<Psbt>, String> = p
+            .forfeit_psbts_b64
+            .iter()
+            .map(|s| {
+                let bytes = b64_decode(s)?;
+                Psbt::deserialize(&bytes)
+                    .map_err(|e| format!("deserialize forfeit PSBT: {e}"))
+            })
+            .collect();
+        let forfeit_psbts = forfeit_psbts?;
+
+        let delegate_cosigner_pk_bytes = hex::decode(&p.delegate_cosigner_pk_hex)
+            .map_err(|e| format!("decode cosigner pk hex: {e}"))?;
+        let delegate_cosigner_pk =
+            bitcoin::secp256k1::PublicKey::from_slice(&delegate_cosigner_pk_bytes)
+                .map_err(|e| format!("parse cosigner pk: {e}"))?;
+
+        let cosigner_secret_bytes = hex_decode_32(delegate_cosigner_secret_hex)?;
+        let secp = Secp256k1::new();
+        let cosigner_secret = bitcoin::secp256k1::SecretKey::from_slice(&cosigner_secret_bytes)
+            .map_err(|e| format!("parse cosigner secret: {e}"))?;
+        let delegate_cosigner_kp = Keypair::from_secret_key(&secp, &cosigner_secret);
+        // Sanity check: the persisted pubkey must match the one derivable
+        // from the secret we got from SecretStore. If they diverge, the
+        // delegate was stored under a different user's identity (or the
+        // SecretStore is corrupt). Refuse rather than sign with the wrong
+        // key.
+        if delegate_cosigner_kp.public_key() != delegate_cosigner_pk {
+            return Err(
+                "delegate cosigner secret does not match persisted pubkey".into(),
+            );
+        }
+
+        let sighash_meta = p
+            .sighash_meta
+            .iter()
+            .map(|e| {
+                let bytes = hex::decode(&e.leaf_hash_hex)
+                    .map_err(|err| format!("decode leaf_hash hex: {err}"))?;
+                if bytes.len() != 32 {
+                    return Err(format!(
+                        "leaf_hash must be 32 bytes, got {}",
+                        bytes.len()
+                    ));
+                }
+                let mut arr = [0u8; 32];
+                arr.copy_from_slice(&bytes);
+                Ok(SighashEntry {
+                    psbt_type: e.psbt_type,
+                    input_idx: e.input_idx,
+                    leaf_hash: TapLeafHash::from_byte_array(arr),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+
+        Ok(Self {
+            phase: DelegatePhase::ReadyToSettle,
+            owner_pk,
+            asp_pk,
+            forfeit_pk,
+            network,
+            exit_delay,
+            delegate: ark_core::batch::Delegate {
+                intent,
+                forfeit_psbts,
+                delegate_cosigner_pk,
+            },
+            delegate_cosigner_kp,
+            sighash_meta,
+            batch_id: None,
+            batch_expiry: None,
+            vtxo_graph_chunks: Vec::new(),
+            connector_graph_chunks: Vec::new(),
+            vtxo_graph: None,
+            nonce_kps: None,
+            commitment_psbt: None,
+            pending_nonces: HashMap::new(),
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
 // DelegateSettleSession – batch driving
 // ---------------------------------------------------------------------------
 
@@ -1280,7 +1510,10 @@ impl DelegateSettleSession {
                         .map_err(|e| format!("confirm_registration: {e}"))?;
                 }
                 Event::TreeTx(e) => {
-                    eprintln!("delegate: TreeTx txid={} topic={:?}", e.txid, e.topic);
+                    eprintln!(
+                        "delegate: TreeTx batch_index={} txid={} topic={:?}",
+                        e.batch_index, e.txid, e.topic
+                    );
                     let psbt = decode_psbt_b64(&e.tx)?;
                     let children: HashMap<u32, Txid> = e
                         .children
@@ -1298,14 +1531,18 @@ impl DelegateSettleSession {
                         Some(e.txid.parse().map_err(|e| format!("invalid txid: {e}"))?)
                     };
 
-                    // Determine if this is a VTXO graph chunk or connector chunk.
-                    // Connector chunks have topic containing the cosigner key.
-                    let cosigner_pk_hex = self.delegate_cosigner_kp.public_key().to_string();
+                    // ASP discriminates the two trees via `batch_index`:
+                    //   0 → VTXO graph (refresh tree, cosigner co-signs MuSig2)
+                    //   1 → connector graph (forfeit-spend tree)
+                    // Matches `BatchTreeEventType::{Vtxo,Connector}` in the
+                    // upstream Rust SDK at ark-grpc::client.
                     let chunk = TxGraphChunk { txid, tx: psbt, children };
-                    if e.topic.iter().any(|t| t == &cosigner_pk_hex) {
-                        self.connector_graph_chunks.push(chunk);
-                    } else {
-                        self.vtxo_graph_chunks.push(chunk);
+                    match e.batch_index {
+                        0 => self.vtxo_graph_chunks.push(chunk),
+                        1 => self.connector_graph_chunks.push(chunk),
+                        n => {
+                            return Err(format!("unsupported TreeTx batch_index: {n}"));
+                        }
                     }
                 }
                 Event::TreeSigningStarted(e) => {
@@ -1411,20 +1648,22 @@ impl DelegateSettleSession {
                 Event::BatchFinalization(e) => {
                     eprintln!("delegate: BatchFinalization id={}", e.id);
 
-                    // Build connectors graph from collected connector chunks.
-                    let connector_leaves: Vec<Psbt> = self
-                        .connector_graph_chunks
-                        .iter()
-                        .map(|c| c.tx.clone())
-                        .collect();
-                    let connector_refs: Vec<&Psbt> =
-                        connector_leaves.iter().collect();
+                    // `complete_delegate_forfeit_txs` expects the connector
+                    // graph's LEAVES (the leaf txs whose outputs feed each
+                    // forfeit PSBT), not all chunks. The ASP reconstructs the
+                    // forfeit txid from these specific leaves; passing all
+                    // chunks produces a different completed PSBT and a txid
+                    // the ASP doesn't recognize.
+                    let connectors_graph = TxGraph::new(
+                        self.connector_graph_chunks.drain(..).collect(),
+                    )
+                    .map_err(|e| format!("TxGraph::new (connectors): {e}"))?;
+                    let connector_leaves = connectors_graph.leaves();
 
-                    // Complete the pre-signed forfeit PSBTs by adding connector inputs.
                     let completed_forfeits =
                         ark_core::batch::complete_delegate_forfeit_txs(
                             &self.delegate.forfeit_psbts,
-                            &connector_refs,
+                            &connector_leaves,
                         )
                         .map_err(|e| format!("complete_delegate_forfeit_txs: {e}"))?;
 

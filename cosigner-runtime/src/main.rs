@@ -3,7 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, cosigner, persistence, rest_api, shared, telemetry, vtxo_stream,
+    bitcoin, config, cosigner, dkg_coordinator, fcm_client, persistence, rest_api, shared,
+    telemetry, vtxo_stream,
 };
 
 #[derive(Parser)]
@@ -35,6 +36,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.electrum_port,
         cfg.bitcoin_network
     );
+
+    // Refuse to boot with an empty `bitcoin_network`. The client uses this
+    // string verbatim as the HRP source for rendering wallet addresses; an
+    // empty value would silently fall through to a wrong-network default
+    // on the client side. ServerConfig::from_environment already defaults
+    // to "regtest" on a missing var, so this check only fires when the
+    // operator explicitly set BITCOIN_NETWORK="" (a configuration mistake).
+    const VALID_NETWORKS: [&str; 5] = ["mainnet", "testnet", "signet", "mutinynet", "regtest"];
+    if !VALID_NETWORKS.contains(&cfg.bitcoin_network.as_str()) {
+        return Err(format!(
+            "Invalid BITCOIN_NETWORK={:?}; expected one of {:?}",
+            cfg.bitcoin_network, VALID_NETWORKS
+        )
+        .into());
+    }
 
     // Persistence backend.
     let (persistence, secret_store): (
@@ -97,11 +113,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
+    // FCM push client (optional; auto-settle still works without it).
+    let fcm = if cfg.fcm_service_account_json.trim().is_empty() {
+        tracing::warn!(
+            "FCM_SERVICE_ACCOUNT_JSON not set; push notifications disabled — \
+             auto-settle will only fire for users who open the app"
+        );
+        None
+    } else {
+        let base_url_override = if cfg.fcm_base_url.is_empty() {
+            None
+        } else {
+            Some(cfg.fcm_base_url.clone())
+        };
+        match fcm_client::FcmClient::from_service_account_json(
+            &cfg.fcm_service_account_json,
+            base_url_override,
+        ) {
+            Ok(client) => {
+                if !cfg.fcm_base_url.is_empty() {
+                    tracing::warn!(
+                        "FCM_BASE_URL override active: {} — push traffic NOT going to real Firebase",
+                        cfg.fcm_base_url
+                    );
+                }
+                tracing::info!("FCM client initialized");
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::error!("FCM init failed: {e}; push notifications disabled");
+                None
+            }
+        }
+    };
+
     let shared = Arc::new(shared::SharedServices::new(
         persistence,
         secret_store,
         bitcoin_history,
         asp_client,
+        fcm,
+        cfg.auto_settle_safety_margin_secs,
+        cfg.actor_idle_threshold_secs,
     ));
 
     // WASM source: CLI > env > config default.
@@ -124,6 +177,106 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Auto-settle tick: every 60s, find users with a stored delegate
+    // intent in sled and send TickAutoSettle to their actor (cold-spawning
+    // if needed).
+    //
+    // Sled is the source of truth for "this user has a stored intent the
+    // cosigner needs to drive." Iterating the in-memory DashMap would miss
+    // users whose actor isn't spawned — which is exactly the post-restart
+    // case Phase 2 of the persistence work was meant to fix. Iterating
+    // sled lets the tick fire for any user with a delegate row regardless
+    // of whether they've made a request since the last cosigner-runtime
+    // boot.
+    //
+    // Cost: `get_or_spawn` for a cold user instantiates a new WASM Store.
+    // We only pay this for users with a delegate row — which is exactly
+    // the set that has work to do. Auto-settle either succeeds (sled row
+    // and in-memory record both clear, the actor settles back into idle
+    // and eventually evicts) or fails (same outcome — client re-delegates
+    // on next refresh).
+    if shared.asp_client.is_some() {
+        let registry_clone = registry.clone();
+        let persistence_clone = shared.persistence.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            // Skip the immediate fire so existing actors have time to finish boot.
+            interval.tick().await;
+            loop {
+                interval.tick().await;
+                let candidates = match persistence_clone.get_all("delegate_sessions") {
+                    Ok(rows) => rows,
+                    Err(e) => {
+                        tracing::warn!(
+                            "auto-settle tick: get_all delegate_sessions failed: {e}"
+                        );
+                        continue;
+                    }
+                };
+                if candidates.is_empty() {
+                    continue;
+                }
+                tracing::debug!(
+                    "auto-settle tick: {} user(s) with stored delegate",
+                    candidates.len()
+                );
+                for (user_id, _value) in candidates {
+                    let handle = match registry_clone.get_or_spawn(&user_id) {
+                        Ok(h) => h,
+                        Err(e) => {
+                            tracing::debug!("auto-settle tick: spawn {user_id} failed: {e}");
+                            continue;
+                        }
+                    };
+                    if let Err(e) =
+                        handle.try_send(cosigner::CosignerCommand::TickAutoSettle)
+                    {
+                        tracing::debug!("auto-settle tick: skip {user_id}: {e}");
+                    }
+                }
+            }
+        });
+    }
+
+    // Idle-eviction sweep (issue #30 gap 3): every 60s, drop actors that
+    // haven't recv'd anything for `ACTOR_IDLE_THRESHOLD_SECS`. Runs
+    // independently of ASP — purely a memory-pressure relief mechanism.
+    //
+    // The auto-settle tick above now only sends to users with a stored
+    // delegate row in sled, so it no longer keeps every spawned actor's
+    // `last_active` fresh. Idle actors (no client RPCs, no stream events,
+    // no stored delegate) will now eventually evict in production —
+    // exactly the behaviour the sweep was designed for.
+    {
+        let registry_clone = registry.clone();
+        let threshold = shared.actor_idle_threshold_secs;
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await; // skip immediate fire
+            loop {
+                interval.tick().await;
+                let snapshot = registry_clone.snapshot_handles();
+                for (user_id, _handle) in snapshot {
+                    registry_clone.try_evict(&user_id, threshold);
+                }
+            }
+        });
+    }
+
+    // DKG coordinator: short-lived per-user ceremony sessions, evicted on
+    // TTL. Spawned independently of the per-user registry — the post-DKG
+    // actor is lazy-spawned by the first sign/ark/refresh/policy call.
+    let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
+    let dkg_coord = dkg_coordinator::DkgCoordinator::new(shared.clone(), dkg_ttl);
+    {
+        let coord = dkg_coord.clone();
+        tokio::spawn(async move {
+            coord.run_eviction_loop().await;
+        });
+    }
+
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
         std::env::var("PORT")
@@ -131,8 +284,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(7074)
     });
+    let app_state = rest_api::AppState {
+        registry: registry.clone(),
+        dkg_coordinator: dkg_coord.clone(),
+        server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
+            bitcoin_network: cfg.bitcoin_network.clone(),
+        }),
+    };
     let rest_app = axum::Router::new()
-        .nest("/api", rest_api::routes(registry.clone()))
+        .nest("/api", rest_api::routes(app_state))
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .layer(tower_http::cors::CorsLayer::permissive());
     let rest_addr = format!("0.0.0.0:{rest_port}");

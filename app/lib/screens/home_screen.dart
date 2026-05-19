@@ -44,11 +44,6 @@ class HomeScreen extends StatelessWidget {
               tooltip: 'Drive backup',
               onPressed: () => context.push('/settings/backup'),
             ),
-          IconButton(
-            icon: const Icon(Icons.public),
-            tooltip: 'Network',
-            onPressed: () => context.push('/settings/network'),
-          ),
         ],
       ),
       body: SafeArea(

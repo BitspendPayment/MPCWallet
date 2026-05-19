@@ -68,12 +68,45 @@ pub fn sign_step1(
     let spent_amount =
         calculate_spent_amount(user, &req.full_transaction, &pkp_json).unwrap_or(0);
     tracing::info!("[{user_id_hex}] SignStep1: spent_amount={spent_amount}");
-    let selected_policy_id =
-        parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
-    tracing::info!(
-        "[{user_id_hex}] SignStep1: selected_policy_id={:?}",
-        selected_policy_id
-    );
+
+    // Policy bypass for settle/settleDelegate: when this SignStep1 is
+    // being driven from an active settle round (boarding) or delegate
+    // Phase-1 sign (settleDelegate is still waiting on the client's
+    // signature shares), we force the normal key package. Spending
+    // policies gate fund egress (sends + redeems); they don't gate
+    // "promote my UTXO into a fresh VTXO" or "re-delegate so my VTXO
+    // doesn't expire." Auto-settle runs from a background isolate or
+    // cosigner tick task where no user PIN is available, so requiring
+    // a protected policy would break the whole class of unattended
+    // settlements.
+    //
+    // Crucially, the bypass must NOT fire just because a stored,
+    // already-signed delegate intent happens to be sitting in
+    // `state.delegate_session`. After Phase 2 stores signatures, the
+    // record persists for the tick task — but any subsequent unrelated
+    // SignStep1 (e.g. an off-chain Ark send) is a normal egress and
+    // must be policy-gated. `awaiting_signatures` distinguishes the
+    // two: it's true only between Phase 1 (returns sighashes) and
+    // Phase 2 (signs them).
+    let in_settle_context = state.settle_session.is_some()
+        || state
+            .delegate_session
+            .as_ref()
+            .is_some_and(|r| r.awaiting_signatures);
+    let selected_policy_id = if in_settle_context {
+        tracing::info!(
+            "[{user_id_hex}] SignStep1: settle/delegate context active — \
+             skipping policy evaluation"
+        );
+        None
+    } else {
+        let id = parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
+        tracing::info!(
+            "[{user_id_hex}] SignStep1: selected_policy_id={:?}",
+            id
+        );
+        id
+    };
     if let Some(ref policy_id) = selected_policy_id {
         if let Some(pp) = policy_state.protected_policies.get(policy_id) {
             server_kp_json = pp.key_package_json.clone();

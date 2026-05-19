@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::{FromRef, Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
@@ -13,13 +13,41 @@ use tonic::Status;
 
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
+use crate::dkg_coordinator::DkgCoordinator;
 use crate::wallet_proto::{self};
 
-type AppState = Arc<CosignerRegistry>;
+/// Per-route extractor types pull what they need from this struct via
+/// `FromRef`, so handlers can keep narrow signatures (`State<Arc<...>>`).
+#[derive(Clone)]
+pub struct AppState {
+    pub registry: Arc<CosignerRegistry>,
+    pub dkg_coordinator: Arc<DkgCoordinator>,
+    /// Public deployment metadata served by `/api/server-info`. Built once
+    /// at startup from `ServerConfig::bitcoin_network`.
+    pub server_info: Arc<wallet_proto::GetServerInfoResponse>,
+}
+
+impl FromRef<AppState> for Arc<CosignerRegistry> {
+    fn from_ref(s: &AppState) -> Self {
+        s.registry.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<DkgCoordinator> {
+    fn from_ref(s: &AppState) -> Self {
+        s.dkg_coordinator.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<wallet_proto::GetServerInfoResponse> {
+    fn from_ref(s: &AppState) -> Self {
+        s.server_info.clone()
+    }
+}
 
 /// Build the axum router. All authenticated routes are nested under
 /// `/u/{user_id}/...` so the dispatcher can route directly to the actor.
-pub fn routes(registry: AppState) -> Router {
+pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
         // DKG
@@ -53,7 +81,13 @@ pub fn routes(registry: AppState) -> Router {
         .route("/u/{user_id}/ark/settle", post(settle))
         .route("/u/{user_id}/ark/settle-delegate", post(settle_delegate))
         .route("/u/{user_id}/ark/submit-send", post(submit_ark_send))
-        .with_state(registry)
+        // Push notifications
+        .route("/u/{user_id}/push/register-device-token", post(register_device_token))
+        // Server deployment metadata. Unauthenticated, not user-scoped.
+        // Accepts both GET and POST so the enclave-FFI transport (which only
+        // models POST) can reach it the same way regular HTTP clients do.
+        .route("/server-info", get(get_server_info).post(get_server_info))
+        .with_state(state)
 }
 
 // ---------------------------------------------------------------------------
@@ -168,47 +202,75 @@ async fn health() -> impl IntoResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Server info — unauthenticated, returns deployment metadata so clients can
+// render addresses with the correct HRP without needing to know the network
+// out-of-band. Serves the same struct that's pre-built at startup from
+// `ServerConfig::bitcoin_network`.
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip_all, name = "rest::get_server_info")]
+async fn get_server_info(
+    State(info): State<Arc<wallet_proto::GetServerInfoResponse>>,
+) -> Json<Value> {
+    Json(json!({
+        "bitcoin_network": info.bitcoin_network,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // DKG
 // ---------------------------------------------------------------------------
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step1", fields(user_id = %user_id))]
 async fn dkg_step1(
-    State(reg): State<AppState>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep1, wallet_proto::DkgStep1Request {
+    let req = wallet_proto::DkgStep1Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
         is_restore: bool_field(&body, "is_restore"),
-    })
+    };
+    match coord.dkg_step1(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step2", fields(user_id = %user_id))]
 async fn dkg_step2(
-    State(reg): State<AppState>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep2, wallet_proto::DkgStep2Request {
+    let req = wallet_proto::DkgStep2Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
-    })
+    };
+    match coord.dkg_step2(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step3", fields(user_id = %user_id))]
 async fn dkg_step3(
-    State(reg): State<AppState>,
+    State(coord): State<Arc<DkgCoordinator>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DkgStep3, wallet_proto::DkgStep3Request {
+    let req = wallet_proto::DkgStep3Request {
         user_id: user_id_bytes(&user_id),
         identifier: hex_field(&body, "identifier"),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
-    })
+    };
+    match coord.dkg_step3(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +279,7 @@ async fn dkg_step3(
 
 #[tracing::instrument(skip_all, name = "rest::sign_step1", fields(user_id = %user_id))]
 async fn sign_step1(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -259,7 +321,7 @@ async fn sign_step1(
 
 #[tracing::instrument(skip_all, name = "rest::sign_step2", fields(user_id = %user_id))]
 async fn sign_step2(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -287,7 +349,7 @@ async fn sign_step2(
 
 #[tracing::instrument(skip_all, name = "rest::refresh_step1", fields(user_id = %user_id))]
 async fn refresh_step1(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -303,7 +365,7 @@ async fn refresh_step1(
 
 #[tracing::instrument(skip_all, name = "rest::refresh_step2", fields(user_id = %user_id))]
 async fn refresh_step2(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -317,7 +379,7 @@ async fn refresh_step2(
 
 #[tracing::instrument(skip_all, name = "rest::refresh_step3", fields(user_id = %user_id))]
 async fn refresh_step3(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -335,7 +397,7 @@ async fn refresh_step3(
 
 #[tracing::instrument(skip_all, name = "rest::get_policy_id", fields(user_id = %user_id))]
 async fn get_policy_id(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -349,7 +411,7 @@ async fn get_policy_id(
 
 #[tracing::instrument(skip_all, name = "rest::update_policy", fields(user_id = %user_id))]
 async fn update_policy(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -366,7 +428,7 @@ async fn update_policy(
 
 #[tracing::instrument(skip_all, name = "rest::delete_policy", fields(user_id = %user_id))]
 async fn delete_policy(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -385,7 +447,7 @@ async fn delete_policy(
 
 #[tracing::instrument(skip_all, name = "rest::broadcast_transaction", fields(user_id = %user_id))]
 async fn broadcast_transaction(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -397,7 +459,7 @@ async fn broadcast_transaction(
 
 #[tracing::instrument(skip_all, name = "rest::fetch_history", fields(user_id = %user_id))]
 async fn fetch_history(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -410,7 +472,7 @@ async fn fetch_history(
 
 #[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions", fields(user_id = %user_id))]
 async fn fetch_recent_transactions(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -427,7 +489,7 @@ async fn fetch_recent_transactions(
 
 #[tracing::instrument(skip_all, name = "rest::get_ark_info", fields(user_id = %user_id))]
 async fn get_ark_info(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -440,7 +502,7 @@ async fn get_ark_info(
 
 #[tracing::instrument(skip_all, name = "rest::get_ark_address", fields(user_id = %user_id))]
 async fn get_ark_address(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -453,7 +515,7 @@ async fn get_ark_address(
 
 #[tracing::instrument(skip_all, name = "rest::get_boarding_address", fields(user_id = %user_id))]
 async fn get_boarding_address(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -466,7 +528,7 @@ async fn get_boarding_address(
 
 #[tracing::instrument(skip_all, name = "rest::check_boarding_balance", fields(user_id = %user_id))]
 async fn check_boarding_balance(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -479,7 +541,7 @@ async fn check_boarding_balance(
 
 #[tracing::instrument(skip_all, name = "rest::list_vtxos", fields(user_id = %user_id))]
 async fn list_vtxos(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -492,7 +554,7 @@ async fn list_vtxos(
 
 #[tracing::instrument(skip_all, name = "rest::list_ark_transactions", fields(user_id = %user_id))]
 async fn list_ark_transactions(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -505,7 +567,7 @@ async fn list_ark_transactions(
 
 #[tracing::instrument(skip_all, name = "rest::send_vtxo", fields(user_id = %user_id))]
 async fn send_vtxo(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -535,7 +597,7 @@ async fn send_vtxo(
 
 #[tracing::instrument(skip_all, name = "rest::redeem_vtxo", fields(user_id = %user_id))]
 async fn redeem_vtxo(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -550,7 +612,7 @@ async fn redeem_vtxo(
 
 #[tracing::instrument(skip_all, name = "rest::settle", fields(user_id = %user_id))]
 async fn settle(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -577,7 +639,7 @@ async fn settle(
 
 #[tracing::instrument(skip_all, name = "rest::settle_delegate", fields(user_id = %user_id))]
 async fn settle_delegate(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -586,6 +648,10 @@ async fn settle_delegate(
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
+        store_only: body
+            .get("store_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
     };
     match reg
         .dispatch(&user_id, move |reply| CosignerCommand::SettleDelegate { req, reply })
@@ -604,7 +670,7 @@ async fn settle_delegate(
 
 #[tracing::instrument(skip_all, name = "rest::submit_ark_send", fields(user_id = %user_id))]
 async fn submit_ark_send(
-    State(reg): State<AppState>,
+    State(reg): State<Arc<CosignerRegistry>>,
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -615,5 +681,21 @@ async fn submit_ark_send(
         signed_ark_tx_b64: str_field(&body, "signed_ark_tx_b64"),
         signed_checkpoint_txs_b64: str_array_field(&body, "signed_checkpoint_txs_b64"),
         spent_outpoints: str_array_field(&body, "spent_outpoints"),
+    })
+}
+
+#[tracing::instrument(skip_all, name = "rest::register_device_token", fields(user_id = %user_id))]
+async fn register_device_token(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    dispatch_json!(reg, user_id, RegisterDeviceToken, wallet_proto::RegisterDeviceTokenRequest {
+        user_id: user_id_bytes(&user_id),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+        fcm_token: str_field(&body, "fcm_token"),
+        platform: str_field(&body, "platform"),
+        app_version: str_field(&body, "app_version"),
     })
 }

@@ -307,6 +307,14 @@ class MpcClient {
   threshold.KeyPackage? get keyPackage2 => _recoveryPolicy?.keyPackage;
   threshold.PublicKeyPackage? get publicKey => _normalPolicy?.publicKeyPackage;
 
+  // --- SERVER METADATA ---
+
+  /// Fetch the server's deployment metadata (Bitcoin network).
+  /// Unauthenticated; safe to call before DKG completes.
+  Future<GetServerInfoResponse> getServerInfo() async {
+    return _stub.getServerInfo(GetServerInfoRequest());
+  }
+
   // --- DKG ---
 
   /// DKG: only the hardware signer and server contribute secrets (dealers).
@@ -1241,14 +1249,12 @@ class MpcClient {
 
   /// Settle on-chain boarding UTXOs into Ark VTXOs.
   /// Returns the commitment txid when settled.
-  /// Settle (board on-chain UTXOs into VTXOs).
   ///
-  /// If the user has an active spending policy and the boarding output's value
-  /// exceeds its threshold, the server switches to the protected key package
-  /// for FROST signing. Pass [pin] and [policyId] so the client signs with the
-  /// matching protected key — otherwise FROST aggregation will fail with
-  /// "invalid signature".
-  Future<String> settle({String? pin, String? policyId}) async {
+  /// Spending policies do NOT gate settling — they gate fund egress (sends
+  /// and redeems), not "promote my boarding UTXO into a VTXO." Server-side
+  /// `SignStep1` forces the normal key package whenever an active settle
+  /// or delegate session is in flight, so no PIN is required.
+  Future<String> settle() async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settle.");
     }
@@ -1283,12 +1289,12 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // FROST sign — sign() picks the protected policy KP when
-          // pin+policyId are supplied, or _normalPolicy otherwise.
+          // Settling always signs with the normal policy KP. Server-side
+          // SignStep1 forces this when a settle session is active, so
+          // passing pin/policyId here would only cause a key mismatch
+          // and a FROST aggregation failure.
           final sig = await sign(
             sighashBytes,
-            pin: pin,
-            policyId: policyId,
             applyTweak: !scriptPath,
           );
 
@@ -1320,12 +1326,16 @@ class MpcClient {
 
   /// Settle existing VTXOs using the delegate pattern.
   ///
-  /// Only 2 rounds vs 4 for boarding:
-  /// Phase 1: get all sighashes (intent proof + forfeit PSBTs)
-  /// Phase 2: send FROST signatures, server drives batch autonomously
-  /// Same caveat as [settle]: pass [pin] + [policyId] when an active policy
-  /// covers the VTXO amounts being refreshed.
-  Future<String> settleDelegate({String? pin, String? policyId}) async {
+  /// Two rounds. Phase 1 fetches sighashes; phase 2 sends FROST signatures.
+  /// When [storeOnly] is true, the cosigner stores the signed intent and
+  /// drives the batch later when the auto-settle threshold is met (returns
+  /// DELEGATED, commitment txid is empty). When false, the cosigner joins
+  /// the next batch immediately (returns SETTLED with the commitment txid).
+  ///
+  /// Like [settle], no PIN/policy is required. Settling is a re-packaging of
+  /// the user's own funds, not egress; server-side `SignStep1` forces the
+  /// normal key package while a delegate session is active.
+  Future<String> settleDelegate({bool storeOnly = false}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settleDelegate.");
     }
@@ -1352,10 +1362,9 @@ class MpcClient {
 
     for (final sighash in resp1.messagesToSign) {
       final sighashBytes = Uint8List.fromList(sighash);
+      // Always sign with normal policy KP — see class docstring above.
       final sig = await sign(
         sighashBytes,
-        pin: pin,
-        policyId: policyId,
         applyTweak: !scriptPath,
       );
 
@@ -1370,12 +1379,14 @@ class MpcClient {
       signedMessages.add(schnorrSig.toList());
     }
 
-    // Phase 2: send signatures, server settles autonomously
+    // Phase 2: send signatures. When storeOnly, the server holds the intent
+    // and the auto-settle tick task drives it later.
     final auth2 = _authHelper!.signForSettleDelegate();
     final req2 = SettleDelegateRequest()
       ..userId = _userId!
       ..signature = auth2.signature
-      ..timestampMs = auth2.timestampMs;
+      ..timestampMs = auth2.timestampMs
+      ..storeOnly = storeOnly;
     req2.signedMessages.addAll(signedMessages);
 
     final resp2 = await _stub.settleDelegate(req2);
@@ -1383,11 +1394,36 @@ class MpcClient {
     if (resp2.status == SettleDelegateResponse_Status.ERROR) {
       throw Exception('SettleDelegate error: ${resp2.errorMessage}');
     }
-    if (resp2.status != SettleDelegateResponse_Status.SETTLED) {
-      throw Exception('Expected SETTLED, got ${resp2.status}');
+    final isDelegatedOk = storeOnly
+        ? resp2.status == SettleDelegateResponse_Status.DELEGATED
+        : resp2.status == SettleDelegateResponse_Status.SETTLED;
+    if (!isDelegatedOk) {
+      throw Exception(
+          'Expected ${storeOnly ? "DELEGATED" : "SETTLED"}, got ${resp2.status}');
     }
 
-    return resp2.commitmentTxid;
+    return resp2.commitmentTxid; // empty when DELEGATED
+  }
+
+  /// Register an FCM token so the cosigner can wake the device on receive.
+  /// Idempotent — safe to call on every login and token rotation.
+  Future<void> registerDeviceToken({
+    required String fcmToken,
+    required String platform,
+    String appVersion = '',
+  }) async {
+    if (_userId == null) {
+      throw StateError("User ID is null, cannot registerDeviceToken.");
+    }
+    final auth = _authHelper!.signForRegisterDeviceToken();
+    final req = RegisterDeviceTokenRequest()
+      ..userId = _userId!
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs
+      ..fcmToken = fcmToken
+      ..platform = platform
+      ..appVersion = appVersion;
+    await _stub.registerDeviceToken(req);
   }
 
   // --- BROADCAST ---

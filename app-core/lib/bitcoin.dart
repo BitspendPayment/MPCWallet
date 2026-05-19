@@ -14,7 +14,15 @@ import 'package:app_core/threshold/threshold.dart' as threshold; // Access bigIn
 import 'package:protocol/protocol.dart';
 
 /// Maps a server/ASP network string to bitcoin_base BitcoinNetwork.
+/// Throws on empty or unknown input — silently defaulting was a real bug
+/// vector when the server returned an empty `bitcoin_network` field; users
+/// would get testnet HRP addresses on a regtest deployment.
 BitcoinNetwork parseBitcoinNetwork(String network) {
+  if (network.isEmpty) {
+    throw ArgumentError(
+        'parseBitcoinNetwork: empty network string — server returned no '
+        'bitcoin_network value, address rendering cannot be safely defaulted');
+  }
   switch (network) {
     case 'bitcoin':
     case 'mainnet':
@@ -26,10 +34,13 @@ BitcoinNetwork parseBitcoinNetwork(String network) {
     case 'mutinynet':
       return BitcoinNetwork.signet;
     case 'regtest':
-    default:
       // regtest has no BitcoinNetwork constant; use testnet (same tb HRP).
       // Regtest bcrt addresses are handled separately via SegwitBech32Encoder.
       return BitcoinNetwork.testnet;
+    default:
+      throw ArgumentError(
+          'parseBitcoinNetwork: unknown network "$network" — expected one of '
+          'mainnet, testnet, signet, mutinynet, regtest');
   }
 }
 

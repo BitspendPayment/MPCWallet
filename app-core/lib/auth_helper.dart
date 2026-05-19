@@ -240,6 +240,17 @@ class ClientAuthHelper {
     );
     return AuthSignature(signature, timestamp);
   }
+
+  /// Creates an authentication signature for RegisterDeviceToken.
+  AuthSignature signForRegisterDeviceToken() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opRegisterDeviceToken,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
 }
 
 /// Represents an authentication signature with its timestamp.

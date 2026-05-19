@@ -2,40 +2,75 @@
 //! and processes commands serially. Per-command WASM work runs inside
 //! `spawn_blocking` so the actor task stays light — millions of idle actors fit
 //! in memory; only currently-executing WASM consumes a blocking-pool thread.
+//!
+//! `CosignerInstance` and `CosignerState` live behind `Arc<parking_lot::Mutex<>>`
+//! so the panic-recovery path in `run_actor` (Gap 2 from issue #30) can replace
+//! a wedged WASM instance without losing user state. Single-writer per actor
+//! means lock contention is effectively zero — the mutex is there as a panic-
+//! safe ownership swap, not for concurrent access. `parking_lot::Mutex` is
+//! preferred over `std::sync::Mutex` because it doesn't poison on panic; the
+//! recovery path explicitly reseats `*user.lock()` to a fresh instance.
 
+use std::panic::AssertUnwindSafe;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use futures::FutureExt;
+use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tonic::Status;
 
-use crate::shared::SharedServices;
 use crate::cosigner::wasm::CosignerInstance;
+use crate::shared::SharedServices;
 
 use super::command::CosignerCommand;
 use super::handlers;
 use super::registry::CosignerRegistry;
-use super::state::CosignerState;
+use super::state::{CosignerState, DeviceToken};
 
-/// Move `(user, state)` into a blocking closure, run `f`, reclaim ownership.
-/// `f` returns the response payload; the user/state pair is paired back via
-/// the spawn_blocking return tuple.
+fn now_secs() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Lock `user` and `state` inside `spawn_blocking`, run `f`, return the typed
+/// result. `(user, state)` ownership stays with the actor task across this
+/// call; the mutex guards only protect against panic-recovery reseating the
+/// instance.
+///
+/// On a handler panic, `spawn_blocking` returns `Err(JoinError::is_panic)`.
+/// We surface that as `Err(Status::internal("handler panicked"))` so the
+/// caller's oneshot reply fires with an error instead of hanging. The actor
+/// task itself stays alive — its outer `catch_unwind` in `run_actor` reseats
+/// the wedged WASM instance and drains in-flight rendezvous replies.
 async fn run_blocking<F, T>(
-    user: CosignerInstance,
-    state: CosignerState,
+    user: Arc<Mutex<CosignerInstance>>,
+    state: Arc<Mutex<CosignerState>>,
     f: F,
-) -> (CosignerInstance, CosignerState, Result<T, Status>)
+) -> Result<T, Status>
 where
     F: FnOnce(&mut CosignerInstance, &mut CosignerState) -> Result<T, Status> + Send + 'static,
     T: Send + 'static,
 {
-    tokio::task::spawn_blocking(move || {
-        let mut user = user;
-        let mut state = state;
-        let res = f(&mut user, &mut state);
-        (user, state, res)
+    let outcome = tokio::task::spawn_blocking(move || {
+        let mut user = user.lock();
+        let mut state = state.lock();
+        f(&mut user, &mut state)
     })
-    .await
-    .unwrap_or_else(|join_err| panic!("user actor blocking task panicked: {join_err:?}"))
+    .await;
+    match outcome {
+        Ok(res) => res,
+        Err(join_err) if join_err.is_panic() => {
+            tracing::error!("actor handler panicked: {join_err:?}");
+            Err(Status::internal("handler panicked"))
+        }
+        Err(join_err) => Err(Status::internal(format!(
+            "actor handler task error: {join_err:?}"
+        ))),
+    }
 }
 
 /// Standard dispatch: handler returns `Result<Resp, Status>`; macro fires the
@@ -45,13 +80,11 @@ macro_rules! dispatch {
     ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
         let span = tracing::Span::current();
-        let (u, st, res) = run_blocking($user, $state, move |user, state| {
+        let res = run_blocking($user.clone(), $state.clone(), move |user, state| {
             let _enter = span.enter();
             $handler(user, state, &s, $req)
         })
         .await;
-        $user = u;
-        $state = st;
         let _ = $reply.send(res);
     }};
 }
@@ -63,185 +96,429 @@ macro_rules! dispatch_with_registry {
         let s = $shared.clone();
         let r = $registry.clone();
         let span = tracing::Span::current();
-        let (u, st, res) = run_blocking($user, $state, move |user, state| {
+        let res = run_blocking($user.clone(), $state.clone(), move |user, state| {
             let _enter = span.enter();
             $handler(user, state, &s, &r, $req)
         })
         .await;
-        $user = u;
-        $state = st;
         let _ = $reply.send(res);
     }};
 }
 
-/// Rendezvous dispatch: handler owns the reply sender so it can fire inline or
-/// stash it in `CosignerState.pending_*`. Used by multi-participant flows (DKG).
-macro_rules! dispatch_rendezvous {
-    ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
-        let s = $shared.clone();
-        let span = tracing::Span::current();
-        let (u, st) = tokio::task::spawn_blocking(move || {
-            let _enter = span.enter();
-            let mut user = $user;
-            let mut state = $state;
-            $handler(&mut user, &mut state, &s, $req, $reply);
-            (user, state)
-        })
-        .await
-        .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
-        $user = u;
-        $state = st;
-    }};
-}
-
 pub async fn run_actor(
-    mut user: CosignerInstance,
-    mut state: CosignerState,
+    user: Arc<Mutex<CosignerInstance>>,
+    state: Arc<Mutex<CosignerState>>,
     mut rx: mpsc::Receiver<CosignerCommand>,
     shared: Arc<SharedServices>,
     registry: Arc<CosignerRegistry>,
+    last_active: Arc<AtomicI64>,
 ) {
     while let Some(cmd) = rx.recv().await {
-        match cmd {
-            CosignerCommand::Shutdown => break,
+        // Per issue #30 design choice: every recv() event counts as activity.
+        // This includes TickAutoSettle / stream events, which means actors in
+        // ASP-connected deployments effectively never idle out. Eviction is
+        // dormant in normal operation by design.
+        last_active.store(now_secs(), Ordering::Relaxed);
 
-            // -------- Policy --------
-            CosignerCommand::GetPolicyId { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::policy::get_policy_id);
-            }
-            CosignerCommand::UpdatePolicy { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::policy::update_policy);
-            }
-            CosignerCommand::DeletePolicy { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::policy::delete_policy);
-            }
+        if matches!(cmd, CosignerCommand::Shutdown) {
+            break;
+        }
 
-            // -------- DKG (rendezvous) --------
-            CosignerCommand::DkgStep1 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step1);
-            }
-            CosignerCommand::DkgStep2 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step2);
-            }
-            CosignerCommand::DkgStep3 { req, reply } => {
-                dispatch_rendezvous!(user, state, shared, req, reply, handlers::dkg::dkg_step3);
-            }
+        // Gap 2: wrap each command dispatch in `catch_unwind`. After Gap 1's
+        // fix, handler panics already reach us as `Err(Status::internal(...))`
+        // via `run_blocking`. This outer catch is belt-and-suspenders against
+        // any panic that escapes the macros / async glue (rare, but cheap to
+        // guard). On catch:
+        //   1. Rebuild the WASM instance — its session handles may be wedged.
+        //   2. Drain `pending_*` rendezvous replies so multi-party callers
+        //      don't hang on a reply that will never come.
+        //   3. Keep the recv loop running for the next command.
+        //
+        // `AssertUnwindSafe` is necessary because `CosignerInstance` (wasmtime
+        // Store) isn't naturally UnwindSafe. The safety claim is sound: we
+        // unconditionally rebuild the instance after a caught panic, so no
+        // potentially-inconsistent wasm state survives the boundary.
+        let dispatch_outcome = AssertUnwindSafe(dispatch_one(
+            cmd,
+            user.clone(),
+            state.clone(),
+            shared.clone(),
+            registry.clone(),
+        ))
+        .catch_unwind()
+        .await;
 
-            // -------- Signing --------
-            CosignerCommand::SignStep1 { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::sign::sign_step1);
+        if dispatch_outcome.is_err() {
+            tracing::error!("actor caught unwind during dispatch; rebuilding WASM instance");
+            match registry.new_user_instance() {
+                Ok(fresh) => {
+                    *user.lock() = fresh;
+                }
+                Err(e) => {
+                    tracing::error!("failed to rebuild WASM instance: {e}; actor exiting");
+                    break;
+                }
             }
-            CosignerCommand::SignStep2 { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::sign::sign_step2);
-            }
+            state
+                .lock()
+                .drain_pending_replies_with_err("actor recovering from panic");
+        }
+    }
+}
 
-            // -------- Refresh --------
-            CosignerCommand::RefreshStep1 { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step1);
-            }
-            CosignerCommand::RefreshStep2 { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step2);
-            }
-            CosignerCommand::RefreshStep3 { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::refresh::refresh_step3);
-            }
+/// Per-command dispatch helper. Extracted so the outer `catch_unwind` in
+/// `run_actor` can wrap a single async unit cleanly. `Shutdown` is handled
+/// directly in `run_actor` (it breaks the loop) and never reaches here.
+async fn dispatch_one(
+    cmd: CosignerCommand,
+    user: Arc<Mutex<CosignerInstance>>,
+    state: Arc<Mutex<CosignerState>>,
+    shared: Arc<SharedServices>,
+    registry: Arc<CosignerRegistry>,
+) {
+    match cmd {
+        CosignerCommand::Shutdown => {
+            // Already filtered out by run_actor; reaching this arm would be a
+            // bug. Logging it makes it visible without panicking.
+            tracing::error!("dispatch_one received Shutdown; expected to be filtered by run_actor");
+        }
 
-            // -------- Transactions --------
-            CosignerCommand::BroadcastTransaction { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::tx::broadcast_transaction);
-            }
-            CosignerCommand::FetchHistory { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::tx::fetch_history);
-            }
-            CosignerCommand::FetchRecentTransactions { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::tx::fetch_recent_transactions);
-            }
+        // -------- Policy --------
+        CosignerCommand::GetPolicyId { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::policy::get_policy_id
+            );
+        }
+        CosignerCommand::UpdatePolicy { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::policy::update_policy
+            );
+        }
+        CosignerCommand::DeletePolicy { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::policy::delete_policy
+            );
+        }
 
-            // -------- Ark (lookups) --------
-            CosignerCommand::GetArkInfo { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark::get_ark_info);
-            }
-            CosignerCommand::GetArkAddress { req, reply } => {
-                dispatch_with_registry!(user, state, shared, registry, req, reply, handlers::ark::get_ark_address);
-            }
-            CosignerCommand::GetBoardingAddress { req, reply } => {
-                dispatch_with_registry!(user, state, shared, registry, req, reply, handlers::ark::get_boarding_address);
-            }
-            CosignerCommand::CheckBoardingBalance { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark::check_boarding_balance);
-            }
-            CosignerCommand::ListVtxos { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark::list_vtxos);
-            }
-            CosignerCommand::ListArkTransactions { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark::list_ark_transactions);
-            }
-            CosignerCommand::SendVtxo { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark_send::send_vtxo);
-            }
-            CosignerCommand::RedeemVtxo { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark_send::redeem_vtxo);
-            }
-            CosignerCommand::Settle { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark_send::settle);
-            }
-            CosignerCommand::SettleDelegate { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark_send::settle_delegate);
-            }
-            CosignerCommand::SubmitArkSend { req, reply } => {
-                dispatch!(user, state, shared, req, reply, handlers::ark_send::submit_ark_send);
-            }
+        // -------- Signing --------
+        CosignerCommand::SignStep1 { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::sign::sign_step1);
+        }
+        CosignerCommand::SignStep2 { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::sign::sign_step2);
+        }
 
-            // -------- Stream fan-in (no reply) --------
-            CosignerCommand::VtxoStreamUpdate {
-                user_id_hex,
-                spent,
-                spendable,
-                info,
-            } => {
-                let s = shared.clone();
-                let span = tracing::info_span!("actor::vtxo_stream_update", user_id = %user_id_hex);
-                let (u, st) = tokio::task::spawn_blocking(move || {
-                    let _enter = span.enter();
-                    let mut user = user;
-                    let mut state = state;
-                    if let Err(e) = handlers::vtxo_stream::apply_stream_update(
-                        &mut user, &mut state, &s, &user_id_hex, spent, spendable, info,
-                    ) {
+        // -------- Refresh --------
+        CosignerCommand::RefreshStep1 { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::refresh::refresh_step1
+            );
+        }
+        CosignerCommand::RefreshStep2 { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::refresh::refresh_step2
+            );
+        }
+        CosignerCommand::RefreshStep3 { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::refresh::refresh_step3
+            );
+        }
+
+        // -------- Transactions --------
+        CosignerCommand::BroadcastTransaction { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::tx::broadcast_transaction
+            );
+        }
+        CosignerCommand::FetchHistory { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::tx::fetch_history);
+        }
+        CosignerCommand::FetchRecentTransactions { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::tx::fetch_recent_transactions
+            );
+        }
+
+        // -------- Ark (lookups) --------
+        CosignerCommand::GetArkInfo { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::ark::get_ark_info);
+        }
+        CosignerCommand::GetArkAddress { req, reply } => {
+            dispatch_with_registry!(
+                user,
+                state,
+                shared,
+                registry,
+                req,
+                reply,
+                handlers::ark::get_ark_address
+            );
+        }
+        CosignerCommand::GetBoardingAddress { req, reply } => {
+            dispatch_with_registry!(
+                user,
+                state,
+                shared,
+                registry,
+                req,
+                reply,
+                handlers::ark::get_boarding_address
+            );
+        }
+        CosignerCommand::CheckBoardingBalance { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark::check_boarding_balance
+            );
+        }
+        CosignerCommand::ListVtxos { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::ark::list_vtxos);
+        }
+        CosignerCommand::ListArkTransactions { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark::list_ark_transactions
+            );
+        }
+        CosignerCommand::SendVtxo { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark_send::send_vtxo
+            );
+        }
+        CosignerCommand::RedeemVtxo { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark_send::redeem_vtxo
+            );
+        }
+        CosignerCommand::Settle { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::ark_send::settle);
+        }
+        CosignerCommand::SettleDelegate { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark_send::settle_delegate
+            );
+        }
+        CosignerCommand::SubmitArkSend { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::ark_send::submit_ark_send
+            );
+        }
+
+        // -------- Push registration --------
+        CosignerCommand::RegisterDeviceToken { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::device_token::register_device_token
+            );
+        }
+
+        // -------- Auto-settle tick --------
+        CosignerCommand::TickAutoSettle => {
+            let s = shared.clone();
+            let span = tracing::info_span!("actor::tick_auto_settle");
+            let res = run_blocking(user.clone(), state.clone(), move |user, state| {
+                let _enter = span.enter();
+                handlers::auto_settle::tick_auto_settle(user, state, &s)
+            })
+            .await;
+            if let Err(e) = res {
+                tracing::warn!("tick_auto_settle: {e}");
+            }
+        }
+
+        // -------- Stream fan-in (no reply) --------
+        CosignerCommand::VtxoStreamUpdate {
+            user_id_hex,
+            spent,
+            spendable,
+            info,
+        } => {
+            let s = shared.clone();
+            let span = tracing::info_span!("actor::vtxo_stream_update", user_id = %user_id_hex);
+            let user_id_for_push = user_id_hex.clone();
+            let user_lock = user.clone();
+            let state_lock = state.clone();
+            let blocking_outcome = tokio::task::spawn_blocking(move || {
+                let _enter = span.enter();
+                let mut user = user_lock.lock();
+                let mut state = state_lock.lock();
+                let added = match handlers::vtxo_stream::apply_stream_update(
+                    &mut user,
+                    &mut state,
+                    &s,
+                    &user_id_hex,
+                    spent,
+                    spendable,
+                    info,
+                ) {
+                    Ok(added) => added,
+                    Err(e) => {
                         tracing::warn!("[{user_id_hex}] VTXO stream apply failed: {e}");
+                        Vec::new()
                     }
-                    (user, state)
-                })
-                .await
-                .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
-                user = u;
-                state = st;
+                };
+                let tokens = state.device_tokens.clone();
+                (added, tokens)
+            })
+            .await;
+            let (newly_added, device_tokens) = match blocking_outcome {
+                Ok(x) => x,
+                Err(join_err) if join_err.is_panic() => {
+                    tracing::error!("[{user_id_for_push}] VtxoStreamUpdate panicked: {join_err:?}");
+                    (Vec::new(), Vec::new())
+                }
+                Err(join_err) => {
+                    tracing::error!(
+                        "[{user_id_for_push}] VtxoStreamUpdate task error: {join_err:?}"
+                    );
+                    (Vec::new(), Vec::new())
+                }
+            };
+            if !newly_added.is_empty() {
+                push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
             }
-            CosignerCommand::IndexerUpdate {
-                user_id_hex,
-                new_vtxos,
-                spent_vtxos,
-                info,
-            } => {
-                let s = shared.clone();
-                let span = tracing::info_span!("actor::indexer_update", user_id = %user_id_hex);
-                let (u, st) = tokio::task::spawn_blocking(move || {
-                    let _enter = span.enter();
-                    let mut user = user;
-                    let mut state = state;
-                    if let Err(e) = handlers::vtxo_stream::apply_stream_update(
-                        &mut user, &mut state, &s, &user_id_hex, spent_vtxos, new_vtxos, info,
-                    ) {
+        }
+        CosignerCommand::IndexerUpdate {
+            user_id_hex,
+            new_vtxos,
+            spent_vtxos,
+            info,
+        } => {
+            let s = shared.clone();
+            let span = tracing::info_span!("actor::indexer_update", user_id = %user_id_hex);
+            let user_id_for_push = user_id_hex.clone();
+            let user_lock = user.clone();
+            let state_lock = state.clone();
+            let blocking_outcome = tokio::task::spawn_blocking(move || {
+                let _enter = span.enter();
+                let mut user = user_lock.lock();
+                let mut state = state_lock.lock();
+                let added = match handlers::vtxo_stream::apply_stream_update(
+                    &mut user,
+                    &mut state,
+                    &s,
+                    &user_id_hex,
+                    spent_vtxos,
+                    new_vtxos,
+                    info,
+                ) {
+                    Ok(added) => added,
+                    Err(e) => {
                         tracing::warn!("[{user_id_hex}] Indexer apply failed: {e}");
+                        Vec::new()
                     }
-                    (user, state)
-                })
-                .await
-                .unwrap_or_else(|e| panic!("user actor blocking task panicked: {e:?}"));
-                user = u;
-                state = st;
+                };
+                let tokens = state.device_tokens.clone();
+                (added, tokens)
+            })
+            .await;
+            let (newly_added, device_tokens) = match blocking_outcome {
+                Ok(x) => x,
+                Err(join_err) if join_err.is_panic() => {
+                    tracing::error!("[{user_id_for_push}] IndexerUpdate panicked: {join_err:?}");
+                    (Vec::new(), Vec::new())
+                }
+                Err(join_err) => {
+                    tracing::error!("[{user_id_for_push}] IndexerUpdate task error: {join_err:?}");
+                    (Vec::new(), Vec::new())
+                }
+            };
+            if !newly_added.is_empty() {
+                push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
             }
         }
     }
-    drop((user, state));
+}
+
+/// Send a "vtxo_received" data-only push to every registered device for this
+/// user. Best-effort: failures are logged and ignored — the stream handler
+/// has already persisted state, the open-app fallback closes any gap.
+async fn push_vtxo_received(shared: &SharedServices, user_id_hex: &str, tokens: &[DeviceToken]) {
+    let Some(fcm) = shared.fcm.as_ref() else {
+        return;
+    };
+    if tokens.is_empty() {
+        return;
+    }
+    let mut data = std::collections::HashMap::new();
+    data.insert("type".to_string(), "vtxo_received".to_string());
+    data.insert("user_id".to_string(), user_id_hex.to_string());
+    for token in tokens {
+        if let Err(e) = fcm.send_data(&token.fcm_token, &data).await {
+            tracing::warn!("[{user_id_hex}] FCM push to {} failed: {e}", token.platform);
+        }
+    }
 }
