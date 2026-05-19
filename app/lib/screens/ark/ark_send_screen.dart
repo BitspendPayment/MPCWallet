@@ -78,6 +78,7 @@ class _ArkSendScreenState extends State<ArkSendScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             TextField(
+              key: const Key('arkSendAddressField'),
               controller: _addressController,
               enabled: true,
               decoration: InputDecoration(
@@ -92,6 +93,7 @@ class _ArkSendScreenState extends State<ArkSendScreen> {
             ),
             const SizedBox(height: 24),
             TextField(
+              key: const Key('arkSendAmountField'),
               controller: _amountController,
               enabled: true,
               keyboardType: TextInputType.number,
@@ -123,6 +125,7 @@ class _ArkSendScreenState extends State<ArkSendScreen> {
             ],
             const Spacer(),
             ElevatedButton(
+                key: const Key('arkSendVtxoBtn'),
                 onPressed: _send,
                 child: const Text('Send VTXO'),
               ),

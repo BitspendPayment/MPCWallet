@@ -277,6 +277,7 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: _buildActionButton(
                   context,
+                  widgetKey: const Key('homeSendBtn'),
                   icon: Icons.arrow_upward,
                   label: 'Send',
                   onTap: () => context.push('/spending/send'),
@@ -287,6 +288,7 @@ class HomeScreen extends StatelessWidget {
               Expanded(
                 child: _buildActionButton(
                   context,
+                  widgetKey: const Key('homeReceiveBtn'),
                   icon: Icons.arrow_downward,
                   label: 'Receive',
                   onTap: () => context.push('/receive'),
@@ -302,12 +304,14 @@ class HomeScreen extends StatelessWidget {
 
   Widget _buildActionButton(
     BuildContext context, {
+    Key? widgetKey,
     required IconData icon,
     required String label,
     required VoidCallback onTap,
     required bool isPrimary,
   }) {
     return GestureDetector(
+      key: widgetKey,
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 12),

@@ -148,6 +148,7 @@ class _RestoreScreenState extends State<RestoreScreen> {
               ),
               const SizedBox(height: 24),
               TextField(
+                key: const Key('restorePasswordField'),
                 controller: _passwordCtrl,
                 obscureText: _obscure,
                 onChanged: (_) => setState(() {}),
@@ -170,6 +171,7 @@ class _RestoreScreenState extends State<RestoreScreen> {
                 ),
               const Spacer(),
               ElevatedButton(
+                key: const Key('restoreContinueBtn'),
                 onPressed: _decrypting || _passwordCtrl.text.isEmpty
                     ? null
                     : _decryptAndContinue,

@@ -37,6 +37,7 @@ class _SignerSelectionScreenState extends State<SignerSelectionScreen> {
             ),
             const SizedBox(height: 24),
             _SignerCard(
+              key: const Key('signerSoftwareCard'),
               selected: _selected == SignerKind.software,
               icon: Icons.phone_iphone,
               title: 'Software Signer',
@@ -47,6 +48,7 @@ class _SignerSelectionScreenState extends State<SignerSelectionScreen> {
             ),
             const SizedBox(height: 12),
             _SignerCard(
+              key: const Key('signerHardwareCard'),
               selected: _selected == SignerKind.hardware,
               icon: Icons.usb,
               title: 'Hardware Signer (USB)',
@@ -81,6 +83,7 @@ class _SignerSelectionScreenState extends State<SignerSelectionScreen> {
             ),
             const Spacer(),
             ElevatedButton(
+              key: const Key('signerContinueBtn'),
               onPressed: () => _continue(isRestore),
               child: const Text('Continue'),
             ),
@@ -117,6 +120,7 @@ class _SignerCard extends StatelessWidget {
   final VoidCallback onTap;
 
   const _SignerCard({
+    super.key,
     required this.selected,
     required this.icon,
     required this.title,

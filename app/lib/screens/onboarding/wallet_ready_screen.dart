@@ -67,6 +67,7 @@ class WalletReadyScreen extends StatelessWidget {
               ),
               const Spacer(),
               ElevatedButton(
+                key: const Key('walletReadyBtn'),
                 onPressed: () {
                   context.go('/');
                 },

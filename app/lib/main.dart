@@ -61,8 +61,15 @@ void main() async {
   );
 }
 
-class MerlinWalletApp extends StatelessWidget {
+class MerlinWalletApp extends StatefulWidget {
   const MerlinWalletApp({super.key});
+
+  @override
+  State<MerlinWalletApp> createState() => _MerlinWalletAppState();
+}
+
+class _MerlinWalletAppState extends State<MerlinWalletApp> {
+  late final GoRouter _router = _buildRouter();
 
   @override
   Widget build(BuildContext context) {
@@ -75,7 +82,7 @@ class MerlinWalletApp extends StatelessWidget {
   }
 }
 
-final GoRouter _router = GoRouter(
+GoRouter _buildRouter() => GoRouter(
   initialLocation: '/splash',
   routes: [
     GoRoute(

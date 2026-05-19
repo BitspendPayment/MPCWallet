@@ -114,7 +114,9 @@ class MpcArkWallet {
     );
   }
 
-  /// Evaluates spending policy using the real PSBT bytes.
+  /// Evaluates spending policy using the real PSBT bytes — the server is
+  /// responsible for computing the spent amount correctly so a compromised
+  /// client cannot under-report and bypass the threshold.
   Future<String> getPolicyId(UnsignedArkTransaction unsigned) async {
     return await client.getPolicyId(unsigned.arkTxBytes);
   }

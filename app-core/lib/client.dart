@@ -1249,7 +1249,14 @@ class MpcClient {
 
   /// Settle on-chain boarding UTXOs into Ark VTXOs.
   /// Returns the commitment txid when settled.
-  Future<String> settle() async {
+  /// Settle (board on-chain UTXOs into VTXOs).
+  ///
+  /// If the user has an active spending policy and the boarding output's value
+  /// exceeds its threshold, the server switches to the protected key package
+  /// for FROST signing. Pass [pin] and [policyId] so the client signs with the
+  /// matching protected key — otherwise FROST aggregation will fail with
+  /// "invalid signature".
+  Future<String> settle({String? pin, String? policyId}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settle.");
     }
@@ -1284,12 +1291,12 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // FROST sign - script path means no taproot tweak
-          final sig = await signWithContext(
+          // FROST sign — sign() picks the protected policy KP when
+          // pin+policyId are supplied, or _normalPolicy otherwise.
+          final sig = await sign(
             sighashBytes,
-            _normalPolicy!.keyPackage,
-            _normalPolicy!.publicKeyPackage,
-            null,
+            pin: pin,
+            policyId: policyId,
             applyTweak: !scriptPath,
           );
 
@@ -1323,11 +1330,17 @@ class MpcClient {
   ///
   /// Two rounds. Phase 1 fetches sighashes; phase 2 sends FROST signatures.
   /// When [storeOnly] is true, the cosigner stores the signed intent and
-  /// drives the batch later when the auto-settle threshold is met
-  /// (returns DELEGATED, commitment txid is empty). When false, the cosigner
-  /// joins the next batch immediately (returns SETTLED with the commitment
-  /// txid).
-  Future<String> settleDelegate({bool storeOnly = false}) async {
+  /// drives the batch later when the auto-settle threshold is met (returns
+  /// DELEGATED, commitment txid is empty). When false, the cosigner joins
+  /// the next batch immediately (returns SETTLED with the commitment txid).
+  ///
+  /// Same caveat as [settle]: pass [pin] + [policyId] when an active policy
+  /// covers the VTXO amounts being refreshed.
+  Future<String> settleDelegate({
+    bool storeOnly = false,
+    String? pin,
+    String? policyId,
+  }) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settleDelegate.");
     }
@@ -1354,11 +1367,10 @@ class MpcClient {
 
     for (final sighash in resp1.messagesToSign) {
       final sighashBytes = Uint8List.fromList(sighash);
-      final sig = await signWithContext(
+      final sig = await sign(
         sighashBytes,
-        _normalPolicy!.keyPackage,
-        _normalPolicy!.publicKeyPackage,
-        null,
+        pin: pin,
+        policyId: policyId,
         applyTweak: !scriptPath,
       );
 

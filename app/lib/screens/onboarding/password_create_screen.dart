@@ -59,7 +59,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Create Password')),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(24.0),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -76,6 +76,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
             ),
             const SizedBox(height: 24),
             TextField(
+              key: const Key('passwordField1'),
               controller: _pw1,
               obscureText: _obscure,
               onChanged: (_) => setState(() {}),
@@ -106,6 +107,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
             ),
             const SizedBox(height: 16),
             TextField(
+              key: const Key('passwordField2'),
               controller: _pw2,
               obscureText: _obscure,
               onChanged: (_) => setState(() {}),
@@ -130,6 +132,7 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Checkbox(
+                    key: const Key('passwordAckCheckbox'),
                     value: _acknowledged,
                     onChanged: (v) =>
                         setState(() => _acknowledged = v ?? false),
@@ -145,8 +148,9 @@ class _PasswordCreateScreenState extends State<PasswordCreateScreen> {
                 ],
               ),
             ),
-            const Spacer(),
+            const SizedBox(height: 32),
             ElevatedButton(
+              key: const Key('passwordContinueBtn'),
               onPressed: canContinue
                   ? () {
                       context.push('/onboarding/google-signin', extra: {
