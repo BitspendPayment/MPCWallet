@@ -482,3 +482,100 @@ Load `device_tokens` from sled when the actor spawns. Two surgical edits:
 
 ~15 lines Rust. No proto change, no migration (existing sled rows are
 already valid `Vec<DeviceToken>` JSON).
+
+---
+
+## 5. Cross-isolate Hive contention (push background handler)
+
+### Context
+
+[`push_service.dart::_runBackgroundDelegate`](app/lib/services/push_service.dart)
+opens Hive boxes in the FCM background isolate to restore the
+`MpcClient` and call `settleDelegate(storeOnly: true)`. If the foreground
+app is also running, it holds the same boxes open through `MpcService`.
+
+Hive supports multi-isolate access provided each isolate calls
+`Hive.init(<same path>)`, and the background handler does that. Conflicts
+should be rare because:
+
+- The background handler is short-lived (~3-8s)
+- The actor on the cosigner side serializes commands per-user, so
+  concurrent settleDelegate calls queue up at the actor mailbox
+- The stale-session-recovery guard in
+  [ark_send.rs::settle](cosigner-runtime/src/cosigner/handlers/ark_send.rs)
+  (TODO #1's fix) handles "two Phase-1 calls in flight" by dropping the
+  stale session and rebuilding fresh
+
+### Open monitoring
+
+Watch for any of the following symptoms post-deploy:
+
+- `HiveError`s in `_runBackgroundDelegate` log output
+- Foreground app's `_normalPolicy` returning null unexpectedly after a
+  push arrives (would suggest a Hive write from the background isolate
+  corrupted the foreground's view)
+- Two `settleDelegate` Phase 1 calls landing back-to-back in cosigner
+  logs (visible as "dropping stale session on poll-without-sigs")
+
+### If symptoms surface
+
+Switch to a snapshot pattern: foreground writes a stable JSON snapshot
+of the auth/policy/identity material to a separate file every time it
+changes; background reads only that snapshot. No shared Hive boxes
+across isolates.
+
+### Why not preemptively switch
+
+The snapshot file path adds operational complexity, and the multi-isolate
+Hive path is well-trodden in Flutter ecosystem (firebase_messaging docs
+explicitly support it). Monitor first, refactor only if needed.
+
+---
+
+## 6. Background handler: attested-mode + non-software signer paths
+
+### Context
+
+`_handleBackgroundMessage` currently uses `MpcClient.rest()` only — no
+attestation. Sufficient for the development + test stack where the
+cosigner is `http://10.0.2.2:7074`, but production deployment routes
+through `MpcClient.attested(...)` for enclave PCR0 verification.
+
+Also: the background handler uses no hardware signer. This is fine
+because day-to-day FROST signing uses `_normalPolicy.keyPackage` (the
+wallet's stored share). But:
+
+- If a wallet uses a **protected** policy (PIN-gated), `client.sign`
+  picks the protected `KeyPackage` and applies the PIN-derived
+  correction. The user's PIN isn't available in a background isolate
+  — there's no UI. So a delegate falling under a protected policy
+  cannot be stored from the background path.
+- `settleDelegate` doesn't accept a `policyId` directly, and the
+  cosigner's `settle_delegate` handler doesn't authenticate under a
+  protected policy currently. But if that ever changes (e.g. require
+  PIN for delegate storage), the background path breaks silently.
+
+### Plan
+
+Two small follow-up tasks, both gated on production deployment becoming
+attested:
+
+1. **Attested mode in background**: detect from persisted state whether
+   the foreground was running attested; if so, construct
+   `MpcClient.attested(...)` instead. `AttestedWalletApi.create()` is
+   FFI-heavy but doesn't need a UI thread.
+2. **Document PIN-gated delegate gap**: add a runtime check at the top
+   of `_runBackgroundDelegate` — if the user has any active protected
+   policy AND no plain-policy fallback covers the new VTXO's amount,
+   skip the background work and rely on the foreground refresh.
+
+### Verification
+
+Run the existing background-push UI test
+(`app/integration_test/ark_background_push_test.dart`) against an
+attested deployment after the attested-mode flag lands. Pin-protected
+delegate test would be a new addition.
+
+### Cost
+
+~30-40 LoC Dart, no proto changes. Pure deployment-mode wiring.

@@ -12,9 +12,12 @@ library;
 
 import 'dart:io' show Platform;
 
+import 'package:app_core/client.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:hive/hive.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'mpc_service.dart';
 
@@ -74,11 +77,73 @@ class PushService {
     // Foreground refresh runs through the existing app — nothing to do here
     // beyond logging; the MpcService is already poll-active.
   }
+
+  /// Run the same code path `_handleBackgroundMessage` runs for a
+  /// `vtxo_received` payload, but synchronously from the calling isolate.
+  /// Integration tests use this because Flutter test bindings can't deliver
+  /// real OS push events — but the test still wants to prove the handler's
+  /// work (load Hive, restore client, store delegate) actually runs.
+  @visibleForTesting
+  static Future<void> handleBackgroundMessageForTest(
+      Map<String, String> data) async {
+    if (data['type'] != 'vtxo_received') return;
+    await _runBackgroundDelegate();
+  }
+}
+
+/// Build the server base URL with the same rules `MpcService._baseUrl` uses.
+/// Local hosts get http://host:7074; remote (enclave) hosts get https://host.
+String _baseUrlFor(String host) {
+  const port = 7074;
+  final isLocal = host == '127.0.0.1' ||
+      host == 'localhost' ||
+      host == '10.0.2.2' ||
+      host.startsWith('192.168.');
+  return isLocal ? 'http://$host:$port' : 'https://$host';
+}
+
+/// Construct a fresh REST client, restore identity from Hive, run
+/// `settleDelegate(storeOnly: true)`. Used by both the real background
+/// handler and the test-only entry point.
+///
+/// No hardware signer needed — FROST signing here uses the wallet's own
+/// share (`_normalPolicy.keyPackage`), which `restoreState()` rehydrates
+/// from Hive.
+Future<void> _runBackgroundDelegate({Duration? timeout}) async {
+  final dir = await getApplicationDocumentsDirectory();
+  Hive.init(dir.path);
+  final identityBox = await Hive.openBox('mpc_service_identity');
+  final host = identityBox.get('serverHost') as String?;
+  final storageId = identityBox.get('storageId') as String?;
+  if (host == null || storageId == null) {
+    debugPrint('[push:bg] missing serverHost or storageId in Hive');
+    return;
+  }
+  final client = MpcClient.rest(
+    _baseUrlFor(host),
+    hardwareSigner: null,
+    storageId: storageId,
+  );
+  try {
+    final restored = await client.restoreState();
+    if (!restored) {
+      debugPrint('[push:bg] restoreState returned false (no wallet)');
+      return;
+    }
+    final future = client.settleDelegate(storeOnly: true);
+    await (timeout != null ? future.timeout(timeout) : future);
+    debugPrint('[push:bg] settleDelegate(storeOnly:true) ok');
+  } finally {
+    // No explicit dispose on MpcClient; falls out of scope.
+  }
 }
 
 /// Top-level background handler. Flutter requires this to be a top-level
 /// (non-class) function and annotated with `@pragma('vm:entry-point')` so the
 /// background isolate can resolve it after Tree Shaking.
+///
+/// FROST signing happens with the wallet's own share — no hardware signer
+/// reachability required.
 @pragma('vm:entry-point')
 Future<void> _handleBackgroundMessage(RemoteMessage msg) async {
   if (msg.data['type'] != 'vtxo_received') return;
@@ -88,14 +153,9 @@ Future<void> _handleBackgroundMessage(RemoteMessage msg) async {
     debugPrint('[push:bg] Firebase.initializeApp failed: $e');
     return;
   }
-  // Bringing the full MpcService online from a background isolate is heavy
-  // (Hive, threshold, gRPC channel reconnect). The simplest correct
-  // behavior: write a marker that the foreground refresh path can read on
-  // next resume. The actual auto-settle delegation does not require us to
-  // delegate from the background — it requires us to delegate "soon", which
-  // any subsequent foreground refresh covers.
-  //
-  // We log and exit; the open-app fallback in MpcService.refreshVtxos
-  // handles re-delegation deterministically when the app next runs.
-  debugPrint('[push:bg] vtxo_received (user_id=${msg.data['user_id']})');
+  try {
+    await _runBackgroundDelegate(timeout: const Duration(seconds: 8));
+  } catch (e) {
+    debugPrint('[push:bg] settleDelegate failed: $e — foreground will catch up');
+  }
 }

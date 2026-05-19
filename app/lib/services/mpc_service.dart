@@ -623,6 +623,12 @@ class MpcService extends ChangeNotifier {
   bool _serverHasActiveDelegate = false;
   bool _delegateInFlight = false;
 
+  /// Whether the cosigner currently holds a signed delegate intent for this
+  /// user. Refreshed on every `refreshVtxos()` from `ListVtxosResponse.
+  /// has_active_delegate`. Used by integration tests to verify the auto-
+  /// delegate flow fired.
+  bool get hasActiveDelegate => _serverHasActiveDelegate;
+
   Future<void> refreshVtxos() async {
     if (_client == null) return;
     try {
