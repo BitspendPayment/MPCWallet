@@ -257,23 +257,11 @@ void main() {
         );
 
         // ── Background push handler ─────────────────────────────────
-        // Real OS push delivery isn't reachable from integration tests
-        // (no Firebase project, no real device tokens). What we CAN test
-        // is the load-bearing piece: PushService._runBackgroundDelegate,
-        // exposed for tests as handleBackgroundMessageForTest.
-        //
-        // Setup: Bob sends a second small VTXO to Alice. The cosigner's
-        // vtxo_stream::apply_stream_update invalidates Alice's stored
-        // delegate (it doesn't cover the new outpoint) and deletes the
-        // delegate_sessions sled row. We then invoke the handler
-        // SYNCHRONOUSLY without first calling refreshVtxos — otherwise
-        // foreground _delegateIfNeeded would re-create the delegate and
-        // the test would prove nothing about the background path.
+        // 1500 sats fits Bob's residual budget after the 3000-sat send
+        // above; deliberately no refreshVtxos before the handler call
+        // (it would fire foreground _delegateIfNeeded and steal the work).
         final preBgArkBalance = svcBoard.arkBalance;
-        await bob.sendTo(myArkAddress, 2500);
-        // Wait for vtxo_stream to apply Bob's send. We deliberately do
-        // NOT call refreshVtxos here — that would trigger
-        // _delegateIfNeeded in the foreground.
+        await bob.sendTo(myArkAddress, 1500);
         await Future<void>.delayed(const Duration(seconds: 15));
 
         await PushService.handleBackgroundMessageForTest(const {
@@ -281,9 +269,6 @@ void main() {
           'user_id': '',
         });
 
-        // Verify the handler re-stored the delegate. refreshVtxos will
-        // also fire _delegateIfNeeded, but if the handler did its job
-        // hasActiveDelegate should already be true on the first probe.
         await svcBoard.refreshVtxos();
         final bgDeadline = DateTime.now().add(const Duration(seconds: 30));
         while (!svcBoard.hasActiveDelegate &&
@@ -291,15 +276,17 @@ void main() {
           await tester.pump(const Duration(seconds: 1));
           await svcBoard.refreshVtxos();
         }
+        expect(svcBoard.arkBalance, greaterThanOrEqualTo(
+            preBgArkBalance + BigInt.from(1000)),
+            reason: 'Alice should hold Bob\'s 1500-sat VTXO (after fees)');
         expect(svcBoard.hasActiveDelegate, isTrue,
             reason:
                 'after PushService.handleBackgroundMessageForTest ran, '
-                'the cosigner should hold a stored delegate again. If '
-                'false, _runBackgroundDelegate could not restoreState or '
-                'FROST-sign the new sighashes.');
-        expect(svcBoard.arkBalance >= preBgArkBalance + BigInt.from(2000),
-            isTrue,
-            reason: 'Alice should hold Bob\'s 2500-sat VTXO too');
+                'the cosigner should hold a stored delegate covering '
+                'Bob\'s fresh outpoint. If false, _runBackgroundDelegate '
+                'failed somewhere — Hive open in the background isolate, '
+                'MpcClient.restoreState(), or the FROST sign round of '
+                'settleDelegate(storeOnly:true).');
       }
 
       // ── Policy: delete, then a fresh 30s-window policy to prove rollover ─
