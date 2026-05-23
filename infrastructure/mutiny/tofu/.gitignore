@@ -7,3 +7,8 @@ terraform.tfstate.backup
 backend.tf
 .terraform.lock.hcl
 .artifacts/
+
+# Deploy-time env overrides — values pushed to SSM via env_values map.
+# Holds the plaintext FCM service-account JSON and any other operator
+# secrets that aren't routed through the PCR0-locked secrets: mechanism.
+env_values.auto.tfvars.json
