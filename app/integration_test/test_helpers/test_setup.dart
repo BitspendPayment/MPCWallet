@@ -12,14 +12,6 @@ import 'package:provider/provider.dart';
 
 import 'test_app.dart';
 
-class _AllowSelfSignedCerts extends HttpOverrides {
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    return super.createHttpClient(context)
-      ..badCertificateCallback = (cert, host, port) => true;
-  }
-}
-
 /// Force-disposes the prior widget tree so any Provider-held MpcService
 /// releases its Hive boxes before we try to wipe them. Without this, the
 /// old MpcService keeps `_identityBox` open and Hive's box cache returns
@@ -62,7 +54,6 @@ Future<void> bootApp(
   WidgetTester tester, {
   required BackupStore backupStore,
 }) async {
-  HttpOverrides.global = _AllowSelfSignedCerts();
   GoogleFonts.config.allowRuntimeFetching = false;
   // Suppress RenderFlex overflow warnings in tests. They show as yellow/black
   // stripes in production but fail integration_test runs because the binding

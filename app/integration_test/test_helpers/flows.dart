@@ -23,7 +23,7 @@ class Flows {
     await tester.pumpAndSettle();
     await GoogleSignInPage.signIn(tester);
     await tester.pumpAndSettle();
-    await ServerConnectPage.useDefault(tester);
+    await ServerConnectPage.pickRegtest(tester);
     // Don't pumpAndSettle here — the DKG screen has a CircularProgressIndicator
     // that never "settles" until DKG completes, so pumpAndSettle would block
     // (up to its 10-min cap). waitForReady polls via pump() instead, which is

@@ -404,8 +404,8 @@ void main() {
       await RestorePage.enterPassword(tester, password);
       await RestorePage.tapContinue(tester);
 
-      await pumpUntilFound(tester, find.byKey(const Key('serverConnectBtn')));
-      await ServerConnectPage.useDefault(tester);
+      await pumpUntilFound(tester, find.byKey(const Key('serverPresetRegtest')));
+      await ServerConnectPage.pickRegtest(tester);
       await tester.pumpAndSettle();
       await DkgProgressPage.waitForReady(tester,
           timeout: const Duration(minutes: 2));

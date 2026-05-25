@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'theme/app_theme.dart';
@@ -28,18 +27,8 @@ import 'package:provider/provider.dart';
 import 'services/mpc_service.dart';
 import 'services/push_service.dart';
 
-class _AllowSelfSignedCerts extends HttpOverrides {
-  @override
-  HttpClient createHttpClient(SecurityContext? context) {
-    return super.createHttpClient(context)
-      ..badCertificateCallback = (cert, host, port) => true;
-  }
-}
-
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  // Accept self-signed TLS certificates (enclave uses self-signed certs).
-  HttpOverrides.global = _AllowSelfSignedCerts();
   // Best-effort push init. No-ops gracefully when Firebase config is missing
   // (e.g. CI builds without google-services.json).
   await PushService.initialize();
