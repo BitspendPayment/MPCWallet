@@ -29,7 +29,7 @@ IwLz3/Y=\n\
 
 /// Attestation document fields from the CBOR payload.
 #[derive(Debug)]
-pub(crate) struct AttestationDocument {
+pub struct AttestationDocument {
     pub module_id: String,
     pub timestamp: u64,
     pub digest: String,
@@ -43,7 +43,7 @@ pub(crate) struct AttestationDocument {
 
 /// Result of verifying an attestation document.
 #[allow(dead_code)]
-pub(crate) struct NitroVerifyResult {
+pub struct NitroVerifyResult {
     pub document: AttestationDocument,
     pub signature_ok: bool,
 }
@@ -438,6 +438,11 @@ mod tests {
         assert!(key.is_ok());
     }
 
+    // Gated on the `fixture-tests` feature: needs a captured AWS Nitro
+    // attestation document at tests/fixtures/attestation.b64 which we don't
+    // commit. Enable with `cargo test --features fixture-tests` after
+    // capturing one from a running enclave.
+    #[cfg(feature = "fixture-tests")]
     #[test]
     fn test_verify_real_attestation_document() {
         // Real attestation document captured from a running AWS Nitro Enclave.
@@ -478,6 +483,7 @@ mod tests {
         assert!(result.signature_ok);
     }
 
+    #[cfg(feature = "fixture-tests")]
     #[test]
     fn test_verify_attestation_rejects_tampered_document() {
         let b64 = include_str!("../tests/fixtures/attestation.b64");
