@@ -268,7 +268,7 @@ class _SigningScreenState extends State<SigningScreen> {
       try {
         await wallet.sync();
       } catch (e) {
-        print("Sync failed before sign: $e");
+        debugPrint("Sync failed before sign: $e");
       }
 
       final balance = await wallet.getBalance();
@@ -319,7 +319,7 @@ class _SigningScreenState extends State<SigningScreen> {
           policyId = resolvedPolicyId;
         }
       } catch (e) {
-        print("getPolicyId failed: $e — proceeding without policy");
+        debugPrint("getPolicyId failed: $e — proceeding without policy");
       }
 
       setState(() {
