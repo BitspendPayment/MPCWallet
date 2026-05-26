@@ -46,7 +46,7 @@ app:
       ELECTRUM_PORT: "50001"
       ASP_URL: "https://mutinynet.arkade.sh"
       PERSISTENCE_BACKEND: "enclave"
-      SUPERVISOR_URL: "http://127.0.0.1:7073"
+      SUPERVISOR_URL: "http://127.0.0.1:8080"
 
 
 # Secrets managed by KMS inside the enclave.

@@ -1,12 +1,13 @@
 //! OpenTelemetry initialization for the MPC Wallet server.
 //!
-//! When `ENCLAVE_MGMT_TOKEN` is set, wires three OTLP/HTTP protobuf exporters
-//! targeting the enclave supervisor on 127.0.0.1:{ENCLAVE_PROXY_PORT|7073}:
-//!   - traces  -> POST /v1/enclave-traces
-//!   - metrics -> POST /v1/enclave-metrics
-//!   - logs    -> POST /v1/logs           (supervisor ingest path)
+//! When `ENCLAVE_RUNTIME_TOKEN` is set, wires three OTLP/HTTP protobuf exporters
+//! targeting the enclave supervisor on 127.0.0.1:{ENCLAVE_PROXY_PORT|8080}:
+//!   - traces  -> POST /v1/traces
+//!   - metrics -> POST /v1/metrics
+//!   - logs    -> POST /v1/logs
 //!
-//! When the token is empty, only a stderr `fmt` layer is installed.
+//! All three paths are the OTLP/HTTP spec defaults. When the token is empty,
+//! only a stderr `fmt` layer is installed.
 
 use std::time::Duration;
 
@@ -87,7 +88,7 @@ pub fn init() -> TelemetryGuard {
         };
     }
 
-    let proxy_port = std::env::var("ENCLAVE_PROXY_PORT").unwrap_or_else(|_| "7073".into());
+    let proxy_port = std::env::var("ENCLAVE_PROXY_PORT").unwrap_or_else(|_| "8080".into());
     let base = format!("http://127.0.0.1:{proxy_port}");
 
     let mut auth_headers = std::collections::HashMap::new();
@@ -98,7 +99,7 @@ pub fn init() -> TelemetryGuard {
     let trace_exporter = SpanExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
-        .with_endpoint(format!("{base}/v1/enclave-traces"))
+        .with_endpoint(format!("{base}/v1/traces"))
         .with_headers(auth_headers.clone())
         .with_timeout(Duration::from_secs(10))
         .build()
@@ -113,7 +114,7 @@ pub fn init() -> TelemetryGuard {
     let metric_exporter = MetricExporter::builder()
         .with_http()
         .with_protocol(Protocol::HttpBinary)
-        .with_endpoint(format!("{base}/v1/enclave-metrics"))
+        .with_endpoint(format!("{base}/v1/metrics"))
         .with_headers(auth_headers.clone())
         .with_timeout(Duration::from_secs(10))
         .build()

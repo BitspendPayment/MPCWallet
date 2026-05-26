@@ -4,7 +4,7 @@ use super::traits::{KvStore, PersistenceError, SecretStore};
 
 /// Enclave supervisor-backed persistence store.
 ///
-/// Talks to the enclave supervisor at `http://127.0.0.1:7073` (or configured URL).
+/// Talks to the enclave supervisor at `http://127.0.0.1:8080` (or configured URL).
 /// All requests carry `Authorization: Bearer {mgmt_token}`.
 ///
 /// Storage API (`/v1/storage/`):

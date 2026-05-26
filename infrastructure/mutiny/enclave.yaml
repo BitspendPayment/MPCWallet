@@ -45,7 +45,7 @@ app:
       ELECTRUM_PORT: "50001"
       ASP_URL: "https://mutinynet.arkade.sh"
       PERSISTENCE_BACKEND: "enclave"
-      SUPERVISOR_URL: "http://127.0.0.1:7073"
+      SUPERVISOR_URL: "http://127.0.0.1:8080"
       # Placeholder so the key joins ENCLAVE_APP_ENV_KEYS in the EIF; the
       # runtime overlays the real JSON from SSM /env/FCM_SERVICE_ACCOUNT_JSON
       # at boot (populated by tofu env_values, never committed).
