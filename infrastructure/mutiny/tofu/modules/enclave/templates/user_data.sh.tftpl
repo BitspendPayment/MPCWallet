@@ -95,15 +95,12 @@ cat <<EOF >> /etc/environment
 ENCLAVE_APP_NAME=${app_name}
 EIF_PATH=/home/ec2-user/app/server/enclave.eif
 ENCLAVE_NITRIDING_ENABLED=true
-ENCLAVE_NITRIDING_FQDN=example.com
-ENCLAVE_KMS_KEY_ID=${kms_key_id}
 ENCLAVE_DEPLOYMENT=${dev_mode}
 ENCLAVE_AWS_REGION=${region}
 ENCLAVE_MIGRATION_COOLDOWN=${migration_cooldown}
-ENCLAVE_PREVIOUS_PCR0=${previous_pcr0}
 MEMORY_MIB=4320
 CPU_COUNT=2
-GVPROXY_FORWARD_PORTS=443 7073
+GVPROXY_FORWARD_PORTS=443
 EOF
 
 systemctl enable --now enclave-supervisor.service

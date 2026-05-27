@@ -5,5 +5,8 @@ terraform.tfstate
 terraform.tfstate.backup
 .terraform/
 backend.tf
-.terraform.lock.hcl
-.artifacts/
+modules/enclave/.signing/
+
+# Deploy-time env overrides — contains the plaintext FCM service-account
+# JSON (and any other operator-provided env values). Holds real secrets.
+env_values.auto.tfvars.json

@@ -65,7 +65,7 @@ impl ServerConfig {
             persistence_backend: env::var("PERSISTENCE_BACKEND")
                 .unwrap_or_else(|_| "sled".to_string()),
             supervisor_url: env::var("SUPERVISOR_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:7073".to_string()),
+                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
             enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
             cosigner_wasm_path: env::var("COSIGNER_WASM_PATH").unwrap_or_else(|_| {
                 "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()

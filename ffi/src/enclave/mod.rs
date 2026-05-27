@@ -1,26 +1,40 @@
-//! FFI bindings for the forked enclave-client crate.
+//! FFI bindings for the pure-verification `enclave-client` crate.
 //!
-//! Thin C-ABI layer -- most logic lives in enclave-client.
-//! The client manages its own attestation cache; no shadow cache here.
+//! Three stateless C-ABI functions — no handles, no async, no HTTP.
+//! Callers (Dart, integration tests) drive the attestation and request
+//! protocol themselves and pass bytes in for crypto verification.
 
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
+use std::slice;
 
-use enclave_client::{Client, Options};
+use enclave_client::{
+    extract_app_key_hash, verify_attestation_doc as verify_doc,
+    verify_schnorr_signature as verify_sig,
+};
 use serde::Serialize;
 
-/// Opaque client handle.
-pub struct ClientHandle {
-    client: Client,
-    rt: tokio::runtime::Runtime,
+#[derive(Serialize)]
+struct AttestationVerifyResult {
+    ok: bool,
+    /// Hex-encoded PCR0 from the verified document.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pcr0: String,
+    /// Map of PCR index → hex-encoded PCR value (only non-empty PCRs).
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
+    pcrs: HashMap<String, String>,
+    /// SHA-256 hex of the enclave's attestation pubkey, extracted from
+    /// the document's UserData. Empty when key binding isn't supported.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    app_key_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
-/// JSON response for HTTP requests.
 #[derive(Serialize)]
-struct FfiResponse {
-    status_code: u16,
-    body: String,
-    signature_verified: bool,
+struct SignatureVerifyResult {
+    ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -38,149 +52,118 @@ fn from_c_str(ptr: *const c_char) -> String {
         .into_owned()
 }
 
-/// Create a new enclave client with eager attestation verification.
+fn from_bytes<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+    if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        unsafe { slice::from_raw_parts(ptr, len) }
+    }
+}
+
+/// Verify a CBOR-encoded COSE_Sign1 AWS Nitro attestation document.
 ///
-/// Returns null on error (enclave unreachable, PCR0 mismatch, etc.)
+/// `doc_ptr`/`doc_len` — raw bytes of the attestation document (already
+///   base64-decoded by the caller).
+/// `expected_pcr0` — hex-encoded PCR0 the caller wants enforced.
+/// `nonce_ptr`/`nonce_len` — the 20-byte nonce the caller put in the
+///   GET query when fetching the document; the verifier asserts the
+///   embedded nonce matches.
+///
+/// Returns a JSON string:
+///   `{ "ok": true,  "pcr0": "...", "pcrs": {...}, "app_key_hash": "..." }`
+///   `{ "ok": false, "error": "..." }`
+///
+/// The returned string must be freed with `enclave_string_free`.
 #[no_mangle]
-pub extern "C" fn enclave_client_new(
-    base_url: *const c_char,
-    pcr0: *const c_char,
-    cache_ttl_secs: u32,
-) -> *mut ClientHandle {
-    let base_url = from_c_str(base_url);
-    let pcr0 = from_c_str(pcr0);
-    let ttl = if cache_ttl_secs == 0 { 60 } else { cache_ttl_secs as u64 };
+pub extern "C" fn enclave_verify_attestation_doc(
+    doc_ptr: *const u8,
+    doc_len: usize,
+    expected_pcr0: *const c_char,
+    nonce_ptr: *const u8,
+    nonce_len: usize,
+) -> *mut c_char {
+    let doc = from_bytes(doc_ptr, doc_len);
+    let pcr0 = from_c_str(expected_pcr0);
+    let nonce = from_bytes(nonce_ptr, nonce_len);
 
-    let rt = match tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-    {
-        Ok(rt) => rt,
-        Err(_) => return std::ptr::null_mut(),
+    let result = match verify_doc(doc, &pcr0, nonce) {
+        Ok(r) => r,
+        Err(e) => {
+            return to_c_string(
+                &serde_json::to_string(&AttestationVerifyResult {
+                    ok: false,
+                    pcr0: String::new(),
+                    pcrs: HashMap::new(),
+                    app_key_hash: String::new(),
+                    error: Some(e.to_string()),
+                })
+                .unwrap_or_default(),
+            );
+        }
     };
 
-    let opts = Options {
-        expected_pcr0: pcr0,
-        cache_ttl: std::time::Duration::from_secs(ttl),
-        insecure_tls: true,
-        ..Default::default()
-    };
+    // Try to extract the appKeyHash — if the document predates the
+    // nitriding key-binding format, return ok with empty app_key_hash
+    // and let the caller decide how to handle it.
+    let app_key_hash = extract_app_key_hash(&result.document).unwrap_or_default();
 
-    // Use init() for eager verification + connection warmup.
-    match rt.block_on(Client::init(&base_url, opts)) {
-        Ok(client) => Box::into_raw(Box::new(ClientHandle { client, rt })),
-        Err(_) => std::ptr::null_mut(),
+    let mut pcrs = HashMap::new();
+    for (idx, bytes) in &result.document.pcrs {
+        if !bytes.is_empty() {
+            pcrs.insert(idx.to_string(), hex::encode(bytes));
+        }
     }
+
+    let pcr0_hex = result
+        .document
+        .pcrs
+        .get(&0)
+        .map(hex::encode)
+        .unwrap_or_default();
+
+    to_c_string(
+        &serde_json::to_string(&AttestationVerifyResult {
+            ok: true,
+            pcr0: pcr0_hex,
+            pcrs,
+            app_key_hash,
+            error: None,
+        })
+        .unwrap_or_default(),
+    )
 }
 
-/// Make a verified POST request. Returns JSON string.
+/// Verify a BIP-340 Schnorr signature over `SHA256(body)` using the
+/// hex-encoded secp256k1 attestation pubkey (compressed or x-only).
+///
+/// Returns a JSON string:
+///   `{ "ok": true }`
+///   `{ "ok": false, "error": "..." }`
+///
+/// The returned string must be freed with `enclave_string_free`.
 #[no_mangle]
-pub extern "C" fn enclave_client_post(
-    handle: *mut ClientHandle,
-    path: *const c_char,
-    body: *const c_char,
+pub extern "C" fn enclave_verify_schnorr_signature(
+    body_ptr: *const u8,
+    body_len: usize,
+    sig_hex: *const c_char,
+    pubkey_hex: *const c_char,
 ) -> *mut c_char {
-    let handle = unsafe {
-        if handle.is_null() {
-            return to_c_string(r#"{"error":"null client handle"}"#);
-        }
-        &*handle
-    };
-    let path = from_c_str(path);
-    let body = from_c_str(body);
+    let body = from_bytes(body_ptr, body_len);
+    let sig = from_c_str(sig_hex);
+    let pk = from_c_str(pubkey_hex);
 
-    let resp = match handle.rt.block_on(handle.client.post(&path, body)) {
-        Ok(r) => FfiResponse {
-            status_code: r.status_code,
-            body: String::from_utf8_lossy(&r.body).into_owned(),
-            signature_verified: r.signature_verified,
-            error: None,
-        },
-        Err(e) => FfiResponse {
-            status_code: 0,
-            body: String::new(),
-            signature_verified: false,
+    let result = match verify_sig(body, &sig, &pk) {
+        Ok(()) => SignatureVerifyResult { ok: true, error: None },
+        Err(e) => SignatureVerifyResult {
+            ok: false,
             error: Some(e.to_string()),
         },
     };
 
-    to_c_string(&serde_json::to_string(&resp).unwrap_or_default())
+    to_c_string(&serde_json::to_string(&result).unwrap_or_default())
 }
 
-/// Make a verified GET request. Returns JSON string.
-#[no_mangle]
-pub extern "C" fn enclave_client_get(
-    handle: *mut ClientHandle,
-    path: *const c_char,
-) -> *mut c_char {
-    let handle = unsafe {
-        if handle.is_null() {
-            return to_c_string(r#"{"error":"null client handle"}"#);
-        }
-        &*handle
-    };
-    let path = from_c_str(path);
-
-    let resp = match handle.rt.block_on(handle.client.get(&path)) {
-        Ok(r) => FfiResponse {
-            status_code: r.status_code,
-            body: String::from_utf8_lossy(&r.body).into_owned(),
-            signature_verified: r.signature_verified,
-            error: None,
-        },
-        Err(e) => FfiResponse {
-            status_code: 0,
-            body: String::new(),
-            signature_verified: false,
-            error: Some(e.to_string()),
-        },
-    };
-
-    to_c_string(&serde_json::to_string(&resp).unwrap_or_default())
-}
-
-/// Read cached attestation status (no network call).
-#[no_mangle]
-pub extern "C" fn enclave_client_attestation_status(
-    handle: *mut ClientHandle,
-) -> *mut c_char {
-    let handle = unsafe {
-        if handle.is_null() {
-            return to_c_string(r#"{"verified":false,"pcr0":"","attestation_key":"","verified_at_epoch_secs":0,"ttl_remaining_secs":0}"#);
-        }
-        &*handle
-    };
-
-    let status = handle.client.attestation_status();
-    to_c_string(&serde_json::to_string(&status).unwrap_or_default())
-}
-
-/// Force re-verification and return updated status.
-#[no_mangle]
-pub extern "C" fn enclave_client_verify(
-    handle: *mut ClientHandle,
-) -> *mut c_char {
-    let handle = unsafe {
-        if handle.is_null() {
-            return to_c_string(r#"{"verified":false,"error":"null client handle"}"#);
-        }
-        &*handle
-    };
-
-    let _ = handle.rt.block_on(handle.client.verify_attestation());
-    let status = handle.client.attestation_status();
-    to_c_string(&serde_json::to_string(&status).unwrap_or_default())
-}
-
-/// Free a client handle.
-#[no_mangle]
-pub extern "C" fn enclave_client_free(handle: *mut ClientHandle) {
-    if !handle.is_null() {
-        unsafe { drop(Box::from_raw(handle)); }
-    }
-}
-
-/// Free a string returned by FFI functions.
+/// Free a string returned by any of the verifier FFI functions.
 #[no_mangle]
 pub extern "C" fn enclave_string_free(s: *mut c_char) {
     if !s.is_null() {

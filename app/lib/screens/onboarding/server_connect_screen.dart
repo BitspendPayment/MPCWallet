@@ -1,8 +1,12 @@
+import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../services/mpc_service.dart';
+
+const String _regtestHost = '10.0.2.2';
+const String _mutinyHost = 'mutiny.vtxos.network';
 
 class ServerConnectionScreen extends StatefulWidget {
   const ServerConnectionScreen({super.key});
@@ -12,44 +16,30 @@ class ServerConnectionScreen extends StatefulWidget {
 }
 
 class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
-  late final TextEditingController _urlController;
-  bool _isChecking = false;
+  String? _selecting;
 
-  @override
-  void initState() {
-    super.initState();
-    // Physical device with USB signer uses ADB reverse → 127.0.0.1
-    _urlController = TextEditingController(text: '127.0.0.1');
-  }
-
-  void _connect() async {
-    final extras = GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
-
-    setState(() {
-      _isChecking = true;
-    });
-
-    final host = _urlController.text.trim();
-    if (host.isNotEmpty) {
+  Future<void> _pick(String host) async {
+    if (_selecting != null) return;
+    final extras =
+        GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
+    setState(() => _selecting = host);
+    try {
       await context.read<MpcService>().setHost(host);
-    }
-
-    // Simulate network check (or in real app, we might check connectivity here)
-    await Future.delayed(const Duration(seconds: 1));
-
-    if (mounted) {
-      setState(() {
-        _isChecking = false;
-      });
-      // Forward signerKind / password / isRestore to the DKG screen.
+      if (!mounted) return;
       context.push('/onboarding/dkg', extra: extras);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _selecting = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Connection failed: $e')),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Connect to Server')),
+      appBar: AppBar(title: const Text('Choose a Server')),
       body: Padding(
         padding: const EdgeInsets.all(24.0),
         child: Column(
@@ -62,33 +52,98 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
             ),
             const SizedBox(height: 8),
             Text(
-              'Enter the URL of the MPC co-signing server.',
+              'Pick where the MPC co-signing server is running.',
               style: GoogleFonts.inter(color: Colors.white70),
             ),
             const SizedBox(height: 24),
-            TextField(
-              key: const Key('serverUrlField'),
-              controller: _urlController,
-              decoration: const InputDecoration(
-                labelText: 'Server Host / IP',
-                prefixIcon: Icon(Icons.dns),
-                hintText: 'e.g. 10.0.2.2 or 192.168.1.x',
+            _PresetCard(
+              keyName: 'serverPresetMutiny',
+              icon: Icons.shield_outlined,
+              title: 'Mutiny',
+              subtitle: 'Production enclave at mutiny.vtxos.network',
+              busy: _selecting == _mutinyHost,
+              disabled: _selecting != null && _selecting != _mutinyHost,
+              onTap: () => _pick(_mutinyHost),
+            ),
+            if (kDebugMode) ...[
+              const SizedBox(height: 16),
+              _PresetCard(
+                keyName: 'serverPresetRegtest',
+                icon: Icons.developer_board,
+                title: 'Regtest (local)',
+                subtitle:
+                    'Local cosigner-runtime on $_regtestHost — for development',
+                busy: _selecting == _regtestHost,
+                disabled: _selecting != null && _selecting != _regtestHost,
+                onTap: () => _pick(_regtestHost),
               ),
-              style: GoogleFonts.inter(color: Colors.white),
-            ),
-            const Spacer(),
-            ElevatedButton(
-              key: const Key('serverConnectBtn'),
-              onPressed: _isChecking ? null : _connect,
-              child: _isChecking
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Connect & Start DKG'),
-            ),
+            ],
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PresetCard extends StatelessWidget {
+  const _PresetCard({
+    required this.keyName,
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.busy,
+    required this.disabled,
+    required this.onTap,
+  });
+
+  final String keyName;
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final bool busy;
+  final bool disabled;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: Key(keyName),
+      child: InkWell(
+        onTap: disabled ? null : onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Row(
+            children: [
+              Icon(icon, size: 32),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: GoogleFonts.inter(
+                          fontSize: 16, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      subtitle,
+                      style: GoogleFonts.inter(
+                          fontSize: 13, color: Colors.white70),
+                    ),
+                  ],
+                ),
+              ),
+              if (busy)
+                const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              else
+                const Icon(Icons.chevron_right),
+            ],
+          ),
         ),
       ),
     );

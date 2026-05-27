@@ -80,10 +80,10 @@ class GoogleSignInPage {
 }
 
 class ServerConnectPage {
-  static Future<void> useDefault(WidgetTester tester) =>
-      _tapKey(tester, 'serverConnectBtn');
-  static Future<void> setHost(WidgetTester tester, String host) =>
-      _enterText(tester, 'serverUrlField', host);
+  static Future<void> pickRegtest(WidgetTester tester) =>
+      _tapKey(tester, 'serverPresetRegtest');
+  static Future<void> pickMutiny(WidgetTester tester) =>
+      _tapKey(tester, 'serverPresetMutiny');
 }
 
 class DkgProgressPage {

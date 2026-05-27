@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "575541915148",
+    "project_id": "vtxos-7afb3",
+    "storage_bucket": "vtxos-7afb3.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:575541915148:android:5fbaa581de7d4686378829",
+        "android_client_info": {
+          "package_name": "com.example.ap"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDr3wlKcGDo90lzqCctChmbrMwuwFemNh0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

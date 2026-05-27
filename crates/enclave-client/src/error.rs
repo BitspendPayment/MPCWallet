@@ -33,18 +33,6 @@ pub enum Error {
     #[error("signature verification failed")]
     SignatureVerification,
 
-    #[error("manifest error: {0}")]
-    Manifest(String),
-
-    #[error("provenance verification failed: {0}")]
-    Provenance(String),
-
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
-
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
     #[error("CBOR error: {0}")]
     Cbor(String),
 
