@@ -50,6 +50,8 @@ app:
       ASP_URL: "https://mutinynet.arkade.sh"
       PERSISTENCE_BACKEND: "enclave"
       SUPERVISOR_URL: "http://127.0.0.1:8080"
+      AUTO_SETTLE_SAFETY_MARGIN_SECS: "86400"
+
 
 
 # Secrets managed by KMS inside the enclave.
@@ -61,3 +63,9 @@ secrets:
     env_var: APP_SIGNING_KEY
   # - name: api_token
   #   env_var: APP_API_TOKEN
+
+tls:
+  provider: letsencrypt
+  fqdn: "mutiny.vtxos.network"
+  email: "joshua@vtxos.app"
+  route53_zone_id: "Z0182614JSFDPB9F5ALY"
