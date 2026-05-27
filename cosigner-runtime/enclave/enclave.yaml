@@ -9,11 +9,13 @@ prefix: dev                      # Deployment prefix (stack = {prefix}Nitro{Name
 instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
 previous_pcr0: "b1686b865467994579c99b6b3f61bf051184fed7eaa018a9b99c20415d1821590e862cce34db32bc4516bdafc9a7eb56"
+is_kms_key_locked: false
+
 
 runtime:
-  rev: "v0.0.74"
-  hash: "sha256-9cXFGEcexHZr1JEqU004Okxs55kQdvb7fm4221qgWMU="
-  vendor_hash: "sha256-2ZX9x2voIwVkUsmrZvhJssAQqnCh8/HLwopL5HpiaOg="
+  rev: "v0.0.79"
+  hash: "sha256-sIDpJVIuOzyl1NlmPA0qOks61ppsTtyc3pJYIq/4sWY="
+  vendor_hash: "sha256-kkgp+uxc9pohZiCnz84nyXroUzsPhhtb0VgGa3dQgUo="
 
 app:
   language: "rust"               # App language: go, nodejs, dotnet, rust
@@ -24,9 +26,9 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "7edf56bd2724404b1d7dc84c9219f76d7afb86ef"                    # Git commit SHA (required)
-  nix_hash: "sha256-xu5GDMZsomXm0mvnh+U1V+4NolOq6GoIZ/nzsEhrEaA="                   # Nix source hash: nix-prefetch-url --unpack (required)
-  nix_vendor_hash: "sha256-FoCcAI8Fgj/GLbOWvmC42L+JbT6xNXkwokjVHAQk560="            # Go vendor hash (required)
+  nix_rev: "4ddc35ba459d57806994df559c0800f51e94f022"                    # Git commit SHA (required)
+  nix_hash: "sha256-TvT2/x+s0np+e65v0SxzHp+npQip20heLPCz/kRYc0k="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_vendor_hash: "sha256-NNLxGetud2k0OXQAgbRc5QFL2fDWyVxFkt6GB6HqpZA="            # Go vendor hash (required)
   nix_sub_packages:              # Go sub-packages to build
     - "."
   nix_subdir: "cosigner-runtime"       # Subdirectory for monorepo
@@ -39,6 +41,7 @@ app:
   # Environment variables baked into the EIF.
   # Template vars: {{region}}, {{prefix}}, {{version}}
   env:
+      ENCLAVE_NITRIDING_UPSTREAM: "h1"
       PORT: "7074"
       COSIGNER_WASM_PATH: "/app/cosigner.wasm"
       BITCOIN_NETWORK: "signet"

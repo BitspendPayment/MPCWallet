@@ -37,7 +37,6 @@ module "enclave" {
   local             = var.local
   secrets           = var.secrets
   migration_cooldown = var.migration_cooldown
-  previous_pcr0     = var.previous_pcr0
   expected_pcr0     = var.expected_pcr0
   supervisor_url          = var.supervisor_url
   github_owner  = var.github_owner
@@ -49,6 +48,7 @@ module "enclave" {
   supervisor_binary_path = var.supervisor_binary_path
 
   env_values = var.env_values
+  tls        = var.tls
 }
 
 # =============================================================================
@@ -105,12 +105,6 @@ variable "migration_cooldown" {
   description = "Migration cooldown duration string."
   type        = string
   default     = "0s"
-}
-
-variable "previous_pcr0" {
-  description = "Previous PCR0 hash for migration chain validation."
-  type        = string
-  default     = "genesis"
 }
 
 variable "expected_pcr0" {
@@ -174,6 +168,22 @@ variable "env_values" {
   default     = {}
 }
 
+variable "tls" {
+  description = "TLS settings for the enclave's public HTTPS listener, published to SSM as /<deployment>/<app>/env/ENCLAVE_NITRIDING_* and read by the runtime at boot to select the cert source (self-signed or ACME). route53_zone_id, when set, opts into automatic A-record management in that zone for fqdn."
+  type = object({
+    fqdn            = string
+    provider        = string
+    email           = string
+    route53_zone_id = string
+  })
+  default = {
+    fqdn            = ""
+    provider        = "self-signed"
+    email           = ""
+    route53_zone_id = ""
+  }
+}
+
 
 # =============================================================================
 # Outputs
@@ -184,12 +194,6 @@ variable "env_values" {
 output "ec2_role_arn" {
   description = "EC2 instance role ARN."
   value       = module.enclave.ec2_role_arn
-}
-
-output "kms_key_id" {
-  description = "KMS encryption key ID."
-  value       = module.enclave.kms_key_id
-  sensitive   = true
 }
 
 output "instance_id" {
@@ -205,5 +209,10 @@ output "elastic_ip" {
 output "storage_bucket" {
   description = "S3 storage bucket name."
   value       = module.enclave.storage_bucket
+}
+
+output "pcr0_signing_key_arn" {
+  description = "ARN of the PCR0 signing key. The identity running 'tofu apply' must have kms:Sign + kms:GetPublicKey on this key."
+  value       = module.enclave.pcr0_signing_key_arn
 }
 

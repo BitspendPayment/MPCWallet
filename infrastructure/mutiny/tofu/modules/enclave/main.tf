@@ -77,12 +77,6 @@ variable "migration_cooldown" {
   default     = "0s"
 }
 
-variable "previous_pcr0" {
-  description = "Previous PCR0 hash for migration chain validation."
-  type        = string
-  default     = "genesis"
-}
-
 variable "expected_pcr0" {
   description = "Expected PCR0 of the current EIF (from pcr.json). Used to trigger migrations."
   type        = string
@@ -145,135 +139,121 @@ variable "env_values" {
   default     = {}
 }
 
+variable "tls" {
+  description = "TLS settings for the enclave's public HTTPS listener, published to SSM as /<deployment>/<app>/env/ENCLAVE_NITRIDING_* and read by the runtime at boot to select the cert source (self-signed or ACME). route53_zone_id, when set, opts into automatic A-record management in that zone for fqdn."
+  type = object({
+    fqdn            = string
+    provider        = string
+    email           = string
+    route53_zone_id = string
+  })
+  default = {
+    fqdn            = ""
+    provider        = "self-signed"
+    email           = ""
+    route53_zone_id = ""
+  }
+}
+
 
 # =============================================================================
 # KMS
 # =============================================================================
 
-# KMS encryption key for enclave secrets.
-#
-# Created via AWS CLI (null_resource) instead of a native tofu resource
-# because the enclave locks the key policy to PCR0 at first boot, and the
-# supervisor replaces the key entirely during migration. Tofu cannot
-# refresh a locked key (DescribeKey/GetKeyPolicy/GetKeyRotationStatus all
-# fail with AccessDenied), so the key must not exist as a tofu resource.
-#
-# The key ID is stored in SSM and read back via a data source. All other
-# resources reference locals.kms_key_id / locals.kms_key_arn.
-# Key deletion is handled by the supervisor's destroy provisioner.
+# KMSKeyID placeholder. The enclave creates the KMS key with a PCR0-locked
+# policy at first boot (runtime EnsureKeyID) and writes the real ID here.
+# ignore_changes keeps tofu apply from fighting that runtime write. On destroy
+# the EC2 destroy provisioner shells out to the supervisor to schedule key
+# deletion before the role is torn down.
+resource "aws_ssm_parameter" "kms_key_id" {
+  name      = "/${var.deployment}/${var.app_name}/KMSKeyID"
+  type      = "String"
+  value     = "UNSET"
+  overwrite = true
 
-resource "null_resource" "kms_key" {
-  # Only runs once per deployment. The supervisor handles key rotation
-  # during migration (creates new keys, updates SSM).
-  triggers = {
-    deployment = var.deployment
-    app_name   = var.app_name
-    region     = var.region
+  lifecycle {
+    ignore_changes = [value]
   }
+}
+
+# PCR0 signing key. Deleting it makes every past signature un-verifiable —
+# the 30-day deletion window is the only safety net.
+resource "aws_kms_key" "pcr0_signing" {
+  description              = "${local.prefix} PCR0 signing key (ECC_NIST_P384)"
+  customer_master_key_spec = "ECC_NIST_P384"
+  key_usage                = "SIGN_VERIFY"
+  enable_key_rotation      = false
+  deletion_window_in_days  = 30
+
+  lifecycle {
+    prevent_destroy = false
+  }
+}
+
+resource "aws_kms_alias" "pcr0_signing" {
+  name          = "alias/${local.prefix}-pcr0-signing"
+  target_key_id = aws_kms_key.pcr0_signing.key_id
+}
+
+resource "terraform_data" "sign_pcr0" {
+  triggers_replace = [local.effective_pcr0, aws_kms_key.pcr0_signing.key_id]
 
   provisioner "local-exec" {
-    command = <<-EOT
-      set -e
-
-      # Check if a key already exists in SSM (idempotent).
-      EXISTING=$(aws ssm get-parameter \
-        --name "/${var.deployment}/${var.app_name}/KMSKeyID" \
-        --region ${var.region} --query 'Parameter.Value' --output text 2>/dev/null || echo "UNSET")
-      if [ "$EXISTING" != "UNSET" ] && [ -n "$EXISTING" ]; then
-        echo "KMS key already exists in SSM: $EXISTING"
-        exit 0
-      fi
-
-      # Create the key.
-      KEY_ID=$(aws kms create-key \
-        --description "${local.prefix} enclave encryption key" \
-        --region ${var.region} \
-        --tags TagKey=AppName,TagValue=${var.app_name} TagKey=Deployment,TagValue=${var.deployment} TagKey=ManagedBy,TagValue=opentofu \
-        --query 'KeyMetadata.KeyId' --output text)
-      echo "Created KMS key: $KEY_ID"
-
-      # Apply initial key policy.
-      POLICY='${jsonencode({
-        Version = "2012-10-17"
-        Statement = [
-          {
-            Sid       = "AllowRootAccount"
-            Effect    = "Allow"
-            Principal = { AWS = "arn:aws:iam::${var.account}:root" }
-            Action    = "kms:*"
-            Resource  = "*"
-          },
-          {
-            Sid       = "AllowInstanceRole"
-            Effect    = "Allow"
-            Principal = { AWS = aws_iam_role.instance.arn }
-            Action = [
-              "kms:Encrypt",
-              "kms:Decrypt",
-              "kms:GenerateDataKey",
-              "kms:DescribeKey",
-              "kms:PutKeyPolicy",
-              "kms:GetKeyPolicy",
-            ]
-            Resource = "*"
-          },
-        ]
-      })}'
-
-      aws kms put-key-policy --key-id "$KEY_ID" --policy-name default \
-        --policy "$POLICY" --region ${var.region}
-
-      # Store in SSM.
-      aws ssm put-parameter \
-        --name "/${var.deployment}/${var.app_name}/KMSKeyID" \
-        --value "$KEY_ID" --type String --overwrite \
-        --region ${var.region} --no-cli-pager
-
-      echo "KMS key $KEY_ID stored in SSM"
-    EOT
-  }
-
-  # On destroy: schedule the KMS key for deletion and remove the SSM pointer
-  # so that a subsequent apply creates a fresh key.
-  provisioner "local-exec" {
-    when    = destroy
-    command = <<-EOT
-      set -e
-      REGION="${lookup(self.triggers, "region", "us-east-1")}"
-      DEPLOYMENT="${self.triggers.deployment}"
-      APP_NAME="${self.triggers.app_name}"
-
-      KEY_ID=$(aws ssm get-parameter \
-        --name "/$DEPLOYMENT/$APP_NAME/KMSKeyID" \
-        --region "$REGION" --query 'Parameter.Value' --output text 2>/dev/null || echo "UNSET")
-
-      if [ "$KEY_ID" != "UNSET" ] && [ -n "$KEY_ID" ]; then
-        echo "Scheduling KMS key $KEY_ID for deletion (7-day window)..."
-        aws kms schedule-key-deletion \
-          --key-id "$KEY_ID" \
-          --pending-window-in-days 7 \
-          --region "$REGION" 2>/dev/null || echo "Key already pending deletion or not found"
-
-        echo "Removing KMSKeyID SSM parameter..."
-        aws ssm delete-parameter \
-          --name "/$DEPLOYMENT/$APP_NAME/KMSKeyID" \
-          --region "$REGION" 2>/dev/null || echo "SSM parameter already removed"
-      else
-        echo "No KMS key found in SSM — nothing to clean up"
-      fi
+    # bash for pipefail; default /bin/sh is dash on slim images.
+    interpreter = ["bash", "-c"]
+    command     = <<-EOT
+      set -euo pipefail
+      mkdir -p ${local.signing_dir}
+      # hex → bytes without xxd (not in slim images)
+      printf '%b' "$(printf '%s' "${local.effective_pcr0}" | sed 's/../\\x&/g')" \
+        > ${local.signing_dir}/pcr0.bin
+      aws kms get-public-key \
+        --key-id ${aws_kms_key.pcr0_signing.arn} \
+        --query PublicKey --output text \
+        | base64 -d > ${local.signing_dir}/pubkey.der
+      openssl ec -pubin -inform DER -outform PEM \
+        < ${local.signing_dir}/pubkey.der \
+        > ${local.signing_dir}/pubkey.pem
+      aws kms sign \
+        --key-id ${aws_kms_key.pcr0_signing.arn} \
+        --message fileb://${local.signing_dir}/pcr0.bin \
+        --message-type DIGEST \
+        --signing-algorithm ECDSA_SHA_384 \
+        --query Signature --output text \
+        > ${local.signing_dir}/signature.b64
     EOT
   }
 }
 
-# Read the KMS key ID from SSM (written by null_resource.kms_key or supervisor).
-data "aws_ssm_parameter" "kms_key_id_lookup" {
-  name       = "/${var.deployment}/${var.app_name}/KMSKeyID"
-  depends_on = [null_resource.kms_key]
+data "local_file" "pcr0_pubkey_pem" {
+  filename   = "${local.signing_dir}/pubkey.pem"
+  depends_on = [terraform_data.sign_pcr0]
 }
 
-locals {
-  kms_key_id  = data.aws_ssm_parameter.kms_key_id_lookup.value
-  kms_key_arn = "arn:aws:kms:${var.region}:${var.account}:key/${local.kms_key_id}"
+data "local_file" "pcr0_signature_b64" {
+  filename   = "${local.signing_dir}/signature.b64"
+  depends_on = [terraform_data.sign_pcr0]
+}
+
+resource "aws_ssm_parameter" "pcr0_pubkey" {
+  name      = "/${var.deployment}/${var.app_name}/Signing/PubkeyPEM"
+  type      = "String"
+  value     = data.local_file.pcr0_pubkey_pem.content
+  overwrite = true
+}
+
+resource "aws_ssm_parameter" "pcr0_value" {
+  name      = "/${var.deployment}/${var.app_name}/Signing/PCR0"
+  type      = "String"
+  value     = local.effective_pcr0
+  overwrite = true
+}
+
+resource "aws_ssm_parameter" "pcr0_signature" {
+  name      = "/${var.deployment}/${var.app_name}/Signing/Signature"
+  type      = "String"
+  value     = trimspace(data.local_file.pcr0_signature_b64.content)
+  overwrite = true
 }
 
 # =============================================================================
@@ -344,7 +324,9 @@ data "aws_iam_policy_document" "enclave" {
     ]
   }
 
-  # SSM: read/write on secret ciphertext parameters.
+  # SSM: read/write on secret + DEK ciphertext parameters. Paths are key-scoped
+  # (/.../{secret}/Ciphertext/{kmsKeyId}) and created by the runtime at boot /
+  # migration, so the wildcard covers every KMS key generation.
   statement {
     sid = "SSMSecretParams"
     actions = [
@@ -352,29 +334,36 @@ data "aws_iam_policy_document" "enclave" {
       "ssm:PutParameter",
     ]
     resources = concat(
-      [for p in aws_ssm_parameter.secret_ciphertext : p.arn],
-      [for p in aws_ssm_parameter.secret_migration : p.arn],
+      [for s in var.secrets : "arn:aws:ssm:${var.region}:${var.account}:parameter/${var.deployment}/${var.app_name}/${s.name}/Ciphertext/*"],
       [
-        aws_ssm_parameter.migration_kms_key_id.arn,
+        "arn:aws:ssm:${var.region}:${var.account}:parameter/${var.deployment}/${var.app_name}/StorageDEK/Ciphertext/*",
         aws_ssm_parameter.migration_previous_pcr0.arn,
         aws_ssm_parameter.migration_previous_pcr0_attestation.arn,
-        aws_ssm_parameter.migration_old_kms_key_id.arn,
-        aws_ssm_parameter.migration_target_pcr0.arn,
         aws_ssm_parameter.migration_requested_at.arn,
-        aws_ssm_parameter.storage_dek.arn,
-        aws_ssm_parameter.migration_storage_dek.arn,
       ],
     )
   }
 
-  # SSM: read-only parameters.
+  # SSM: read-only known one-off parameters.
   statement {
-    sid     = "SSMReadOnly"
+    sid     = "SSMReadKnownParams"
     actions = ["ssm:GetParameter"]
-    resources = concat(
-      [aws_ssm_parameter.storage_bucket_name.arn],
-      [for p in aws_ssm_parameter.env_override : p.arn],
-    )
+    resources = [
+      aws_ssm_parameter.storage_bucket_name.arn,
+      aws_ssm_parameter.pcr0_pubkey.arn,
+      aws_ssm_parameter.pcr0_value.arn,
+      aws_ssm_parameter.pcr0_signature.arn,
+    ]
+  }
+
+  # SSM: prefix-scoped env overrides. The runtime calls GetParametersByPath
+  # to fetch the whole map at boot — no need to enumerate keys in the EIF.
+  statement {
+    sid     = "SSMReadEnvOverridesPrefix"
+    actions = ["ssm:GetParameter", "ssm:GetParametersByPath"]
+    resources = [
+      "arn:aws:ssm:${var.region}:${var.account}:parameter/${var.deployment}/${var.app_name}/env/*",
+    ]
   }
 
   # SSM: KMSKeyID needs read+write (supervisor updates it during migration).
@@ -386,7 +375,7 @@ data "aws_iam_policy_document" "enclave" {
     ]
   }
 
-  # KMS: encrypt/decrypt + policy management.
+  # KMS access. PutKeyPolicy is not granted — keys are policy-locked at CreateKey time.
   statement {
     sid = "KMSAccess"
     actions = [
@@ -394,7 +383,6 @@ data "aws_iam_policy_document" "enclave" {
       "kms:Decrypt",
       "kms:GenerateDataKey",
       "kms:DescribeKey",
-      "kms:PutKeyPolicy",
       "kms:GetKeyPolicy",
       "kms:ScheduleKeyDeletion",
       "kms:CreateKey",
@@ -403,7 +391,7 @@ data "aws_iam_policy_document" "enclave" {
     resources = ["*"]
   }
 
-  # STS: get caller identity for building transitional KMS policies.
+  # STS: get caller identity for role ARN / account ID.
   statement {
     sid       = "STSAccess"
     actions   = ["sts:GetCallerIdentity"]
@@ -435,6 +423,7 @@ locals {
   # When local paths are set, use them directly. Otherwise download from GitHub Release.
   use_local      = var.eif_path != ""
   artifacts_dir  = "${path.module}/.artifacts"
+  signing_dir    = "${path.module}/.signing"
   release_base   = "https://github.com/${var.github_owner}/${var.github_repo}/releases/download/${var.release_tag}"
 
   eif_source        = local.use_local ? var.eif_path : "${local.artifacts_dir}/image.eif"
@@ -595,52 +584,8 @@ resource "aws_s3_bucket_policy" "storage_ssl" {
 # SSM
 # =============================================================================
 
-# SSM parameters for enclave secrets and migration state.
-
-locals {
-  secrets_map = { for s in var.secrets : s.name => s }
-}
-
-# Per-secret ciphertext parameters.
-resource "aws_ssm_parameter" "secret_ciphertext" {
-  for_each = local.secrets_map
-
-  name      = "/${var.deployment}/${var.app_name}/${each.key}/Ciphertext"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
-# Per-secret migration ciphertext parameters.
-resource "aws_ssm_parameter" "secret_migration" {
-  for_each = local.secrets_map
-
-  name      = "/${var.deployment}/${var.app_name}/Migration/${each.key}/Ciphertext"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
-# Shared migration parameters (one per deployment, not per secret).
-
-resource "aws_ssm_parameter" "migration_kms_key_id" {
-  name      = "/${var.deployment}/${var.app_name}/MigrationKMSKeyID"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
+# SSM parameters for migration state. Per-secret + DEK ciphertexts are key-scoped
+# (/.../{secret}/Ciphertext/{kmsKeyId}) and created by the runtime, not here.
 
 resource "aws_ssm_parameter" "migration_previous_pcr0" {
   name      = "/${var.deployment}/${var.app_name}/MigrationPreviousPCR0"
@@ -676,30 +621,28 @@ resource "aws_ssm_parameter" "migration_requested_at" {
   }
 }
 
-resource "aws_ssm_parameter" "migration_old_kms_key_id" {
-  name      = "/${var.deployment}/${var.app_name}/MigrationOldKMSKeyID"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
+# Deletes the runtime-created key-scoped ciphertext params on tofu destroy
+# (tofu doesn't track them). A var.secrets change replaces only this no-op
+# resource.
+resource "null_resource" "ciphertext_cleanup" {
+  triggers = {
+    region       = var.region
+    deployment   = var.deployment
+    app_name     = var.app_name
+    secret_names = jsonencode([for s in var.secrets : s.name])
+  }
 
-  lifecycle {
-    ignore_changes = [value]
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      REGION="${self.triggers.region}"; DEP="${self.triggers.deployment}"; APP="${self.triggers.app_name}"
+      for S in $(echo '${self.triggers.secret_names}' | jq -r '.[]' 2>/dev/null); do
+        aws ssm delete-parameters-by-path --path "/$DEP/$APP/$S/Ciphertext" --recursive --region "$REGION" 2>/dev/null || true
+      done
+      aws ssm delete-parameters-by-path --path "/$DEP/$APP/StorageDEK/Ciphertext" --recursive --region "$REGION" 2>/dev/null || true
+    EOT
   }
 }
-
-resource "aws_ssm_parameter" "migration_target_pcr0" {
-  name      = "/${var.deployment}/${var.app_name}/MigrationTargetPCR0"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
-# KMS key ID — managed by null_resource.kms_key (kms.tf) and the supervisor
-# during migration. Not a tofu resource because the value changes outside tofu.
 
 # Storage bucket name.
 resource "aws_ssm_parameter" "storage_bucket_name" {
@@ -709,35 +652,26 @@ resource "aws_ssm_parameter" "storage_bucket_name" {
   overwrite = true
 }
 
-# Storage data encryption key (DEK).
-resource "aws_ssm_parameter" "storage_dek" {
-  name      = "/${var.deployment}/${var.app_name}/StorageDEK/Ciphertext"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
+# Deploy-time env overrides, published to SSM at /<deployment>/<app>/env/<key>.
+# Merges two sources:
+#   - var.env_values: overrides for keys declared in app.env (enclave.yaml);
+#     the runtime overlays them on the EIF's baked defaults at boot.
+#   - local.tls_params: the ENCLAVE_NITRIDING_* TLS settings from var.tls,
+#     read by the runtime at boot to select the cert source.
+locals {
+  # SSM rejects empty values, so each key is published only when it has one.
+  tls_params = merge(
+    var.tls.fqdn != "" ? { ENCLAVE_NITRIDING_FQDN = var.tls.fqdn } : {},
+    var.tls.provider != "self-signed" ? {
+      ENCLAVE_NITRIDING_USE_ACME       = "true"
+      ENCLAVE_NITRIDING_ACME_DIRECTORY = var.tls.provider
+    } : {},
+    var.tls.provider != "self-signed" && var.tls.email != "" ? { ENCLAVE_NITRIDING_ACME_EMAIL = var.tls.email } : {}
+  )
 }
 
-# Migration storage DEK.
-resource "aws_ssm_parameter" "migration_storage_dek" {
-  name      = "/${var.deployment}/${var.app_name}/Migration/StorageDEK/Ciphertext"
-  type      = "String"
-  value     = "UNSET"
-  overwrite = true
-
-  lifecycle {
-    ignore_changes = [value]
-  }
-}
-
-# Deploy-time app.env overrides. The runtime reads each key listed in
-# ENCLAVE_APP_ENV_KEYS (baked into the EIF) and overlays the SSM value
-# on top of the baked default. Missing keys leave the default in place.
 resource "aws_ssm_parameter" "env_override" {
-  for_each = var.env_values
+  for_each = merge(var.env_values, local.tls_params)
 
   name      = "/${var.deployment}/${var.app_name}/env/${each.key}"
   type      = "String"
@@ -1015,14 +949,12 @@ resource "aws_instance" "nitro" {
   }
 
   user_data = templatefile("${path.module}/templates/user_data.sh.tftpl", {
-    region                    = var.region
-    dev_mode                  = var.deployment
-    app_name                  = var.app_name
-    kms_key_id                = local.kms_key_id
-    eif_s3_url                = "s3://${aws_s3_bucket.assets.id}/${aws_s3_object.enclave_eif.key}"
-    supervisor_binary_s3_url  = "s3://${aws_s3_bucket.assets.id}/${aws_s3_object.supervisor_binary.key}"
-    migration_cooldown        = var.migration_cooldown
-    previous_pcr0             = var.previous_pcr0
+    region                   = var.region
+    dev_mode                 = var.deployment
+    app_name                 = var.app_name
+    eif_s3_url               = "s3://${aws_s3_bucket.assets.id}/${aws_s3_object.enclave_eif.key}"
+    supervisor_binary_s3_url = "s3://${aws_s3_bucket.assets.id}/${aws_s3_object.supervisor_binary.key}"
+    migration_cooldown       = var.migration_cooldown
   })
 
   tags = {
@@ -1091,6 +1023,19 @@ resource "aws_eip_association" "instance" {
   instance_id   = aws_instance.nitro[0].id
 }
 
+# Optional Route53 A record. Skipped in local mode or when route53_zone_id is
+# unset; operator-managed DNS providers (Cloudflare, registrar, etc.) keep
+# pointing at the elastic_ip output manually.
+resource "aws_route53_record" "enclave" {
+  count = var.local || var.tls.route53_zone_id == "" ? 0 : 1
+
+  zone_id = var.tls.route53_zone_id
+  name    = var.tls.fqdn
+  type    = "A"
+  ttl     = 60
+  records = [aws_eip.instance[0].public_ip]
+}
+
 # Automatic migration — triggers when the EIF changes (new PCR0).
 # On first apply this is a no-op (no running enclave to migrate).
 # On subsequent applies with a new EIF, it calls the supervisor to
@@ -1101,7 +1046,7 @@ resource "null_resource" "enclave_migration" {
   count = var.local ? 0 : 1
 
   triggers = {
-    eif_etag      = aws_s3_object.enclave_eif.etag
+    eif_etag      = data.local_file.eif.content_md5
     expected_pcr0 = local.effective_pcr0
   }
 
@@ -1161,7 +1106,7 @@ resource "null_resource" "promote_supervisor_binary" {
   count = var.local ? 0 : 1
 
   triggers = {
-    eif_etag      = aws_s3_object.enclave_eif.etag
+    eif_etag      = data.local_file.eif.content_md5
     expected_pcr0 = local.effective_pcr0
   }
 
@@ -1184,7 +1129,7 @@ resource "null_resource" "enclave_migration_local" {
   count = var.local ? 1 : 0
 
   triggers = {
-    eif_etag      = aws_s3_object.enclave_eif.etag
+    eif_etag      = data.local_file.eif.content_md5
     expected_pcr0 = local.effective_pcr0
   }
 
@@ -1216,7 +1161,7 @@ resource "null_resource" "promote_supervisor_binary_local" {
   count = var.local ? 1 : 0
 
   triggers = {
-    eif_etag      = aws_s3_object.enclave_eif.etag
+    eif_etag      = data.local_file.eif.content_md5
     expected_pcr0 = local.effective_pcr0
   }
 
@@ -1241,12 +1186,6 @@ output "ec2_role_arn" {
   value       = aws_iam_role.instance.arn
 }
 
-output "kms_key_id" {
-  description = "KMS encryption key ID."
-  value       = local.kms_key_id
-  sensitive   = true
-}
-
 output "instance_id" {
   description = "EC2 instance ID (empty in local mode)."
   value       = var.local ? "" : aws_instance.nitro[0].id
@@ -1260,4 +1199,9 @@ output "elastic_ip" {
 output "storage_bucket" {
   description = "S3 storage bucket name."
   value       = aws_s3_bucket.storage.id
+}
+
+output "pcr0_signing_key_arn" {
+  description = "ARN of the KMS key used by Tofu to sign each build's PCR0."
+  value       = aws_kms_key.pcr0_signing.arn
 }

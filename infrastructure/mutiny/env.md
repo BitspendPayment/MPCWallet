@@ -4,10 +4,10 @@ How to inject deploy-time values into the enclave's environment via SSM,
 without baking them into the public EIF or committing them to git.
 
 The plumbing lives in [tofu/modules/enclave/main.tf](tofu/modules/enclave/main.tf)
-(`env_values` map → per-key `aws_ssm_parameter.env_override`). The enclave
-runtime overlays SSM values on top of `enclave.yaml`'s `app.env` defaults at
-boot, for every key listed in `ENCLAVE_APP_ENV_KEYS` (which the EIF baker
-populates from `app.env`).
+(`env_values` map → per-key `aws_ssm_parameter.env_override`). At boot the
+runtime scans every key under `/<deployment>/<app>/env/` and overlays it onto
+the process env on top of `enclave.yaml`'s `app.env` defaults — no
+pre-declaration required.
 
 ## One-time setup
 
@@ -17,21 +17,28 @@ Keep the source key file **outside** the repo. Default convention:
 ~/secrets/vtxos-fcm.json
 ```
 
-The corresponding key in [enclave.yaml](enclave.yaml) `app.env:` must already
-exist as an empty placeholder (so it's in `ENCLAVE_APP_ENV_KEYS`):
-
-```yaml
-app:
-  env:
-    FCM_SERVICE_ACCOUNT_JSON: ""
-```
-
 [tofu/env_values.auto.tfvars.json](tofu/.gitignore) is gitignored — it never
 gets committed.
 
-## Generate the tfvars
+## Set the value (preferred: enclave CLI)
 
-From the repo root:
+```bash
+enclave tofu env \
+  --key FCM_SERVICE_ACCOUNT_JSON \
+  --value "$(cat ~/secrets/vtxos-fcm.json)"
+```
+
+The CLI merges into `tofu/env_values.auto.tfvars.json`, preserves any
+existing entries, and handles JSON-escaping (inner `"`, PEM newlines)
+internally. Add more keys in the same invocation by repeating the pair:
+
+```bash
+enclave tofu env \
+  --key FCM_SERVICE_ACCOUNT_JSON --value "$(cat ~/secrets/vtxos-fcm.json)" \
+  --key OTHER_KEY                --value "$(cat ~/secrets/other.txt)"
+```
+
+## Set the value (fallback: jq when the CLI isn't around)
 
 ```bash
 jq -n --arg fcm "$(cat ~/secrets/vtxos-fcm.json)" \
@@ -40,22 +47,8 @@ jq -n --arg fcm "$(cat ~/secrets/vtxos-fcm.json)" \
 ```
 
 The `*.auto.tfvars.json` suffix makes OpenTofu auto-load it; no `-var-file`
-flag needed. The `jq -n --arg` form handles the double-escaping of inner
-quotes and PEM newlines correctly.
-
-To add a second value, extend the inner object:
-
-```bash
-jq -n \
-  --arg fcm "$(cat ~/secrets/vtxos-fcm.json)" \
-  --arg foo "$(cat ~/secrets/other.txt)" \
-  '{env_values: {FCM_SERVICE_ACCOUNT_JSON: $fcm, OTHER_KEY: $foo}}' \
-  > infrastructure/mutiny/tofu/env_values.auto.tfvars.json
-```
-
-Every key here must also be declared as an empty placeholder in
-`enclave.yaml`'s `app.env`, otherwise the SSM param gets written but the
-runtime ignores it.
+flag needed. **Overwrites** the whole file, so use the CLI form above when
+you have other keys to preserve.
 
 ## Deploy
 
@@ -69,9 +62,8 @@ Writes `/<deployment>/<app_name>/env/<KEY>` per entry, e.g.
 
 ## Make the enclave pick it up
 
-Restart the enclave (SSM overrides are read at boot). EIF rebuild is **not**
-required for value changes — only for adding new keys (because the new key
-needs to join `ENCLAVE_APP_ENV_KEYS`, which is baked into the EIF).
+Restart the enclave — SSM overrides are read at boot. **EIF rebuild is never
+required for env_values changes**, neither for new keys nor value updates.
 
 ## Verify
 
@@ -90,9 +82,8 @@ Should print the opening of the JSON, confirming the value is there.
 
 ```bash
 # Refresh the source file from GCP, then:
-jq -n --arg fcm "$(cat ~/secrets/vtxos-fcm.json)" \
-  '{env_values: {FCM_SERVICE_ACCOUNT_JSON: $fcm}}' \
-  > infrastructure/mutiny/tofu/env_values.auto.tfvars.json
+enclave tofu env --key FCM_SERVICE_ACCOUNT_JSON \
+                 --value "$(cat ~/secrets/vtxos-fcm.json)"
 cd infrastructure/mutiny/tofu && tofu apply
 # Then restart the enclave.
 ```

@@ -8,11 +8,12 @@ account: "639920118099"                      # AWS account ID (required)
 prefix: dev                      # Deployment prefix (stack = {prefix}Nitro{Name})
 instance_type: m6i.xlarge        # EC2 instance type
 migration_cooldown: "1m"         # Cooldown before migration proceeds
+is_kms_key_locked: false
 
 runtime:
-  rev: "v0.0.74"
-  hash: "sha256-9cXFGEcexHZr1JEqU004Okxs55kQdvb7fm4221qgWMU="
-  vendor_hash: "sha256-2ZX9x2voIwVkUsmrZvhJssAQqnCh8/HLwopL5HpiaOg="
+  rev: "v0.0.79"
+  hash: "sha256-sIDpJVIuOzyl1NlmPA0qOks61ppsTtyc3pJYIq/4sWY="
+  vendor_hash: "sha256-kkgp+uxc9pohZiCnz84nyXroUzsPhhtb0VgGa3dQgUo="
 
 app:
   language: "rust"               # App language: go, nodejs, dotnet, rust
@@ -35,9 +36,9 @@ app:
   nix_build_inputs: ["openssl"]
   nix_native_build_inputs: ["pkg-config", "protobuf"]
 
-  # Environment variables baked into the EIF.
-  # Template vars: {{region}}, {{prefix}}, {{version}}
+ 
   env:
+      ENCLAVE_NITRIDING_UPSTREAM: "h1"
       PORT: "7074"
       COSIGNER_WASM_PATH: "/app/cosigner.wasm"
       BITCOIN_NETWORK: "signet"
@@ -46,10 +47,6 @@ app:
       ASP_URL: "https://mutinynet.arkade.sh"
       PERSISTENCE_BACKEND: "enclave"
       SUPERVISOR_URL: "http://127.0.0.1:8080"
-      # Placeholder so the key joins ENCLAVE_APP_ENV_KEYS in the EIF; the
-      # runtime overlays the real JSON from SSM /env/FCM_SERVICE_ACCOUNT_JSON
-      # at boot (populated by tofu env_values, never committed).
-      FCM_SERVICE_ACCOUNT_JSON: ""
 
 
 # Secrets managed by KMS inside the enclave.
@@ -61,3 +58,9 @@ secrets:
     env_var: APP_SIGNING_KEY
   # - name: api_token
   #   env_var: APP_API_TOKEN
+
+tls:
+  provider: letsencrypt
+  fqdn: "mutiny.vtxos.network"
+  email: "joshua@vtxos.app"
+  route53_zone_id: "Z0182614JSFDPB9F5ALY"
