@@ -95,14 +95,23 @@ jobs:
               verifiedAt: $verifiedAt
             }' > predicate.json
 
-      # PCR0 is the SHA-256 boot measurement of the EIF — using it as the
-      # subject digest binds this attestation to the EIF measurement itself.
+      # Anchor the attestation to image.eif from the eif-latest release.
+      # actions/attest@v2 computes sha256(image.eif) as the subject digest, which
+      # composes with `gh attestation verify image.eif --predicate-type ...`.
+      # The PCR0/1/2 values still live in the predicate envelope above; this
+      # subject just gives auditors a verifiable anchor — the same file the
+      # build-provenance attestation in release-eif.yml is also anchored to.
+      - name: Download EIF for attestation subject
+        if: steps.verify.outcome != 'skipped'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download eif-latest -p image.eif --clobber
+
       - name: Attest enclave verification result
         if: steps.verify.outcome != 'skipped'
         uses: actions/attest@v2
         with:
-          subject-name: enclave-verify-${{ steps.manifest.outputs.pcr0 }}
-          subject-digest: sha256:${{ steps.manifest.outputs.pcr0 }}
+          subject-path: image.eif
           predicate-type: https://github.com/BitspendPayment/MPCWallet/predicates/enclave-verify/v1
           predicate-path: predicate.json
 
@@ -127,6 +136,7 @@ jobs:
           PCR0: ${{ steps.manifest.outputs.pcr0 }}
           PCR1: ${{ steps.manifest.outputs.pcr1 }}
           PCR2: ${{ steps.manifest.outputs.pcr2 }}
+          BASE_URL: ${{ steps.manifest.outputs.base_url || vars.ENCLAVE_BASE_URL }}
         run: |
           payload=$(jq -n \
             --arg status "$STATUS" \
@@ -136,6 +146,7 @@ jobs:
             --arg verify_output "$VERIFY_OUTPUT" \
             --arg commit_sha "$GITHUB_SHA" \
             --arg run_id "$GITHUB_RUN_ID" \
+            --arg base_url "$BASE_URL" \
             --argjson verified_at "$(date -u +%s)" \
             '{
               status: $status,
@@ -145,6 +156,7 @@ jobs:
               verify_output: $verify_output,
               commit_sha: $commit_sha,
               run_id: $run_id,
+              base_url: $base_url,
               verified_at: $verified_at
             }')
 
