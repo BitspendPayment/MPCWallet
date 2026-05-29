@@ -6,5 +6,6 @@
     "crates/enclave-client/Cargo.toml",
     "ffi/Cargo.toml",
     "e2e/signer-server/Cargo.toml"
-  ]
+  ],
+  "cmake.sourceDirectory": "/home/joshua/MPCWallet/app/linux"
 }

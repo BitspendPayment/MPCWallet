@@ -72,64 +72,78 @@ class _ArkSendScreenState extends State<ArkSendScreen> {
         ),
         centerTitle: true,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              key: const Key('arkSendAddressField'),
-              controller: _addressController,
-              enabled: true,
-              decoration: InputDecoration(
-                labelText: 'Recipient Ark Address',
-                hintText: 'tark1...',
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.qr_code_scanner),
-                  onPressed: () {},
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        key: const Key('arkSendAddressField'),
+                        controller: _addressController,
+                        enabled: true,
+                        decoration: InputDecoration(
+                          labelText: 'Recipient Ark Address',
+                          hintText: 'tark1...',
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.qr_code_scanner),
+                            onPressed: () {},
+                          ),
+                        ),
+                        style: GoogleFonts.inter(),
+                      ),
+                      const SizedBox(height: 24),
+                      TextField(
+                        key: const Key('arkSendAmountField'),
+                        controller: _amountController,
+                        enabled: true,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Amount',
+                          suffixText: 'Sats',
+                        ),
+                        style: GoogleFonts.inter(fontSize: 24),
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'Available Ark Balance: $formattedBalance Sats',
+                        style: GoogleFonts.inter(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                      if (_error != null) ...[
+                        const SizedBox(height: 16),
+                        Container(
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.red.withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                                color: Colors.redAccent.withOpacity(0.3)),
+                          ),
+                          child: Text(
+                            _error!,
+                            style: GoogleFonts.inter(
+                                color: Colors.redAccent, fontSize: 13),
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
               ),
-              style: GoogleFonts.inter(),
-            ),
-            const SizedBox(height: 24),
-            TextField(
-              key: const Key('arkSendAmountField'),
-              controller: _amountController,
-              enabled: true,
-              keyboardType: TextInputType.number,
-              decoration: const InputDecoration(
-                labelText: 'Amount',
-                suffixText: 'Sats',
-              ),
-              style: GoogleFonts.inter(fontSize: 24),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Available Ark Balance: $formattedBalance Sats',
-              style: GoogleFonts.inter(color: Colors.white54, fontSize: 12),
-            ),
-            if (_error != null) ...[
               const SizedBox(height: 16),
-              Container(
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.red.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.redAccent.withOpacity(0.3)),
-                ),
-                child: Text(
-                  _error!,
-                  style: GoogleFonts.inter(color: Colors.redAccent, fontSize: 13),
-                ),
-              ),
-            ],
-            const Spacer(),
-            ElevatedButton(
+              ElevatedButton(
                 key: const Key('arkSendVtxoBtn'),
                 onPressed: _send,
                 child: const Text('Send VTXO'),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );

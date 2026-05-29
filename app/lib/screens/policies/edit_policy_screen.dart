@@ -302,77 +302,96 @@ class _EditPolicyScreenState extends State<EditPolicyScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(_isEditMode ? 'Edit Policy' : 'New Policy')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text('Spending Threshold (Sats)',
-                style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
-            Slider(
-              key: const Key('thresholdSlider'),
-              value: _sliderValue,
-              min: 0,
-              max: 1,
-              divisions: 200,
-              label: '${NumberFormat('#,###').format(_thresholdSats)} Sats',
-              onChanged: (value) => setState(() => _sliderValue = value),
-            ),
-            Text(
-              '${NumberFormat('#,###').format(_thresholdSats)} Sats',
-              style:
-                  GoogleFonts.inter(fontSize: 24, fontWeight: FontWeight.bold),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 32),
-            Text('Reset Interval',
-                style: GoogleFonts.inter(fontWeight: FontWeight.bold)),
-            const SizedBox(height: 16),
-            SegmentedButton<String>(
-                key: const Key('policyIntervalSelector'),
-                segments: const [
-                  ButtonSegment(value: '30s', label: Text('30 Sec')),
-                  ButtonSegment(value: '5m', label: Text('5 Min')),
-                  ButtonSegment(value: '1h', label: Text('1 Hour')),
-                  ButtonSegment(value: '24h', label: Text('Daily')),
-                  ButtonSegment(value: '7d', label: Text('Weekly')),
-                ],
-                selected: {
-                  _interval
-                },
-                onSelectionChanged: (Set<String> newSelection) {
-                  setState(() {
-                    _interval = newSelection.first;
-                  });
-                },
-                style: ButtonStyle(
-                  backgroundColor:
-                      MaterialStateProperty.resolveWith<Color>((states) {
-                    if (states.contains(MaterialState.selected)) {
-                      return Colors.white;
-                    }
-                    return Colors.transparent;
-                  }),
-                  foregroundColor:
-                      MaterialStateProperty.resolveWith<Color>((states) {
-                    if (states.contains(MaterialState.selected)) {
-                      return Colors.black;
-                    }
-                    return Colors.white;
-                  }),
-                )),
-            const Spacer(),
-            ElevatedButton(
-              key: const Key('createPolicyBtn'),
-              onPressed: _isSigning ? null : _savePolicy,
-              child: _isSigning
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2))
-                  : Text(_isEditMode ? 'Update Policy' : 'Sign & Create Policy'),
-            )
-          ],
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text('Spending Threshold (Sats)',
+                          style:
+                              GoogleFonts.inter(fontWeight: FontWeight.bold)),
+                      Slider(
+                        key: const Key('thresholdSlider'),
+                        value: _sliderValue,
+                        min: 0,
+                        max: 1,
+                        divisions: 200,
+                        label:
+                            '${NumberFormat('#,###').format(_thresholdSats)} Sats',
+                        onChanged: (value) =>
+                            setState(() => _sliderValue = value),
+                      ),
+                      Text(
+                        '${NumberFormat('#,###').format(_thresholdSats)} Sats',
+                        style: GoogleFonts.inter(
+                            fontSize: 24, fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 32),
+                      Text('Reset Interval',
+                          style:
+                              GoogleFonts.inter(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 16),
+                      SegmentedButton<String>(
+                          key: const Key('policyIntervalSelector'),
+                          segments: const [
+                            ButtonSegment(value: '30s', label: Text('30 Sec')),
+                            ButtonSegment(value: '5m', label: Text('5 Min')),
+                            ButtonSegment(value: '1h', label: Text('1 Hour')),
+                            ButtonSegment(value: '24h', label: Text('Daily')),
+                            ButtonSegment(value: '7d', label: Text('Weekly')),
+                          ],
+                          selected: {
+                            _interval
+                          },
+                          onSelectionChanged: (Set<String> newSelection) {
+                            setState(() {
+                              _interval = newSelection.first;
+                            });
+                          },
+                          style: ButtonStyle(
+                            backgroundColor:
+                                MaterialStateProperty.resolveWith<Color>(
+                                    (states) {
+                              if (states.contains(MaterialState.selected)) {
+                                return Colors.white;
+                              }
+                              return Colors.transparent;
+                            }),
+                            foregroundColor:
+                                MaterialStateProperty.resolveWith<Color>(
+                                    (states) {
+                              if (states.contains(MaterialState.selected)) {
+                                return Colors.black;
+                              }
+                              return Colors.white;
+                            }),
+                          )),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton(
+                key: const Key('createPolicyBtn'),
+                onPressed: _isSigning ? null : _savePolicy,
+                child: _isSigning
+                    ? const SizedBox(
+                        height: 20,
+                        width: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2))
+                    : Text(_isEditMode
+                        ? 'Update Policy'
+                        : 'Sign & Create Policy'),
+              )
+            ],
+          ),
         ),
       ),
     );

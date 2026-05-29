@@ -7,6 +7,10 @@ terraform.tfstate.backup
 backend.tf
 modules/enclave/.signing/
 
+# GitHub Release download cache (EIF, supervisor binary, pcr.json).
+# Re-downloaded on every apply; the S3 etag (filemd5) decides propagation.
+modules/enclave/.artifacts/
+
 # Deploy-time env overrides — contains the plaintext FCM service-account
 # JSON (and any other operator-provided env values). Holds real secrets.
 env_values.auto.tfvars.json

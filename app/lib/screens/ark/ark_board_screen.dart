@@ -110,135 +110,150 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const SizedBox(height: 16),
-        Container(
-          padding: const EdgeInsets.all(20),
-          decoration: BoxDecoration(
-            color: const Color(0xFF1E1E1E),
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.info_outline, color: Colors.blueAccent, size: 20),
-                  const SizedBox(width: 8),
-                  Text(
-                    'How Boarding Works',
-                    style: GoogleFonts.inter(
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white,
-                      fontSize: 16,
+        Expanded(
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.info_outline,
+                              color: Colors.blueAccent, size: 20),
+                          const SizedBox(width: 8),
+                          Text(
+                            'How Boarding Works',
+                            style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      _buildStep('1', 'Send BTC to your boarding address'),
+                      const SizedBox(height: 8),
+                      _buildStep('2', 'Wait for on-chain confirmation'),
+                      const SizedBox(height: 8),
+                      _buildStep(
+                          '3', 'Tap "Board Now" to settle into Ark VTXOs'),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: hasFunds
+                        ? Colors.green.withOpacity(0.1)
+                        : const Color(0xFF1E1E1E),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: hasFunds
+                          ? Colors.greenAccent.withOpacity(0.3)
+                          : Colors.white10,
                     ),
                   ),
-                ],
-              ),
-              const SizedBox(height: 12),
-              _buildStep('1', 'Send BTC to your boarding address'),
-              const SizedBox(height: 8),
-              _buildStep('2', 'Wait for on-chain confirmation'),
-              const SizedBox(height: 8),
-              _buildStep('3', 'Tap "Board Now" to settle into Ark VTXOs'),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        // Boarding balance indicator
-        Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: hasFunds
-                ? Colors.green.withOpacity(0.1)
-                : const Color(0xFF1E1E1E),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: hasFunds ? Colors.greenAccent.withOpacity(0.3) : Colors.white10,
-            ),
-          ),
-          child: Row(
-            children: [
-              Icon(
-                hasFunds ? Icons.check_circle : Icons.hourglass_empty,
-                color: hasFunds ? Colors.greenAccent : Colors.white38,
-                size: 24,
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      hasFunds
-                          ? 'Funds detected: ${NumberFormat("#,##0").format(balance)} sats'
-                          : 'No funds detected yet',
-                      style: GoogleFonts.inter(
-                        color: hasFunds ? Colors.greenAccent : Colors.white54,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 14,
+                  child: Row(
+                    children: [
+                      Icon(
+                        hasFunds ? Icons.check_circle : Icons.hourglass_empty,
+                        color: hasFunds ? Colors.greenAccent : Colors.white38,
+                        size: 24,
                       ),
-                    ),
-                    if (!hasFunds)
-                      Text(
-                        'Checking every 5 seconds...',
-                        style: GoogleFonts.inter(
-                          color: Colors.white24,
-                          fontSize: 11,
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              hasFunds
+                                  ? 'Funds detected: ${NumberFormat("#,##0").format(balance)} sats'
+                                  : 'No funds detected yet',
+                              style: GoogleFonts.inter(
+                                color: hasFunds
+                                    ? Colors.greenAccent
+                                    : Colors.white54,
+                                fontWeight: FontWeight.w600,
+                                fontSize: 14,
+                              ),
+                            ),
+                            if (!hasFunds)
+                              Text(
+                                'Checking every 5 seconds...',
+                                style: GoogleFonts.inter(
+                                  color: Colors.white24,
+                                  fontSize: 11,
+                                ),
+                              ),
+                          ],
                         ),
                       ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-        if (boardingAddress != null) ...[
-          Text(
-            'Your Boarding Address',
-            style: GoogleFonts.inter(
-              color: Colors.white54,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
-          const SizedBox(height: 8),
-          GestureDetector(
-            onTap: () {
-              Clipboard.setData(ClipboardData(text: boardingAddress));
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Boarding address copied'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-            child: Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF1E1E1E),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      boardingAddress,
-                      style: GoogleFonts.inter(
-                        fontSize: 12,
-                        color: Colors.white70,
+                const SizedBox(height: 16),
+                if (boardingAddress != null) ...[
+                  Text(
+                    'Your Boarding Address',
+                    style: GoogleFonts.inter(
+                      color: Colors.white54,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  GestureDetector(
+                    onTap: () {
+                      Clipboard.setData(ClipboardData(text: boardingAddress));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Boarding address copied'),
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF1E1E1E),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.white10),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              boardingAddress,
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: Colors.white70,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.copy,
+                              color: Colors.white38, size: 18),
+                        ],
                       ),
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  const Icon(Icons.copy, color: Colors.white38, size: 18),
                 ],
-              ),
+              ],
             ),
           ),
-        ],
-        const Spacer(),
+        ),
+        const SizedBox(height: 16),
         ElevatedButton(
           key: const Key('arkBoardNowBtn'),
           onPressed: hasFunds ? _startBoarding : null,

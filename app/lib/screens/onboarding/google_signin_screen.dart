@@ -62,57 +62,71 @@ class _GoogleSignInScreenState extends State<GoogleSignInScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Google Drive Backup')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              isRestore ? 'Restore from Drive' : 'Back up to Drive',
-              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              isRestore
-                  ? 'Sign in to the Google account that has your encrypted '
-                      'wallet backup.'
-                  : 'Your encrypted signing key will be stored in a hidden '
-                      'folder in your Google Drive. Only this app can read it.',
-              style: GoogleFonts.inter(color: Colors.white70, height: 1.5),
-            ),
-            const SizedBox(height: 32),
-            if (_error != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!,
-                    style: GoogleFonts.inter(color: Colors.redAccent)),
-              ),
-            ElevatedButton.icon(
-              key: const Key('googleSignInBtn'),
-              onPressed: _busy ? null : () => _signIn(extras),
-              icon: _busy
-                  ? const SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.cloud),
-              label: Text(_busy ? 'Signing in...' : 'Sign in with Google'),
-            ),
-            const Spacer(),
-            if (!isRestore)
-              TextButton(
-                key: const Key('googleSkipBtn'),
-                onPressed: _busy
-                    ? null
-                    : () => _confirmSkip(context, extras),
-                child: Text(
-                  'Skip (local-only, no backup)',
-                  style: GoogleFonts.inter(
-                      color: Colors.white54, fontSize: 13),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        isRestore ? 'Restore from Drive' : 'Back up to Drive',
+                        style: GoogleFonts.inter(
+                            fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        isRestore
+                            ? 'Sign in to the Google account that has your encrypted '
+                                'wallet backup.'
+                            : 'Your encrypted signing key will be stored in a hidden '
+                                'folder in your Google Drive. Only this app can read it.',
+                        style: GoogleFonts.inter(
+                            color: Colors.white70, height: 1.5),
+                      ),
+                      const SizedBox(height: 32),
+                      if (_error != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(_error!,
+                              style:
+                                  GoogleFonts.inter(color: Colors.redAccent)),
+                        ),
+                      ElevatedButton.icon(
+                        key: const Key('googleSignInBtn'),
+                        onPressed: _busy ? null : () => _signIn(extras),
+                        icon: _busy
+                            ? const SizedBox(
+                                width: 16,
+                                height: 16,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : const Icon(Icons.cloud),
+                        label: Text(
+                            _busy ? 'Signing in...' : 'Sign in with Google'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-          ],
+              if (!isRestore)
+                TextButton(
+                  key: const Key('googleSkipBtn'),
+                  onPressed:
+                      _busy ? null : () => _confirmSkip(context, extras),
+                  child: Text(
+                    'Skip (local-only, no backup)',
+                    style:
+                        GoogleFonts.inter(color: Colors.white54, fontSize: 13),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

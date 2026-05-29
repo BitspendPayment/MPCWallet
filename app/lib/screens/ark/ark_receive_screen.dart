@@ -81,11 +81,12 @@ class _ArkReceiveScreenState extends State<ArkReceiveScreen>
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            const SizedBox(height: 32),
-            if (address != null) ...[
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              const SizedBox(height: 32),
+              if (address != null) ...[
               Container(
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
@@ -162,15 +163,16 @@ class _ArkReceiveScreenState extends State<ArkReceiveScreen>
                   ),
                 ),
               ),
-            ] else ...[
-              const CircularProgressIndicator(),
-              const SizedBox(height: 16),
-              Text(
-                'Loading address...',
-                style: GoogleFonts.inter(color: Colors.white54),
-              ),
+              ] else ...[
+                const CircularProgressIndicator(),
+                const SizedBox(height: 16),
+                Text(
+                  'Loading address...',
+                  style: GoogleFonts.inter(color: Colors.white54),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

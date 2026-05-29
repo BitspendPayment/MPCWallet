@@ -21,73 +21,90 @@ class _SignerSelectionScreenState extends State<SignerSelectionScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Choose Signer')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            Text(
-              'Where is your signing key?',
-              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'This is the key that authorizes spending from your wallet.',
-              style: GoogleFonts.inter(color: Colors.white70, height: 1.5),
-            ),
-            const SizedBox(height: 24),
-            _SignerCard(
-              key: const Key('signerSoftwareCard'),
-              selected: _selected == SignerKind.software,
-              icon: Icons.phone_iphone,
-              title: 'Software Signer',
-              subtitle: 'Key lives on this device, encrypted with a password and '
-                  'backed up to your Google Drive.',
-              badge: 'Recommended',
-              onTap: () => setState(() => _selected = SignerKind.software),
-            ),
-            const SizedBox(height: 12),
-            _SignerCard(
-              key: const Key('signerHardwareCard'),
-              selected: _selected == SignerKind.hardware,
-              icon: Icons.usb,
-              title: 'Hardware Signer (USB)',
-              subtitle: 'Key stays on a physical device. Highest security. '
-                  'Requires a USB connection for every signing.',
-              onTap: () => setState(() => _selected = SignerKind.hardware),
-            ),
-            const SizedBox(height: 16),
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.amber.withOpacity(0.12),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Icon(Icons.info_outline,
-                      color: Colors.amber, size: 18),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Software signer is more convenient but your key sits in '
-                      'app memory while signing. Hardware signer keeps the key '
-                      'isolated at all times.',
-                      style: GoogleFonts.inter(
-                          color: Colors.amber.shade100, fontSize: 12),
-                    ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Where is your signing key?',
+                        style: GoogleFonts.inter(
+                            fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'This is the key that authorizes spending from your wallet.',
+                        style: GoogleFonts.inter(
+                            color: Colors.white70, height: 1.5),
+                      ),
+                      const SizedBox(height: 24),
+                      _SignerCard(
+                        key: const Key('signerSoftwareCard'),
+                        selected: _selected == SignerKind.software,
+                        icon: Icons.phone_iphone,
+                        title: 'Software Signer',
+                        subtitle:
+                            'Key lives on this device, encrypted with a password and '
+                            'backed up to your Google Drive.',
+                        badge: 'Recommended',
+                        onTap: () =>
+                            setState(() => _selected = SignerKind.software),
+                      ),
+                      const SizedBox(height: 12),
+                      _SignerCard(
+                        key: const Key('signerHardwareCard'),
+                        selected: _selected == SignerKind.hardware,
+                        icon: Icons.usb,
+                        title: 'Hardware Signer (USB)',
+                        subtitle:
+                            'Key stays on a physical device. Highest security. '
+                            'Requires a USB connection for every signing.',
+                        onTap: () =>
+                            setState(() => _selected = SignerKind.hardware),
+                      ),
+                      const SizedBox(height: 16),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.amber.withOpacity(0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Icon(Icons.info_outline,
+                                color: Colors.amber, size: 18),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Software signer is more convenient but your key sits in '
+                                'app memory while signing. Hardware signer keeps the key '
+                                'isolated at all times.',
+                                style: GoogleFonts.inter(
+                                    color: Colors.amber.shade100, fontSize: 12),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
-            ),
-            const Spacer(),
-            ElevatedButton(
-              key: const Key('signerContinueBtn'),
-              onPressed: () => _continue(isRestore),
-              child: const Text('Continue'),
-            ),
-          ],
+              const SizedBox(height: 16),
+              ElevatedButton(
+                key: const Key('signerContinueBtn'),
+                onPressed: () => _continue(isRestore),
+                child: const Text('Continue'),
+              ),
+            ],
+          ),
         ),
       ),
     );

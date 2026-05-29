@@ -39,84 +39,100 @@ class _SendScreenState extends State<SendScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Send')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            TextField(
-              key: const Key('sendAddressField'),
-              controller: _addressController,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                labelText: 'Recipient Address',
-                hintText: 'bc1q... or tark1...',
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.qr_code_scanner),
-                  onPressed: () {},
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      TextField(
+                        key: const Key('sendAddressField'),
+                        controller: _addressController,
+                        onChanged: (_) => setState(() {}),
+                        decoration: InputDecoration(
+                          labelText: 'Recipient Address',
+                          hintText: 'bc1q... or tark1...',
+                          suffixIcon: IconButton(
+                            icon: const Icon(Icons.qr_code_scanner),
+                            onPressed: () {},
+                          ),
+                        ),
+                        style: GoogleFonts.inter(),
+                      ),
+                      if (address.isNotEmpty) ...[
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              isArk ? Icons.account_tree : Icons.link,
+                              size: 14,
+                              color:
+                                  isArk ? Colors.blueAccent : Colors.white38,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              isArk
+                                  ? 'Ark (off-chain)'
+                                  : 'Bitcoin (on-chain)',
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color:
+                                    isArk ? Colors.blueAccent : Colors.white38,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 24),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              key: const Key('sendAmountField'),
+                              controller: _amountController,
+                              keyboardType: const TextInputType.numberWithOptions(
+                                  decimal: true),
+                              decoration: InputDecoration(
+                                labelText: 'Amount',
+                                suffixText: _isBtc ? 'Sats' : 'USD',
+                              ),
+                              style: GoogleFonts.inter(fontSize: 24),
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          IconButton(
+                            onPressed: () {
+                              setState(() {
+                                _isBtc = !_isBtc;
+                              });
+                            },
+                            icon: const Icon(Icons.swap_vert),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'On-chain: $formattedOnChain Sats  |  Ark: $formattedArk Sats',
+                        style: GoogleFonts.inter(
+                            color: Colors.white54, fontSize: 12),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              style: GoogleFonts.inter(),
-            ),
-            if (address.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  Icon(
-                    isArk ? Icons.account_tree : Icons.link,
-                    size: 14,
-                    color: isArk ? Colors.blueAccent : Colors.white38,
-                  ),
-                  const SizedBox(width: 6),
-                  Text(
-                    isArk ? 'Ark (off-chain)' : 'Bitcoin (on-chain)',
-                    style: GoogleFonts.inter(
-                      fontSize: 12,
-                      color: isArk ? Colors.blueAccent : Colors.white38,
-                    ),
-                  ),
-                ],
+              const SizedBox(height: 16),
+              ElevatedButton(
+                key: const Key('sendReviewBtn'),
+                onPressed: _onReview,
+                child: const Text('Review Transaction'),
               ),
             ],
-            const SizedBox(height: 24),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    key: const Key('sendAmountField'),
-                    controller: _amountController,
-                    keyboardType:
-                        const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(
-                      labelText: 'Amount',
-                      suffixText: _isBtc ? 'Sats' : 'USD',
-                    ),
-                    style: GoogleFonts.inter(fontSize: 24),
-                  ),
-                ),
-                const SizedBox(width: 16),
-                IconButton(
-                  onPressed: () {
-                    setState(() {
-                      _isBtc = !_isBtc;
-                    });
-                  },
-                  icon: const Icon(Icons.swap_vert),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'On-chain: $formattedOnChain Sats  |  Ark: $formattedArk Sats',
-              style: GoogleFonts.inter(color: Colors.white54, fontSize: 12),
-            ),
-            const Spacer(),
-            ElevatedButton(
-              key: const Key('sendReviewBtn'),
-              onPressed: _onReview,
-              child: const Text('Review Transaction'),
-            ),
-          ],
+          ),
         ),
       ),
     );

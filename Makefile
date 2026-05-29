@@ -11,6 +11,13 @@
 #    make hw-flash       Flash HW Signer via debug probe
 #    make hw-test        Smoke test HW Signer over USB HID
 #    make down           Stop everything
+#
+#  Release (Firebase App Distribution):
+#    make release                       Build arm64 release APK + push to testers
+#    make release-apk                   Build arm64 release APK only (FFI + signed)
+#    make release-apk-fat               Fat APK: arm64 + arm32 + x86_64
+#    make release-testers-add TESTERS="a@x.com,b@x.com"
+#    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 .PHONY: e2e e2e-ark software software-ark hardware hardware-ark flash down \
@@ -29,7 +36,8 @@
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
 	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down \
-	integration-test integration-test-ci integration-test-ci-ark
+	integration-test integration-test-ci integration-test-ci-ark \
+	release release-apk release-apk-fat release-testers-add release-testers-remove
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 
@@ -43,6 +51,12 @@ SESSIONS          ?= 10
 CONCURRENCY       ?= 5
 SIGNER_PORT       ?= 9090
 SERVER            ?= 127.0.0.1:7074
+
+# Firebase App Distribution. Read from app/android/app/google-services.json.
+FIREBASE_APP_ID  ?= 1:575541915148:android:5fbaa581de7d4686378829
+FIREBASE_PROJECT ?= vtxos-7afb3
+TESTERS_GROUP    ?= internal
+RELEASE_NOTES    ?= Internal build
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PRIMARY COMMANDS
@@ -525,3 +539,51 @@ regtest-down: down
 regtest-hardware: hardware
 regtest-hardware-ark: hardware-ark
 regtest-hardware-ark-down: down
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  RELEASE — Firebase App Distribution
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Build a release APK signed with the upload key (app/android/key.properties).
+# ffi-android compiles the merged Rust FFI (ark + threshold + enclave) for
+# arm64 and drops libmpcwallet_ffi.so into app/android/app/src/main/jniLibs/.
+# Without it the APK crashes on first native call. Mirrors `make flutter`.
+# For arm64 + arm32 fat APK, run `make release-apk-fat` instead.
+release-apk: ffi-android
+	@echo "==> Building release APK (arm64)..."
+	cd app && flutter build apk --release --target-platform android-arm64
+	@echo "==> APK: app/build/app/outputs/flutter-apk/app-release.apk"
+
+# Fat APK: arm64 + arm32 + x86_64. Larger (~3x) but installs on older phones
+# and x86_64 emulators. Use when you don't know what device your tester runs.
+release-apk-fat: ffi-android-all
+	@echo "==> Building fat release APK (arm64 + arm32 + x86_64)..."
+	cd app && flutter build apk --release
+	@echo "==> APK: app/build/app/outputs/flutter-apk/app-release.apk"
+
+# Build + ship to Firebase App Distribution. Overrides:
+#   make release RELEASE_NOTES="bug fix" TESTERS_GROUP=friends
+release: release-apk
+	@command -v firebase >/dev/null || { echo "firebase CLI missing — run: npm i -g firebase-tools && firebase login"; exit 1; }
+	@echo "==> Distributing to Firebase group '$(TESTERS_GROUP)'..."
+	firebase appdistribution:distribute \
+		app/build/app/outputs/flutter-apk/app-release.apk \
+		--app $(FIREBASE_APP_ID) \
+		--release-notes "$(RELEASE_NOTES)" \
+		--groups $(TESTERS_GROUP)
+	@echo "==> Done. Testers in '$(TESTERS_GROUP)' will get an email + Firebase App Tester notification."
+
+# Add testers later — they receive an invite email immediately.
+#   make release-testers-add TESTERS="a@x.com,b@x.com"
+release-testers-add:
+	@[ -n "$(TESTERS)" ] || { echo "Pass TESTERS=\"a@x.com,b@x.com\""; exit 1; }
+	firebase appdistribution:testers:add $(TESTERS) \
+		--group-aliases $(TESTERS_GROUP) \
+		--project $(FIREBASE_PROJECT)
+
+# Remove testers — they lose access immediately.
+#   make release-testers-remove TESTERS="a@x.com"
+release-testers-remove:
+	@[ -n "$(TESTERS)" ] || { echo "Pass TESTERS=\"a@x.com,b@x.com\""; exit 1; }
+	firebase appdistribution:testers:remove $(TESTERS) \
+		--project $(FIREBASE_PROJECT)

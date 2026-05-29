@@ -103,88 +103,96 @@ class _RestoreScreenState extends State<RestoreScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: const Text('Restore Wallet')),
-      body: Padding(
-        padding: const EdgeInsets.all(24.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            if (_downloading)
-              Column(
-                children: [
-                  const SizedBox(height: 48),
-                  const Center(child: CircularProgressIndicator()),
-                  const SizedBox(height: 16),
-                  Text('Downloading backup…',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.inter(color: Colors.white70)),
-                ],
-              )
-            else if (_blob == null)
-              Column(
-                children: [
-                  const SizedBox(height: 16),
-                  Text(
-                    _error ?? 'No backup available.',
-                    style: GoogleFonts.inter(color: Colors.redAccent),
-                  ),
-                  const SizedBox(height: 16),
-                  ElevatedButton(
-                    onPressed: _download,
-                    child: const Text('Retry'),
-                  ),
-                ],
-              )
-            else ...[
-              Text(
-                'Unlock your backup',
-                style: GoogleFonts.inter(
-                    fontSize: 18, fontWeight: FontWeight.bold),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                'Enter the password you used when you first set up this '
-                'wallet.',
-                style: GoogleFonts.inter(color: Colors.white70, height: 1.5),
-              ),
-              const SizedBox(height: 24),
-              TextField(
-                key: const Key('restorePasswordField'),
-                controller: _passwordCtrl,
-                obscureText: _obscure,
-                onChanged: (_) => setState(() {}),
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  suffixIcon: IconButton(
-                    icon: Icon(_obscure
-                        ? Icons.visibility
-                        : Icons.visibility_off),
-                    onPressed: () => setState(() => _obscure = !_obscure),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (_downloading) ...[
+                        const SizedBox(height: 48),
+                        const Center(child: CircularProgressIndicator()),
+                        const SizedBox(height: 16),
+                        Text('Downloading backup…',
+                            textAlign: TextAlign.center,
+                            style: GoogleFonts.inter(color: Colors.white70)),
+                      ] else if (_blob == null) ...[
+                        const SizedBox(height: 16),
+                        Text(
+                          _error ?? 'No backup available.',
+                          style: GoogleFonts.inter(color: Colors.redAccent),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _download,
+                          child: const Text('Retry'),
+                        ),
+                      ] else ...[
+                        Text(
+                          'Unlock your backup',
+                          style: GoogleFonts.inter(
+                              fontSize: 18, fontWeight: FontWeight.bold),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Enter the password you used when you first set up this '
+                          'wallet.',
+                          style: GoogleFonts.inter(
+                              color: Colors.white70, height: 1.5),
+                        ),
+                        const SizedBox(height: 24),
+                        TextField(
+                          key: const Key('restorePasswordField'),
+                          controller: _passwordCtrl,
+                          obscureText: _obscure,
+                          onChanged: (_) => setState(() {}),
+                          decoration: InputDecoration(
+                            labelText: 'Password',
+                            suffixIcon: IconButton(
+                              icon: Icon(_obscure
+                                  ? Icons.visibility
+                                  : Icons.visibility_off),
+                              onPressed: () =>
+                                  setState(() => _obscure = !_obscure),
+                            ),
+                          ),
+                          style: GoogleFonts.inter(color: Colors.white),
+                        ),
+                        if (_error != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(_error!,
+                                style: GoogleFonts.inter(
+                                    color: Colors.redAccent)),
+                          ),
+                      ],
+                    ],
                   ),
                 ),
-                style: GoogleFonts.inter(color: Colors.white),
               ),
-              if (_error != null)
-                Padding(
-                  padding: const EdgeInsets.only(top: 8),
-                  child: Text(_error!,
-                      style: GoogleFonts.inter(color: Colors.redAccent)),
+              if (_blob != null && !_downloading) ...[
+                const SizedBox(height: 16),
+                ElevatedButton(
+                  key: const Key('restoreContinueBtn'),
+                  onPressed: _decrypting || _passwordCtrl.text.isEmpty
+                      ? null
+                      : _decryptAndContinue,
+                  child: _decrypting
+                      ? const SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Continue'),
                 ),
-              const Spacer(),
-              ElevatedButton(
-                key: const Key('restoreContinueBtn'),
-                onPressed: _decrypting || _passwordCtrl.text.isEmpty
-                    ? null
-                    : _decryptAndContinue,
-                child: _decrypting
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Text('Continue'),
-              ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
     );

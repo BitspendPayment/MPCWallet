@@ -5,6 +5,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write        # Mint OIDC token for Sigstore signing.
+  attestations: write    # Publish provenance to GitHub's attestations API.
 
 jobs:
   build-eif:
@@ -62,6 +64,14 @@ jobs:
             --prerelease \
             cosigner-runtime/.enclave/artifacts/image.eif \
             cosigner-runtime/.enclave/artifacts/pcr.json \
+            cosigner-runtime/.enclave/artifacts/supervisor
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-path: |
+            cosigner-runtime/.enclave/artifacts/image.eif
+            cosigner-runtime/.enclave/artifacts/pcr.json
             cosigner-runtime/.enclave/artifacts/supervisor
 
       - name: Publish deployment manifest

@@ -25,11 +25,12 @@ class ReceiveScreen extends StatelessWidget {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              const SizedBox(height: 48),
-              if (address != null) ...[
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                const SizedBox(height: 48),
+                if (address != null) ...[
                 // QR Code Container
                 Container(
                   padding: const EdgeInsets.all(16),
@@ -92,17 +93,18 @@ class ReceiveScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-              ] else ...[
-                const Center(
-                  child: CircularProgressIndicator(),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  "Loading wallet address...",
-                  style: GoogleFonts.inter(color: Colors.white54),
-                )
-              ]
-            ],
+                ] else ...[
+                  const Center(
+                    child: CircularProgressIndicator(),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    "Loading wallet address...",
+                    style: GoogleFonts.inter(color: Colors.white54),
+                  )
+                ]
+              ],
+            ),
           ),
         ),
       ),

@@ -7,7 +7,8 @@ on:
 
 permissions:
   contents: read
-  id-token: write    # required to mint OIDC tokens
+  id-token: write        # Mint OIDC tokens (custom webhook + Sigstore signing).
+  attestations: write    # Publish verify-result attestation to GitHub's attestations API.
 
 jobs:
   verify:
@@ -65,6 +66,45 @@ jobs:
             echo "${output}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build attestation predicate
+        if: steps.verify.outcome != 'skipped'
+        env:
+          STATUS: ${{ steps.verify.outputs.status }}
+          PCR0: ${{ steps.manifest.outputs.pcr0 }}
+          PCR1: ${{ steps.manifest.outputs.pcr1 }}
+          PCR2: ${{ steps.manifest.outputs.pcr2 }}
+          BASE_URL: ${{ steps.manifest.outputs.base_url || vars.ENCLAVE_BASE_URL }}
+          VERIFIER: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          jq -n \
+            --arg status "$STATUS" \
+            --arg pcr0 "$PCR0" \
+            --arg pcr1 "$PCR1" \
+            --arg pcr2 "$PCR2" \
+            --arg base_url "$BASE_URL" \
+            --arg verifier "$VERIFIER" \
+            --argjson verifiedAt "$(date -u +%s)" \
+            '{
+              status: $status,
+              expectedPcr0: $pcr0,
+              expectedPcr1: $pcr1,
+              expectedPcr2: $pcr2,
+              baseUrl: $base_url,
+              verifier: $verifier,
+              verifiedAt: $verifiedAt
+            }' > predicate.json
+
+      # PCR0 is the SHA-256 boot measurement of the EIF — using it as the
+      # subject digest binds this attestation to the EIF measurement itself.
+      - name: Attest enclave verification result
+        if: steps.verify.outcome != 'skipped'
+        uses: actions/attest@v2
+        with:
+          subject-name: enclave-verify-${{ steps.manifest.outputs.pcr0 }}
+          subject-digest: sha256:${{ steps.manifest.outputs.pcr0 }}
+          predicate-type: https://github.com/BitspendPayment/MPCWallet/predicates/enclave-verify/v1
+          predicate-path: predicate.json
 
       - name: Mint OIDC token
         id: oidc
