@@ -294,6 +294,9 @@ message GetArkInfoResponse {
     int64 dust = 8;
     string checkpoint_tapscript = 9;
     string forfeit_address = 10;
+    // Seconds before a VTXO's expiry that the cosigner auto-settles a stored
+    // delegate. Lets the client show an accurate "refreshes around" time.
+    int64 auto_settle_safety_margin_secs = 11;
 }
 
 message GetArkAddressRequest {

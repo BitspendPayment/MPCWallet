@@ -654,6 +654,24 @@ pub fn settle_delegate(
                 ));
             }
 
+            // Earliest expiry across the covered VTXOs sets the intent's
+            // renewal time. We sign with valid_at = expiry - safety_margin and
+            // expire_at = 0 (no expiry): arkd rejects settling before the
+            // renewal time, and the stored proof never goes stale. When the
+            // expiry isn't known yet, fall back to the legacy 2-minute window.
+            let earliest_expires_at = state
+                .vtxos
+                .iter()
+                .filter_map(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+                .min()
+                .unwrap_or(0);
+            let margin = shared.auto_settle_safety_margin_secs;
+            let intent_valid_at = if earliest_expires_at > margin {
+                Some((earliest_expires_at - margin) as u64)
+            } else {
+                None
+            };
+
             let (session, sighashes) =
                 ark::client::batch::DelegateSettleSession::generate_delegate(
                     &owner_pk_hex,
@@ -666,6 +684,7 @@ pub fn settle_delegate(
                     info.dust as u64,
                     input_exit_delay,
                     &info.network,
+                    intent_valid_at,
                 )
                 .map_err(|e| Status::internal(format!("generate_delegate: {e}")))?;
 
@@ -677,12 +696,6 @@ pub fn settle_delegate(
                 .iter()
                 .map(|e| (e.txid.clone(), e.vout))
                 .collect();
-            let earliest_expires_at = state
-                .vtxos
-                .iter()
-                .filter_map(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
-                .min()
-                .unwrap_or(0);
 
             state.delegate_session = Some(DelegateRecord {
                 session,

@@ -10,7 +10,7 @@ name = "ark"
 threshold = { path = "../threshold" }
 
 # Optional deps for the `client` feature (ASP communication + ark-core types)
-ark-core = { version = "0.8", optional = true }
+ark-core = { version = "0.9", optional = true }
 bitcoin = { version = "0.32", features = ["serde"], optional = true }
 tokio = { version = "1", features = ["full"], optional = true }
 tonic = { version = "0.12", optional = true, features = ["tls-webpki-roots"] }

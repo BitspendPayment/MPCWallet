@@ -19,16 +19,23 @@ import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../firebase_options.dart';
 import 'mpc_service.dart';
 
 class PushService {
   static bool _initialized = false;
 
+  /// The live, logged-in service. Set by [registerCurrentToken] so the
+  /// foreground push handler can drive a re-delegate while the app is open.
+  static MpcService? _svc;
+
   /// Foreground init. Called from `main()` before runApp.
   static Future<void> initialize() async {
     if (_initialized) return;
     try {
-      await Firebase.initializeApp();
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
     } catch (e) {
       debugPrint('[push] Firebase.initializeApp failed: $e — push disabled');
       return;
@@ -51,6 +58,7 @@ class PushService {
   /// Register the current FCM token with the cosigner. Call after login,
   /// once `MpcService` has a client. Idempotent.
   static Future<void> registerCurrentToken(MpcService svc) async {
+    _svc = svc;
     if (!_initialized) return;
     try {
       final token = await FirebaseMessaging.instance.getToken();
@@ -74,8 +82,21 @@ class PushService {
 
   static Future<void> _handleForegroundMessage(RemoteMessage msg) async {
     debugPrint('[push] foreground: ${msg.data}');
-    // Foreground refresh runs through the existing app — nothing to do here
-    // beyond logging; the MpcService is already poll-active.
+    if (msg.data['type'] != 'vtxo_received') return;
+    // App is open: nothing wakes a background isolate, so drive the refresh
+    // here. refreshVtxos() runs _delegateIfNeeded() -> settleDelegate, the same
+    // re-delegate the background handler performs.
+    final svc = _svc;
+    if (svc == null) {
+      debugPrint('[push] foreground vtxo_received but no live service yet');
+      return;
+    }
+    try {
+      await svc.refreshVtxos();
+      debugPrint('[push] foreground re-delegate via refreshVtxos ok');
+    } catch (e) {
+      debugPrint('[push] foreground refreshVtxos failed: $e');
+    }
   }
 
   /// Run the same code path `_handleBackgroundMessage` runs for a
@@ -111,7 +132,12 @@ String _baseUrlFor(String host) {
 /// from Hive.
 Future<void> _runBackgroundDelegate({Duration? timeout}) async {
   final dir = await getApplicationDocumentsDirectory();
-  Hive.init(dir.path);
+  // Must match the main app's Hive root. MpcService.init() initialises
+  // persistence at '<docs>/mpc_client' (via MpcClient.initPersistence), so the
+  // identity box and wallet state live there. A bare Hive.init(dir.path) opens
+  // an empty box in the wrong directory — identity + wallet state come back
+  // missing and the delegate silently no-ops.
+  await MpcClient.initPersistence(path: '${dir.path}/mpc_client');
   final identityBox = await Hive.openBox('mpc_service_identity');
   final host = identityBox.get('serverHost') as String?;
   final storageId = identityBox.get('storageId') as String?;
@@ -148,7 +174,9 @@ Future<void> _runBackgroundDelegate({Duration? timeout}) async {
 Future<void> _handleBackgroundMessage(RemoteMessage msg) async {
   if (msg.data['type'] != 'vtxo_received') return;
   try {
-    await Firebase.initializeApp();
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
   } catch (e) {
     debugPrint('[push:bg] Firebase.initializeApp failed: $e');
     return;

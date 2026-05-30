@@ -131,7 +131,8 @@ software-ark: cosigner-build runtime-build ffi-build ffi-android
 		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
 		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
 		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
-		       ASP_URL=http://127.0.0.1:7070; \
+		       ASP_URL=http://127.0.0.1:7070 \
+		       FCM_SERVICE_ACCOUNT_JSON="$$(cat $${FCM_SA_FILE:-$$HOME/Downloads/vtxos-key.json} 2>/dev/null)"; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
 			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 			--port 7074'
@@ -208,6 +209,15 @@ bob-up:
 bob-down:
 	-pkill -f bob_proxy || true
 	-sudo fuser -k 7090/tcp 2>/dev/null || true
+
+# Send a VTXO from Bob to any ark address. Requires bob-up to have run first.
+# Usage: make bob-send ADDR=tark1... [AMT=50000]
+bob-send:
+	@test -n "$(ADDR)" || { echo "ADDR=<ark address> required (e.g. make bob-send ADDR=tark1... AMT=50000)"; exit 1; }
+	$${RUST_SDK_DIR:-third_party/rust-sdk}/target/release/ark-client-sample \
+		--config $${BOB_DIR:-/tmp/bob_ark}/ark.config.toml \
+		--seed $${BOB_DIR:-/tmp/bob_ark}/ark.seed \
+		send-to-ark-addresses "$(ADDR),$(or $(AMT),50000)"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  HW SIGNER (TrustZone — Secure + Non-Secure worlds)

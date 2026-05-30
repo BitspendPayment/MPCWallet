@@ -85,7 +85,8 @@ class ArkScreen extends StatelessWidget {
                             itemCount: arkTxs.length,
                             itemBuilder: (context, index) {
                               final tx = arkTxs[arkTxs.length - 1 - index];
-                              return _buildTransactionItem(tx);
+                              return _buildTransactionItem(
+                                  context, tx, mpcService);
                             },
                           ),
                   ),
@@ -284,7 +285,8 @@ class ArkScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTransactionItem(ArkTransactionSummary tx) {
+  Widget _buildTransactionItem(
+      BuildContext context, ArkTransactionSummary tx, MpcService mpcService) {
     final amount = tx.amountSats.toInt();
     final isIncoming = amount >= 0;
     final absAmount = amount.abs();
@@ -313,58 +315,196 @@ class ArkScreen extends StatelessWidget {
             DateTime.fromMillisecondsSinceEpoch(tx.timestamp.toInt() * 1000))
         : '';
 
+    // A still-present VTXO sharing this txid means the received output is live
+    // and, when the server holds a delegate, queued for automatic refresh.
+    // Matched on txid only, which is ambiguous when a txid has multiple outputs
+    // to us. Keying on txid+vout needs vout plumbed through the tx summary —
+    // see https://github.com/BitspendPayment/MPCWallet/issues/39.
+    VtxoInfo? vtxo;
+    for (final v in mpcService.vtxos) {
+      if (v.txid == tx.txid) {
+        vtxo = v;
+        break;
+      }
+    }
+    final delegated =
+        isIncoming && vtxo != null && mpcService.hasActiveDelegate;
+
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
-      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Row(
-        children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              color: isIncoming
-                  ? Colors.green.withOpacity(0.1)
-                  : Colors.white10,
-              shape: BoxShape.circle,
-            ),
-            child: Icon(
-              isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
-              color: isIncoming ? Colors.greenAccent : Colors.white,
-              size: 20,
-            ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: delegated
+            ? () => _showDelegateInfo(context, vtxo!, mpcService)
+            : null,
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: isIncoming
+                      ? Colors.green.withOpacity(0.1)
+                      : Colors.white10,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
+                  color: isIncoming ? Colors.greenAccent : Colors.white,
+                  size: 20,
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            overflow: TextOverflow.ellipsis,
+                            style: GoogleFonts.inter(
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                        ),
+                        if (delegated) ...[
+                          const SizedBox(width: 6),
+                          Icon(
+                            Icons.autorenew,
+                            size: 14,
+                            color: Colors.tealAccent.withOpacity(0.8),
+                          ),
+                        ],
+                      ],
+                    ),
+                    Text(
+                      date,
+                      style: GoogleFonts.inter(
+                        color: Colors.white38,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              Text(
+                '${isIncoming ? '+' : '-'}${formatter.format(absAmount)} Sats',
+                style: GoogleFonts.inter(
+                  fontWeight: FontWeight.bold,
+                  color: isIncoming ? Colors.greenAccent : Colors.white,
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+      ),
+    );
+  }
+
+  /// Bottom sheet shown when tapping a delegated received VTXO: explains the
+  /// auto-refresh and shows the estimated refresh + expiry times.
+  void _showDelegateInfo(
+      BuildContext context, VtxoInfo vtxo, MpcService mpcService) {
+    // The server auto-settles when now >= expires_at - safety_margin (see
+    // auto_settle.rs), so that threshold is the real refresh time. The margin
+    // comes from GetArkInfo. When the threshold is already in the past the
+    // next 60s auto-settle tick refreshes it, so show it as imminent rather
+    // than a stale timestamp.
+    final serverMargin =
+        mpcService.arkInfo?.autoSettleSafetyMarginSecs.toInt() ?? 0;
+    final expiresAt = vtxo.expiresAt.toInt();
+    final hasExpiry = expiresAt > 0;
+    final fmt = DateFormat.yMMMd().add_jm();
+    final expiryStr =
+        hasExpiry ? fmt.format(DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000)) : null;
+    final refreshAt = expiresAt - serverMargin;
+    final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    final hasRefreshEstimate = hasExpiry && serverMargin > 0;
+    // Threshold already passed: the next auto-settle tick refreshes it.
+    final refreshImminent = hasRefreshEstimate && refreshAt <= nowSecs;
+    final refreshTimeStr = (hasRefreshEstimate && !refreshImminent)
+        ? fmt.format(DateTime.fromMillisecondsSinceEpoch(refreshAt * 1000))
+        : null;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF1E1E1E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(24, 20, 24, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
               children: [
+                Icon(Icons.autorenew,
+                    size: 20, color: Colors.tealAccent.withOpacity(0.9)),
+                const SizedBox(width: 8),
                 Text(
-                  title,
+                  'Auto-refresh enabled',
                   style: GoogleFonts.inter(
                     fontWeight: FontWeight.w600,
                     color: Colors.white,
-                    fontSize: 14,
-                  ),
-                ),
-                Text(
-                  date,
-                  style: GoogleFonts.inter(
-                    color: Colors.white38,
-                    fontSize: 12,
+                    fontSize: 16,
                   ),
                 ),
               ],
             ),
-          ),
-          Text(
-            '${isIncoming ? '+' : '-'}${formatter.format(absAmount)} Sats',
-            style: GoogleFonts.inter(
-              fontWeight: FontWeight.bold,
-              color: isIncoming ? Colors.greenAccent : Colors.white,
+            const SizedBox(height: 8),
+            Text(
+              'This received VTXO is delegated to the server, which refreshes '
+              'it automatically before it expires — no action needed.',
+              style: GoogleFonts.inter(
+                color: Colors.white60,
+                fontSize: 13,
+                height: 1.4,
+              ),
+            ),
+            const SizedBox(height: 20),
+            if (refreshImminent)
+              _infoRow('Refreshes', 'any moment now')
+            else if (refreshTimeStr != null)
+              _infoRow('Refreshes around', refreshTimeStr)
+            else
+              _infoRow('Refreshes', 'shortly before expiry'),
+            if (expiryStr != null) _infoRow('Expires', expiryStr),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _infoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label,
+              style: GoogleFonts.inter(color: Colors.white38, fontSize: 13)),
+          Flexible(
+            child: Text(
+              value,
+              textAlign: TextAlign.right,
+              style: GoogleFonts.inter(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
             ),
           ),
         ],

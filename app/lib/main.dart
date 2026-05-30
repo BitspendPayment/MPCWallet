@@ -37,10 +37,18 @@ void main() async {
       providers: [
         ChangeNotifierProvider(create: (_) {
           final svc = MpcService();
-          svc.initFuture = svc.init().then((_) async {
-            // Register FCM token with the cosigner once init has set up the
-            // client. Idempotent — re-registers on token rotation too.
-            await PushService.registerCurrentToken(svc);
+          svc.initFuture = svc.init();
+          // The FCM token can only be registered once the wallet is
+          // authenticated — DKG or session restore is what populates
+          // client.userId. init() alone doesn't log in, so register on the
+          // first change where a user id exists. Idempotent; PushService also
+          // re-registers on token rotation.
+          var tokenRegistered = false;
+          svc.addListener(() {
+            if (!tokenRegistered && svc.client?.userId != null) {
+              tokenRegistered = true;
+              PushService.registerCurrentToken(svc);
+            }
           });
           return svc;
         }),

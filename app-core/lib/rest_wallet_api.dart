@@ -336,7 +336,9 @@ class RestWalletApi implements WalletApi {
       ..vtxoMinAmount = Int64(resp['vtxo_min_amount'] as int? ?? 0)
       ..dust = Int64(resp['dust'] as int? ?? 0)
       ..checkpointTapscript = resp['checkpoint_tapscript'] as String? ?? ''
-      ..forfeitAddress = resp['forfeit_address'] as String? ?? '';
+      ..forfeitAddress = resp['forfeit_address'] as String? ?? ''
+      ..autoSettleSafetyMarginSecs =
+          Int64(resp['auto_settle_safety_margin_secs'] as int? ?? 0);
   }
 
   @override

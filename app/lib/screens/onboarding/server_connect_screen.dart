@@ -5,7 +5,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import '../../services/mpc_service.dart';
 
-const String _regtestHost = '10.0.2.2';
+const String _regtestHost = '127.0.0.1';
 const String _mutinyHost = 'mutiny.vtxos.network';
 
 class ServerConnectionScreen extends StatefulWidget {

@@ -154,6 +154,7 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
                 vtxo_script_pubkey.clone(),
                 Amount::from_sat(vi.amount),
                 outpoint,
+                Vec::new(), // assets — none (ark-core 0.9)
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
@@ -163,14 +164,18 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
         .recipient_ark_address
         .parse()
         .map_err(|e| format!("invalid recipient: {e}"))?;
-    let outputs = vec![(&recipient, Amount::from_sat(params.amount))];
+    // ark-core 0.9: SendReceiver instead of (&addr, amount) tuples.
+    let receivers = vec![send::SendReceiver::bitcoin(
+        recipient,
+        Amount::from_sat(params.amount),
+    )];
 
-    let change_addr: Option<ark_core::ArkAddress> = params
-        .change_ark_address
-        .as_deref()
-        .map(|a| a.parse().map_err(|e| format!("invalid change addr: {e}")))
-        .transpose()?;
-    let change_ref = change_addr.as_ref();
+    // 0.9 requires a change address (only emits change when there's leftover).
+    // Default to the sender's own ark address when none is provided.
+    let change_addr: ark_core::ArkAddress = match params.change_ark_address.as_deref() {
+        Some(a) => a.parse().map_err(|e| format!("invalid change addr: {e}"))?,
+        None => vtxo.to_ark_address(),
+    };
 
     // Build server::Info
     let server_info = build_server_info(&params.ark_info, network)?;
@@ -179,7 +184,7 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
     let OffchainTransactions {
         ark_tx,
         checkpoint_txs,
-    } = send::build_offchain_transactions(&outputs, change_ref, &send_inputs, &server_info)
+    } = send::build_offchain_transactions(&receivers, &change_addr, &send_inputs, &server_info)
         .map_err(|e| format!("build_offchain_transactions: {e}"))?;
 
     // Compute sighashes
@@ -482,6 +487,9 @@ fn build_server_info(info: &ArkInfoParam, network: Network) -> Result<server::In
         deprecated_signers: vec![],
         service_status: HashMap::new(),
         digest: String::new(),
+        // Not enforced by the off-chain send build path; 0 = unset.
+        max_tx_weight: 0,
+        max_op_return_outputs: 0,
     })
 }
 

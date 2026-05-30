@@ -2442,6 +2442,7 @@ class GetArkInfoResponse extends $pb.GeneratedMessage {
     ..aInt64(8, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'dust')
     ..aOS(9, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'checkpointTapscript')
     ..aOS(10, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'forfeitAddress')
+    ..aInt64(11, const $core.bool.fromEnvironment('protobuf.omit_field_names') ? '' : 'autoSettleSafetyMarginSecs')
     ..hasRequiredFields = false
   ;
 
@@ -2457,6 +2458,7 @@ class GetArkInfoResponse extends $pb.GeneratedMessage {
     $fixnum.Int64? dust,
     $core.String? checkpointTapscript,
     $core.String? forfeitAddress,
+    $fixnum.Int64? autoSettleSafetyMarginSecs,
   }) {
     final _result = create();
     if (signerPubkey != null) {
@@ -2488,6 +2490,9 @@ class GetArkInfoResponse extends $pb.GeneratedMessage {
     }
     if (forfeitAddress != null) {
       _result.forfeitAddress = forfeitAddress;
+    }
+    if (autoSettleSafetyMarginSecs != null) {
+      _result.autoSettleSafetyMarginSecs = autoSettleSafetyMarginSecs;
     }
     return _result;
   }
@@ -2601,6 +2606,15 @@ class GetArkInfoResponse extends $pb.GeneratedMessage {
   $core.bool hasForfeitAddress() => $_has(9);
   @$pb.TagNumber(10)
   void clearForfeitAddress() => clearField(10);
+
+  @$pb.TagNumber(11)
+  $fixnum.Int64 get autoSettleSafetyMarginSecs => $_getI64(10);
+  @$pb.TagNumber(11)
+  set autoSettleSafetyMarginSecs($fixnum.Int64 v) { $_setInt64(10, v); }
+  @$pb.TagNumber(11)
+  $core.bool hasAutoSettleSafetyMarginSecs() => $_has(10);
+  @$pb.TagNumber(11)
+  void clearAutoSettleSafetyMarginSecs() => clearField(11);
 }
 
 class GetArkAddressRequest extends $pb.GeneratedMessage {
