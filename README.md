@@ -1,6 +1,6 @@
-# VTXOS
+# Merlin Wallet
 
-A **self-custodial Bitcoin wallet** powered by **FROST threshold signatures**. The full private key never exists on any single device. Three independent identities — your phone, a hardware signer, and a remote cosigning service — jointly control your funds through a 2-of-3 threshold scheme.
+A **Recoverable Social Threshold Bitcoin wallet** powered by **FROST threshold signatures**. The full private key never exists on any single device. Three independent identities — your phone, a hardware signer, and a remote cosigning service — jointly control your funds through a 2-of-3 threshold scheme.
 
 
 
