@@ -26,7 +26,9 @@ jobs:
           go-version: stable
 
       - name: Install enclave CLI
-        run: go install github.com/ArkLabsHQ/introspector-enclave/cli/cmd/enclave@latest
+        # Pinned (not @latest) so the build tool can't drift under us. Keep in
+        # sync with runtime.rev in cosigner-runtime/enclave/enclave.yaml.
+        run: go install github.com/ArkLabsHQ/introspector-enclave/cli/cmd/enclave@v0.0.79
 
       - name: Build EIF
         working-directory: cosigner-runtime
