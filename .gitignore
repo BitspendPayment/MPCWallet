@@ -63,3 +63,11 @@ protocol/lib/src/generated/
 
 # Data
 e2e/hive_db
+
+# Vendored Rust crate sources (cosigner-runtime/vendor/) are committed so the
+# EIF / offline build needs zero crates.io access. Crates legitimately contain
+# files/dirs matched by the rules above (target/, build/, .vscode/, *.log, …);
+# excluding ANY of them corrupts the vendored checksums and breaks the build.
+# Keep this LAST so it overrides every rule above.
+!cosigner-runtime/vendor/
+!cosigner-runtime/vendor/**
