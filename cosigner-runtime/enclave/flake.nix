@@ -75,7 +75,11 @@
             hash = appCfg.nix_hash;
           };
 
-          cargoHash = if appCfg.nix_vendor_hash == "" then "" else appCfg.nix_vendor_hash;
+          # Build from the committed vendor/ dir (see cosigner-runtime/.cargo/config.toml)
+          # so the EIF build needs zero crates.io access and survives upstream crates
+          # being yanked/removed. Path is relative to cargoRoot (the nix_subdir),
+          # so just "vendor" (NOT "${appCfg.nix_subdir}/vendor" — that double-nests).
+          cargoVendorDir = "vendor";
 
           doCheck = false;
 
