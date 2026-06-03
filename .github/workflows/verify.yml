@@ -160,7 +160,7 @@ jobs:
               verified_at: $verified_at
             }')
 
-          curl -fsSL --retry 3 -X POST "$API_URL/api/attestations/webhook" \
+          curl --fail-with-body -sSL --retry 3 -X POST "$API_URL/api/attestations/webhook" \
             -H "Authorization: Bearer $OIDC_TOKEN" \
             -H "Content-Type: application/json" \
             -d "$payload"
