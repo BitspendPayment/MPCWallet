@@ -75,11 +75,19 @@
             hash = appCfg.nix_hash;
           };
 
-          cargoHash = if appCfg.nix_vendor_hash == "" then "" else appCfg.nix_vendor_hash;
+          # Build from the committed vendor/ dir (see cosigner-runtime/.cargo/config.toml)
+          # so the EIF build needs zero crates.io access and survives upstream crates
+          # being yanked/removed. Path is relative to cargoRoot (the nix_subdir),
+          # so just "vendor" (NOT "${appCfg.nix_subdir}/vendor" — that double-nests).
+          cargoVendorDir = "vendor";
 
           doCheck = false;
 
-          cargoBuildFlags = [ "--bin" appCfg.binary_name ];
+          # The enclave build must use the supervisor-backed persistence store,
+          # not the default Sled backend (which writes to ephemeral enclave-local
+          # disk and is lost on every restart/migration). Disable default features
+          # so PERSISTENCE_BACKEND="enclave" can't silently fall back to Sled.
+          cargoBuildFlags = [ "--bin" appCfg.binary_name "--no-default-features" "--features" "enclave-backend" ];
 
           nativeBuildInputs = resolveInputs (appCfg.nix_native_build_inputs or []);
           buildInputs = resolveInputs (appCfg.nix_build_inputs or []);

@@ -11,7 +11,7 @@ use super::traits::{KvStore, PersistenceError, SecretStore};
 ///   GET    /v1/storage/{key}           -> 200 + body | 404
 ///   PUT    /v1/storage/{key}           -> 200  (body = value)
 ///   DELETE /v1/storage/{key}           -> 200
-///   GET    /v1/storage?prefix={pfx}    -> 200 + JSON list of keys
+///   GET    /v1/storage?prefix={pfx}    -> 200 + JSON array of keys ["a","b"]
 ///
 /// Secrets API (`/v1/secrets/`):
 ///   GET    /v1/secrets/{name}          -> 200 + JSON { "value": "..." } | 404
@@ -144,12 +144,10 @@ impl KvStore for EnclaveStore {
                 ));
             }
 
-            // Supervisor returns {"keys": ["key1", "key2", ...]}.
-            #[derive(serde::Deserialize)]
-            struct ListResponse { keys: Vec<String> }
-            let list: ListResponse = resp.json().await
+            // Supervisor returns a bare JSON array of full keys (tree prefix
+            // included), e.g. ["delegate_sessions/abc", "delegate_sessions/def"].
+            let keys: Vec<String> = resp.json().await
                 .map_err(|e| PersistenceError::Backend(format!("enclave list parse: {e}")))?;
-            let keys = list.keys;
 
             let mut result = HashMap::new();
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
@@ -193,11 +191,8 @@ impl KvStore for EnclaveStore {
                 ));
             }
 
-            #[derive(serde::Deserialize)]
-            struct ListResponse { keys: Vec<String> }
-            let list: ListResponse = resp.json().await
+            let keys: Vec<String> = resp.json().await
                 .map_err(|e| PersistenceError::Backend(format!("enclave clear parse: {e}")))?;
-            let keys = list.keys;
 
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
             for full_key in keys {

@@ -302,14 +302,15 @@ pub fn dkg_step3(
     }
 
     // Round just completed. Insert server-local round2 packages into relay,
-    // then run server key derivation + persist policy.
+    // then run server key derivation + persist policy. Finalize is unconditional —
+    // a missing round2 secret here means step2 didn't run (or already finalized),
+    // which is a protocol violation; surface as an error instead of returning Ok
+    // with no persistence. (`step3_finalize_server_key` errors on `None`.)
     sess.insert_relay_from_local(server_identifier_hex);
-    if sess.round2_secret.is_some() {
-        if let Err(e) = step3_finalize_server_key(sess, shared, &user_id_hex) {
-            let _ = reply.send(Err(e));
-            drain_pairs_with_err(&mut sess.pending_step3, "step3 finalize failed");
-            return false;
-        }
+    if let Err(e) = step3_finalize_server_key(sess, shared, &user_id_hex) {
+        let _ = reply.send(Err(e));
+        drain_pairs_with_err(&mut sess.pending_step3, "step3 finalize failed");
+        return false;
     }
 
     // Per-caller responses: the just-arrived caller plus every stashed one.
@@ -486,19 +487,24 @@ fn step3_finalize_server_key(
 
     persist_policy(shared, &policy_user_id, &policy_state)?;
 
-    // Forward index: the URL/auth user_id used during DKG is the wallet's
-    // owner pubkey, but the policy is persisted under the FROST verifying-share
-    // (since post-DKG auth signatures verify against that share). This index
-    // lets the actor for the owner pubkey find its canonical policy on respawn,
-    // and lets clients use either identity in the URL.
+    // `user_id_hex` at DKG time is the hardware signer's FROST verifying key
+    // (the client uses it as a temporary session label — DKG endpoints are
+    // unauthenticated). After DKG, the canonical identity is the wallet's
+    // FROST verifying-share (`policy_user_id`), which `auth_check` validates
+    // signatures against; that's why policies are keyed under it. The HW
+    // verifying key is also recorded as `recovery_id` (see persist_policy),
+    // so a client may still address the wallet using it — most importantly
+    // during recovery flows where the HW signer reasserts its identity.
+    // This index translates HW_VK → FROST share so `ensure_policy_loaded`
+    // can resolve those requests to the canonical policy.
     if policy_user_id != user_id_hex {
-        if let Err(e) =
-            shared
-                .persistence
-                .put("policy_owner_idx", user_id_hex, &policy_user_id)
-        {
-            tracing::warn!("persist policy_owner_idx/{user_id_hex} failed: {e}");
-        }
+        shared
+            .persistence
+            .put("policy_owner_idx", user_id_hex, &policy_user_id)
+            .map_err(|e| {
+                tracing::error!("persist policy_owner_idx/{user_id_hex} failed: {e}");
+                Status::internal(format!("persist policy_owner_idx failed: {e}"))
+            })?;
     }
 
     tracing::info!("[{user_id_hex}] DKG Complete");

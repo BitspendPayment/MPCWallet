@@ -14,6 +14,7 @@
 #
 #  Release (Firebase App Distribution):
 #    make release                       Build arm64 release APK + push to testers
+#    make release VERSION=1.2.0 BUILD_NUMBER=5 RELEASE_NOTES="..."  (override version)
 #    make release-apk                   Build arm64 release APK only (FFI + signed)
 #    make release-apk-fat               Fat APK: arm64 + arm32 + x86_64
 #    make release-testers-add TESTERS="a@x.com,b@x.com"
@@ -57,6 +58,15 @@ FIREBASE_APP_ID  ?= 1:575541915148:android:5fbaa581de7d4686378829
 FIREBASE_PROJECT ?= vtxos-7afb3
 TESTERS_GROUP    ?= internal
 RELEASE_NOTES    ?= Internal build
+
+# Override the app version at build time without editing pubspec.yaml.
+#   make release VERSION=1.2.0 BUILD_NUMBER=5 RELEASE_NOTES="..."
+# VERSION sets --build-name (the x.y.z shown to testers); BUILD_NUMBER sets
+# --build-number (the integer Android versionCode, must increase each upload).
+# Leave either empty to fall back to the value in app/pubspec.yaml.
+VERSION      ?=
+BUILD_NUMBER ?=
+VERSION_FLAGS = $(if $(VERSION),--build-name=$(VERSION)) $(if $(BUILD_NUMBER),--build-number=$(BUILD_NUMBER))
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PRIMARY COMMANDS
@@ -561,14 +571,14 @@ regtest-hardware-ark-down: down
 # For arm64 + arm32 fat APK, run `make release-apk-fat` instead.
 release-apk: ffi-android
 	@echo "==> Building release APK (arm64)..."
-	cd app && flutter build apk --release --target-platform android-arm64
+	cd app && flutter build apk --release --target-platform android-arm64 $(VERSION_FLAGS)
 	@echo "==> APK: app/build/app/outputs/flutter-apk/app-release.apk"
 
 # Fat APK: arm64 + arm32 + x86_64. Larger (~3x) but installs on older phones
 # and x86_64 emulators. Use when you don't know what device your tester runs.
 release-apk-fat: ffi-android-all
 	@echo "==> Building fat release APK (arm64 + arm32 + x86_64)..."
-	cd app && flutter build apk --release
+	cd app && flutter build apk --release $(VERSION_FLAGS)
 	@echo "==> APK: app/build/app/outputs/flutter-apk/app-release.apk"
 
 # Build + ship to Firebase App Distribution. Overrides:
