@@ -1,3 +1,4 @@
+use crate::Asset;
 use crate::Error;
 use crate::ErrorContext;
 use crate::VTXO_CONDITION_KEY;
@@ -47,6 +48,7 @@ pub struct Input {
     spend_info: (ScriptBuf, taproot::ControlBlock),
     is_onchain: bool,
     is_swept: bool,
+    assets: Vec<Asset>,
     /// Extra witness elements for spending (e.g., preimage for ArkNotes).
     /// When set, these are used instead of generating a signature.
     extra_witness: Option<Vec<Vec<u8>>>,
@@ -62,6 +64,7 @@ impl Input {
         spend_info: (ScriptBuf, taproot::ControlBlock),
         is_onchain: bool,
         is_swept: bool,
+        assets: Vec<Asset>,
     ) -> Self {
         Self {
             outpoint,
@@ -72,6 +75,7 @@ impl Input {
             spend_info,
             is_onchain,
             is_swept,
+            assets,
             extra_witness: None,
         }
     }
@@ -86,6 +90,7 @@ impl Input {
         spend_info: (ScriptBuf, taproot::ControlBlock),
         is_onchain: bool,
         is_swept: bool,
+        assets: Vec<Asset>,
         extra_witness: Vec<Vec<u8>>,
     ) -> Self {
         Self {
@@ -97,6 +102,7 @@ impl Input {
             spend_info,
             is_onchain,
             is_swept,
+            assets,
             extra_witness: Some(extra_witness),
         }
     }
@@ -125,6 +131,10 @@ impl Input {
         self.is_swept
     }
 
+    pub fn assets(&self) -> &[Asset] {
+        &self.assets
+    }
+
     pub fn extra_witness(&self) -> Option<&[Vec<u8>]> {
         self.extra_witness.as_deref()
     }
@@ -136,6 +146,9 @@ pub enum Output {
     Offchain(TxOut),
     /// An output created when offboarding.
     Onchain(TxOut),
+    /// An auxiliary output that should be copied into the target transaction but is neither an
+    /// offchain VTXO nor an onchain payout.
+    AssetPacket(TxOut),
 }
 
 #[derive(Debug, Clone)]
@@ -241,7 +254,7 @@ where
 
         let msg = secp256k1::Message::from_digest(tap_sighash.to_raw_hash().to_byte_array());
 
-        // Check if this input has extra witness (e.g., preimage for ArkNotes)
+        // Add extra witness data (e.g., preimage for ArkNotes / VHTLCs) if present.
         if let Some(extra_witness) = input.extra_witness() {
             // Encode the witness elements and add to PSBT unknown field.
             // Format: [num_elements] [len1] [elem1] [len2] [elem2] ...
@@ -253,20 +266,22 @@ where
                 },
                 encoded,
             );
-        } else {
-            // Normal signing flow
-            let sigs = match input.is_onchain {
-                true => vec![sign_for_onchain_fn(proof_input, msg)?],
-                false => sign_for_vtxo_fn(proof_input, msg)?,
-            };
+        }
 
-            for (sig, pk) in sigs {
-                let sig = taproot::Signature {
-                    signature: sig,
-                    sighash_type: TapSighashType::Default,
-                };
-                proof_input.tap_script_sigs.insert((pk, leaf_hash), sig);
-            }
+        // Sign for any keys we own in the spend script.
+        // For scripts that only need extra witness (e.g., ArkNotes with just a preimage hash
+        // check), sign_for_vtxo_fn will return an empty vec since there are no checksig pubkeys.
+        let sigs = match input.is_onchain {
+            true => vec![sign_for_onchain_fn(proof_input, msg)?],
+            false => sign_for_vtxo_fn(proof_input, msg)?,
+        };
+
+        for (sig, pk) in sigs {
+            let sig = taproot::Signature {
+                signature: sig,
+                sighash_type: TapSighashType::Default,
+            };
+            proof_input.tap_script_sigs.insert((pk, leaf_hash), sig);
         }
     }
 
@@ -354,7 +369,9 @@ pub(crate) fn build_proof_psbt(
             _ => outputs
                 .iter()
                 .map(|o| match o {
-                    Output::Offchain(txout) | Output::Onchain(txout) => txout.clone(),
+                    Output::Offchain(txout)
+                    | Output::Onchain(txout)
+                    | Output::AssetPacket(txout) => txout.clone(),
                 })
                 .collect::<Vec<_>>(),
         };
@@ -442,7 +459,7 @@ impl IntentMessage {
 /// Encode witness elements in the format used by PSBT condition witness field.
 ///
 /// Format: [num_elements as varint] [len1 as varint] [elem1] [len2 as varint] [elem2] ...
-fn encode_witness(elements: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn encode_witness(elements: &[Vec<u8>]) -> Vec<u8> {
     let mut result = Vec::new();
 
     // Write number of elements as compact size

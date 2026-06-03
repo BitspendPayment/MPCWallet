@@ -1,15 +1,20 @@
+use bitcoin::relative;
 use bitcoin::Amount;
 use bitcoin::OutPoint;
 use bitcoin::ScriptBuf;
 use bitcoin::TxOut;
+use std::time::Duration;
 
 pub mod arknote;
+pub mod asset;
 pub mod batch;
 pub mod boarding_output;
 pub mod coin_select;
 pub mod conversions;
+pub mod extension;
 pub mod history;
 pub mod intent;
+pub mod introspector;
 pub mod script;
 pub mod send;
 pub mod server;
@@ -29,6 +34,8 @@ pub use boarding_output::BoardingOutput;
 pub use error::Error;
 pub use error::ErrorContext;
 pub use script::extract_sequence_from_csv_sig_script;
+pub use server::Asset;
+pub use server::AssetInfo;
 pub use tx_graph::TxGraph;
 pub use tx_graph::TxGraphChunk;
 pub use unilateral_exit::build_anchor_tx;
@@ -69,6 +76,7 @@ pub struct ExplorerUtxo {
     pub outpoint: OutPoint,
     pub amount: Amount,
     pub confirmation_blocktime: Option<u64>,
+    pub confirmations: u64,
     pub is_spent: bool,
 }
 
@@ -78,5 +86,27 @@ pub fn anchor_output() -> TxOut {
     TxOut {
         value: Amount::ZERO,
         script_pubkey,
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ExitDelayKind {
+    Time(Duration),
+    Blocks(u64),
+}
+
+impl ExitDelayKind {
+    pub(crate) fn from_sequence(sequence: bitcoin::Sequence) -> Result<Self, Error> {
+        let kind = match sequence
+            .to_relative_lock_time()
+            .ok_or_else(|| Error::ad_hoc("exit delay is not a relative locktime"))?
+        {
+            relative::LockTime::Time(time) => {
+                Self::Time(Duration::from_secs(time.value() as u64 * 512))
+            }
+            relative::LockTime::Blocks(height) => Self::Blocks(height.value() as u64),
+        };
+
+        Ok(kind)
     }
 }

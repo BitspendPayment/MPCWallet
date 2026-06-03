@@ -43,13 +43,14 @@ void main() async {
           // client.userId. init() alone doesn't log in, so register on the
           // first change where a user id exists. Idempotent; PushService also
           // re-registers on token rotation.
-          var tokenRegistered = false;
-          svc.addListener(() {
-            if (!tokenRegistered && svc.client?.userId != null) {
-              tokenRegistered = true;
+          late final VoidCallback tokenListener;
+          tokenListener = () {
+            if (svc.client?.userId != null) {
+              svc.removeListener(tokenListener);
               PushService.registerCurrentToken(svc);
             }
-          });
+          };
+          svc.addListener(tokenListener);
           return svc;
         }),
       ],

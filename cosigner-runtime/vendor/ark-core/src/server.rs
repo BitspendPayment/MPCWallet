@@ -1,5 +1,6 @@
 //! Messages exchanged between the client and the Ark server.
 
+use crate::asset::AssetId;
 use crate::tx_graph::TxGraphChunk;
 use crate::ArkAddress;
 use crate::Error;
@@ -19,7 +20,7 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-/// An aggregate public nonce per shared internal (non-leaf) node in the VTXO tree.
+/// An aggregate public nonce per shared internal (non-leaf) node in the batch-tree.
 #[derive(Debug, Clone)]
 pub struct NoncePks(HashMap<Txid, musig::PublicNonce>);
 
@@ -67,7 +68,7 @@ impl NoncePks {
 }
 
 /// A public nonce per public key, where each public key corresponds to a party signing a
-/// transaction in the VTXO tree.
+/// transaction in the batch-tree.
 #[derive(Debug, Clone)]
 pub struct TreeTxNoncePks(pub HashMap<XOnlyPublicKey, musig::PublicNonce>);
 
@@ -113,7 +114,7 @@ impl TreeTxNoncePks {
     }
 }
 
-/// A Musig partial signature per shared internal (non-leaf) node in the VTXO tree.
+/// A Musig partial signature per shared internal (non-leaf) node in the batch-tree.
 #[derive(Debug, Clone, Default)]
 pub struct PartialSigTree(pub HashMap<Txid, musig::PartialSignature>);
 
@@ -216,6 +217,8 @@ pub struct GetVtxosRequest {
     reference: GetVtxosRequestReference,
     filter: Option<GetVtxosRequestFilter>,
     page: Option<PageRequest>,
+    before: Option<u64>,
+    after: Option<u64>,
 }
 
 /// Page request for paginated queries.
@@ -237,6 +240,8 @@ impl GetVtxosRequest {
             reference: GetVtxosRequestReference::Scripts(scripts),
             filter: None,
             page: None,
+            before: None,
+            after: None,
         }
     }
 
@@ -245,6 +250,8 @@ impl GetVtxosRequest {
             reference: GetVtxosRequestReference::OutPoints(outpoints.to_vec()),
             filter: None,
             page: None,
+            before: None,
+            after: None,
         }
     }
 
@@ -310,6 +317,27 @@ impl GetVtxosRequest {
     pub fn page(&self) -> Option<PageRequest> {
         self.page
     }
+
+    pub fn with_before(self, before: u64) -> Self {
+        Self {
+            before: Some(before),
+            ..self
+        }
+    }
+
+    pub fn with_after(self, after: u64) -> Self {
+        Self {
+            after: Some(after),
+            ..self
+        }
+    }
+
+    pub fn before(&self) -> Option<u64> {
+        self.before
+    }
+    pub fn after(&self) -> Option<u64> {
+        self.after
+    }
 }
 
 #[derive(Clone)]
@@ -342,8 +370,7 @@ pub struct VirtualTxOutPoint {
     pub expires_at: i64,
     pub amount: Amount,
     pub script: ScriptBuf,
-    /// A pre-confirmed VTXO spends from another VTXO and is not a leaf of the original VTXO tree
-    /// in a batch.
+    /// A pre-confirmed VTXO spends from another VTXO and is not a leaf of a batch-tree.
     pub is_preconfirmed: bool,
     pub is_swept: bool,
     pub is_unrolled: bool,
@@ -359,6 +386,8 @@ pub struct VirtualTxOutPoint {
     pub settled_by: Option<Txid>,
     /// The Ark transaction that _spends_ this VTXO (if we omit the checkpoint transaction).
     pub ark_txid: Option<Txid>,
+    /// Assets carried by this VTXO.
+    pub assets: Vec<Asset>,
 }
 
 impl VirtualTxOutPoint {
@@ -417,6 +446,8 @@ pub struct Info {
     pub deprecated_signers: Vec<DeprecatedSigner>,
     pub service_status: HashMap<String, String>,
     pub digest: String,
+    pub max_tx_weight: i64,
+    pub max_op_return_outputs: i64,
 }
 
 /// Fee information from the server.
@@ -451,6 +482,11 @@ pub struct ScheduledSession {
 pub struct DeprecatedSigner {
     pub pk: PublicKey,
     pub cutoff_date: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamStartedEvent {
+    pub id: String,
 }
 
 #[derive(Debug, Clone)]
@@ -524,6 +560,7 @@ pub enum BatchTreeEventType {
 
 #[derive(Debug, Clone)]
 pub enum StreamEvent {
+    StreamStarted(StreamStartedEvent),
     BatchStarted(BatchStartedEvent),
     BatchFinalization(BatchFinalizationEvent),
     BatchFinalized(BatchFinalizedEvent),
@@ -539,6 +576,7 @@ pub enum StreamEvent {
 impl StreamEvent {
     pub fn name(&self) -> String {
         let s = match self {
+            StreamEvent::StreamStarted(_) => "StreamStarted",
             StreamEvent::BatchStarted(_) => "BatchStarted",
             StreamEvent::BatchFinalization(_) => "BatchFinalization",
             StreamEvent::BatchFinalized(_) => "BatchFinalized",
@@ -563,8 +601,12 @@ pub enum StreamTransactionData {
 
 pub struct ArkTransaction {
     pub txid: Txid,
+    pub tx: Option<Psbt>,
     pub spent_vtxos: Vec<VirtualTxOutPoint>,
     pub unspent_vtxos: Vec<VirtualTxOutPoint>,
+    /// key: outpoint, value: checkpoint txid. Only set for offchain txs.
+    pub checkpoint_txs: HashMap<OutPoint, Txid>,
+    pub swept_vtxos: Vec<OutPoint>,
 }
 
 pub struct CommitmentTransaction {
@@ -585,7 +627,7 @@ pub struct SubscriptionEvent {
     pub scripts: Vec<ScriptBuf>,
     pub new_vtxos: Vec<VirtualTxOutPoint>,
     pub spent_vtxos: Vec<VirtualTxOutPoint>,
-    pub tx: Option<Psbt>,
+    pub tx: Option<Transaction>,
     pub checkpoint_txs: HashMap<OutPoint, Txid>,
 }
 
@@ -645,6 +687,28 @@ pub enum Network {
     Signet,
     Regtest,
     Mutinynet,
+}
+
+/// An asset carried by a VTXO.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Asset {
+    pub asset_id: AssetId,
+    pub amount: u64,
+}
+
+/// Metadata about an issued asset, including its control asset reference.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AssetInfo {
+    pub asset_id: AssetId,
+    pub control_asset_id: Option<AssetId>,
+    pub supply: u64,
+    pub metadata: String,
+}
+
+impl AssetInfo {
+    pub fn can_be_reissued(&self) -> bool {
+        self.control_asset_id.is_some()
+    }
 }
 
 impl From<Network> for bitcoin::Network {

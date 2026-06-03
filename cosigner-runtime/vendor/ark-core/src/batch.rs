@@ -1,4 +1,5 @@
 use crate::anchor_output;
+use crate::asset::packet;
 use crate::conversions::from_musig_xonly;
 use crate::conversions::to_musig_pk;
 use crate::intent;
@@ -78,11 +79,11 @@ impl OnChainInput {
     }
 }
 
-/// A nonce key pair per tree transaction output that we are a part of in the batch.
+/// A nonce key pair per batch-tree transaction output that we are a part of in the batch.
 ///
 /// The [`musig::SecretNonce`] element of the tuple is an [`Option`] because it cannot be cloned or
-/// copied. When we are ready to sign a tree transaction, we call the method `take_sk` to move out
-/// of the [`Option`].
+/// copied. When we are ready to sign a batch-tree transaction, we call the method `take_sk` to move
+/// out of the [`Option`].
 #[allow(clippy::type_complexity)]
 pub struct NonceKps(HashMap<Txid, (Option<musig::SecretNonce>, musig::PublicNonce)>);
 
@@ -107,7 +108,8 @@ impl NonceKps {
     }
 }
 
-/// Generate a nonce key pair for each tree transaction output that we are a part of in the batch.
+/// Generate a nonce key pair for each batch-tree transaction output that we are a part of in the
+/// batch.
 pub fn generate_nonce_tree<R>(
     rng: &mut R,
     batch_tree_tx_graph: &TxGraph,
@@ -194,7 +196,7 @@ fn tree_tx_sighash(
     let prevouts = [previous_output];
     let prevouts = Prevouts::All(&prevouts);
 
-    // Here we are generating a key spend sighash, because batch tree outputs are signed by parties
+    // Here we are generating a key spend sighash, because batch-tree outputs are signed by parties
     // with VTXOs in this new batch. We use a musig key spend to efficiently coordinate with all the
     // parties.
     let tap_sighash = SighashCache::new(tx)
@@ -204,16 +206,17 @@ fn tree_tx_sighash(
     Ok(tap_sighash.to_raw_hash().to_byte_array())
 }
 
-/// Compute the aggregated nonce public key for a transaction in the VTXO tree.
+/// Compute the aggregated nonce public key for a transaction in the batch-tree.
 ///
-/// The [`TreeTxNoncePks`] holds the public nonces of all the cosigners of this transaction.
+/// The [`TreeTxNoncePks`] holds the public nonces of all the cosigners of this batch-tree
+/// transaction.
 pub fn aggregate_nonces(tree_tx_nonce_pks: TreeTxNoncePks) -> musig::AggregatedNonce {
     let pks = tree_tx_nonce_pks.to_pks();
     let ref_pks = pks.iter().collect::<Vec<_>>();
     musig::AggregatedNonce::new(&ref_pks)
 }
 
-/// Use `own_cosigner_kp` to sign each batch tree transaction output that we are a part, using
+/// Use `own_cosigner_kp` to sign each batch-tree transaction output that we are a part of, using
 /// `our_nonce_kps` to provide our share of each aggregate nonce.
 pub fn sign_batch_tree_tx(
     tree_txid: Txid,
@@ -240,14 +243,14 @@ pub fn sign_batch_tree_tx(
 
     let psbt = batch_tree_tx_map
         .get(&tree_txid)
-        .ok_or_else(|| Error::ad_hoc(format!("TXID {tree_txid} not found in batch tree map")))?;
+        .ok_or_else(|| Error::ad_hoc(format!("TXID {tree_txid} not found in batch-tree map")))?;
 
     let mut cosigner_pks = extract_cosigner_pks_from_vtxo_psbt(psbt)?;
     cosigner_pks.sort_by_key(|k| k.serialize());
 
     if !cosigner_pks.contains(&own_cosigner_pk) {
         return Err(Error::ad_hoc(
-            "own cosigner PK not found among tree transaction cosigner PKs",
+            "own cosigner PK not found among batch-tree transaction cosigner PKs",
         ));
     }
 
@@ -540,7 +543,7 @@ fn derive_vtxo_connector_map(
     let mut virtual_tx_outpoints = vtxo_inputs
         .iter()
         .filter_map(|vtxo_input| {
-            ((vtxo_input.amount() > dust) && !vtxo_input.is_swept())
+            ((vtxo_input.amount() >= dust) && !vtxo_input.is_swept())
                 .then_some(vtxo_input.outpoint())
         })
         .collect::<Vec<_>>();
@@ -548,8 +551,7 @@ fn derive_vtxo_connector_map(
     // Sort virtual TX outpoints for deterministic ordering.
     virtual_tx_outpoints.sort_by(|a, b| a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout)));
 
-    // Ensure we have matching counts.
-    if virtual_tx_outpoints.len() != connector_outpoints.len() {
+    if connector_outpoints.len() < virtual_tx_outpoints.len() {
         return Err(Error::ad_hoc(format!(
             "mismatch between VTXO count ({}) and connector count ({})",
             virtual_tx_outpoints.len(),
@@ -622,6 +624,32 @@ pub fn prepare_delegate_psbts(
     server_forfeit_address: &Address,
     dust: Amount,
 ) -> Result<Delegate, Error> {
+    prepare_delegate_psbts_at(
+        intent_inputs,
+        outputs,
+        delegate_cosigner_pk,
+        server_forfeit_address,
+        dust,
+        None,
+    )
+}
+
+/// Like [`prepare_delegate_psbts`], but with an explicit `valid_at` timestamp.
+///
+/// When delegating to a third-party service, `valid_at` is set to the time at which the delegator
+/// should execute the renewal (e.g. 90% through the VTXO's lifetime). In this case `expire_at` is
+/// set to `0` (no expiry), since the delegator holds the intent until `valid_at` arrives.
+///
+/// If `valid_at` is `None`, the current time is used and the intent expires in 2 minutes (same as
+/// [`prepare_delegate_psbts`]).
+pub fn prepare_delegate_psbts_at(
+    intent_inputs: Vec<intent::Input>,
+    outputs: Vec<intent::Output>,
+    delegate_cosigner_pk: PublicKey,
+    server_forfeit_address: &Address,
+    dust: Amount,
+    valid_at: Option<u64>,
+) -> Result<Delegate, Error> {
     // Create intent message
     let now = std::time::SystemTime::now();
     let now = now
@@ -629,11 +657,26 @@ pub fn prepare_delegate_psbts(
         .map_err(Error::ad_hoc)
         .context("failed to compute now timestamp")?;
     let now = now.as_secs();
-    let expire_at = now + (2 * 60);
+
+    // When valid_at is explicit (delegator flow), the intent is held for future use — no expiry.
+    // When valid_at is None (P2P flow), expire after 2 minutes.
+    let (valid_at, expire_at) = match valid_at {
+        Some(vat) => (vat, 0),
+        None => (now, now + (2 * 60)),
+    };
+
+    let onchain_output_indexes = outputs
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, output)| match output {
+            intent::Output::Onchain(_) => Some(idx),
+            intent::Output::Offchain(_) | intent::Output::AssetPacket(_) => None,
+        })
+        .collect();
 
     let intent_message = intent::IntentMessage::Register {
-        onchain_output_indexes: Vec::new(),
-        valid_at: now,
+        onchain_output_indexes,
+        valid_at,
         expire_at,
         own_cosigner_pks: vec![delegate_cosigner_pk],
     };
@@ -735,6 +778,81 @@ pub fn prepare_delegate_psbts(
 }
 
 /// Complete the delegated forfeit transactions by adding connector inputs and finalizing them.
+pub fn create_asset_preservation_packet(
+    inputs: &[intent::Input],
+    outputs: &[intent::Output],
+) -> Result<Option<packet::Packet>, Error> {
+    const INTENT_PROOF_FAKE_INPUT_INDEX_OFFSET: u16 = 1;
+
+    let mut groups: Vec<packet::AssetGroup> = Vec::new();
+
+    let preserved_output_index =
+        outputs
+            .iter()
+            .enumerate()
+            .find_map(|(index, output)| match output {
+                intent::Output::Offchain(_) => Some(index as u16),
+                intent::Output::Onchain(_) | intent::Output::AssetPacket(_) => None,
+            });
+
+    for (input_index, input) in inputs.iter().enumerate() {
+        for asset in input.assets() {
+            if let Some(group) = groups
+                .iter_mut()
+                .find(|group| group.asset_id == Some(asset.asset_id))
+            {
+                group.inputs.push(packet::AssetInput {
+                    input_index: input_index as u16 + INTENT_PROOF_FAKE_INPUT_INDEX_OFFSET,
+                    amount: asset.amount,
+                });
+
+                if let Some(output) = group.outputs.first_mut() {
+                    output.amount = output.amount.checked_add(asset.amount).ok_or_else(|| {
+                        Error::ad_hoc("asset amount overflow while preserving assets in settlement")
+                    })?;
+                }
+            } else {
+                let mut asset_outputs = Vec::new();
+                match preserved_output_index {
+                    Some(output_index) => asset_outputs.push(packet::AssetOutput {
+                        output_index,
+                        amount: asset.amount,
+                    }),
+                    None => {
+                        return Err(Error::ad_hoc(
+                            "cannot preserve assets in settlement without an offchain output",
+                        ))
+                    }
+                }
+
+                groups.push(packet::AssetGroup {
+                    asset_id: Some(asset.asset_id),
+                    control_asset: None,
+                    metadata: None,
+                    inputs: vec![packet::AssetInput {
+                        input_index: input_index as u16 + INTENT_PROOF_FAKE_INPUT_INDEX_OFFSET,
+                        amount: asset.amount,
+                    }],
+                    outputs: asset_outputs,
+                });
+            }
+        }
+    }
+
+    if groups.is_empty() {
+        return Ok(None);
+    }
+
+    groups.sort_by_key(|group| {
+        let asset_id = group
+            .asset_id
+            .expect("asset-preservation groups always have asset ids");
+        (*asset_id.txid.as_byte_array(), asset_id.group_index)
+    });
+
+    Ok(Some(packet::Packet { groups }))
+}
+
 pub fn complete_delegate_forfeit_txs(
     forfeit_psbts: &[Psbt],
     connectors_leaves: &[&Psbt],
@@ -836,7 +954,7 @@ fn derive_vtxo_connector_map_delegate(
     virtual_tx_outpoints.sort_by(|a, b| a.txid.cmp(&b.txid).then(a.vout.cmp(&b.vout)));
 
     // Ensure we have matching counts.
-    if virtual_tx_outpoints.len() != connector_outpoints.len() {
+    if connector_outpoints.len() < virtual_tx_outpoints.len() {
         return Err(Error::ad_hoc(format!(
             "mismatch between VTXO count ({}) and connector count ({})",
             virtual_tx_outpoints.len(),
