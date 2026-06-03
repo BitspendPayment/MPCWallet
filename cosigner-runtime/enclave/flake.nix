@@ -83,7 +83,11 @@
 
           doCheck = false;
 
-          cargoBuildFlags = [ "--bin" appCfg.binary_name ];
+          # The enclave build must use the supervisor-backed persistence store,
+          # not the default Sled backend (which writes to ephemeral enclave-local
+          # disk and is lost on every restart/migration). Disable default features
+          # so PERSISTENCE_BACKEND="enclave" can't silently fall back to Sled.
+          cargoBuildFlags = [ "--bin" appCfg.binary_name "--no-default-features" "--features" "enclave-backend" ];
 
           nativeBuildInputs = resolveInputs (appCfg.nix_native_build_inputs or []);
           buildInputs = resolveInputs (appCfg.nix_build_inputs or []);
