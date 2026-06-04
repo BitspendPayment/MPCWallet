@@ -77,6 +77,7 @@ pub fn get_ark_info(
         dust: info.dust,
         checkpoint_tapscript: info.checkpoint_tapscript,
         forfeit_address: info.forfeit_address,
+        auto_settle_safety_margin_secs: shared.auto_settle_safety_margin_secs,
     })
 }
 

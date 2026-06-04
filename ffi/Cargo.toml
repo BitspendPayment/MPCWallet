@@ -9,7 +9,7 @@ crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
 ark = { path = "../crates/ark", features = ["std"] }
-ark-core = "0.8"
+ark-core = "0.9"
 bitcoin = { version = "0.32", features = ["serde"] }
 threshold = { path = "../crates/threshold", features = ["std"] }
 k256 = { version = "0.13", features = ["arithmetic", "std"] }

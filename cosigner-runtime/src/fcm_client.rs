@@ -3,10 +3,8 @@
 //! Sends data-only push notifications to wake the recipient device after a
 //! VTXO arrives, so the app can re-delegate while still in the background.
 //!
-//! Auth: Google service account JWT-bearer flow. The service account JSON
-//! lives in the enclave KMS-encrypted secret bundle (`FCM_SERVICE_ACCOUNT_CIPHERTEXT`),
-//! decrypted at startup. Access tokens are minted on demand and cached for
-//! 1 hour minus 5-minute slack.
+//! Auth: Google service account JWT-bearer flow. Access tokens are minted on
+//! demand and cached for 1 hour minus 5-minute slack.
 
 use std::collections::HashMap;
 use std::sync::Arc;

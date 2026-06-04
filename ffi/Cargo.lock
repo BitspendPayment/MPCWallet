@@ -11,9 +11,9 @@ dependencies = [
 
 [[package]]
 name = "ark-core"
-version = "0.8.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74118ec876f08150b4a34150d312450ab4ba8e88d26656965598da7eb91a423e"
+checksum = "9e968edb9a1ad45eea11322e45339934165756b5180b4c38c644d8638f2bbbc5"
 dependencies = [
  "bech32",
  "bitcoin",

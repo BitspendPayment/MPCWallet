@@ -254,6 +254,7 @@ class MpcService extends ChangeNotifier {
   /// Closes all resources. Call this when the app is shutting down.
   @override
   Future<void> dispose() async {
+    _vtxoPollTimer?.cancel();
     await unloadRecoverySigner();
     try {
       await _hardwareSigner?.disconnect();
@@ -608,10 +609,12 @@ class MpcService extends ChangeNotifier {
       _arkWallet = MpcArkWallet(_client!);
       _arkAvailable = true;
       await refreshVtxos();
+      _startVtxoPolling();
     } catch (e) {
       debugPrint("Ark init failed (ASP may not be configured): $e");
       _arkWallet = null;
       _arkAvailable = false;
+      _vtxoPollTimer?.cancel();
     }
     notifyListeners();
   }
@@ -622,6 +625,13 @@ class MpcService extends ChangeNotifier {
   final Set<String> _previousVtxoOutpoints = <String>{};
   bool _serverHasActiveDelegate = false;
   bool _delegateInFlight = false;
+
+  /// Periodic VTXO poll. Off-chain receives don't trigger the on-chain electrs
+  /// sync, so without this, received VTXOs only show up on a manual refresh.
+  /// Runs while Ark is active; the OS pauses it when the app is backgrounded.
+  Timer? _vtxoPollTimer;
+  bool _vtxoPollInFlight = false;
+  static const Duration _vtxoPollInterval = Duration(seconds: 10);
 
   /// Whether the cosigner currently holds a signed delegate intent for this
   /// user. Refreshed on every `refreshVtxos()` from `ListVtxosResponse.
@@ -680,6 +690,21 @@ class MpcService extends ChangeNotifier {
     } finally {
       _delegateInFlight = false;
     }
+  }
+
+  /// Start polling VTXOs so off-chain receives appear without a manual refresh.
+  /// Idempotent; skips a tick if a refresh is already in flight.
+  void _startVtxoPolling() {
+    _vtxoPollTimer?.cancel();
+    _vtxoPollTimer = Timer.periodic(_vtxoPollInterval, (_) async {
+      if (_client == null || !_arkAvailable || _vtxoPollInFlight) return;
+      _vtxoPollInFlight = true;
+      try {
+        await refreshVtxos();
+      } finally {
+        _vtxoPollInFlight = false;
+      }
+    });
   }
 
   Future<void> refreshArkTransactions() async {

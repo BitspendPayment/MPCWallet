@@ -523,11 +523,12 @@ const GetArkInfoResponse$json = const {
     const {'1': 'dust', '3': 8, '4': 1, '5': 3, '10': 'dust'},
     const {'1': 'checkpoint_tapscript', '3': 9, '4': 1, '5': 9, '10': 'checkpointTapscript'},
     const {'1': 'forfeit_address', '3': 10, '4': 1, '5': 9, '10': 'forfeitAddress'},
+    const {'1': 'auto_settle_safety_margin_secs', '3': 11, '4': 1, '5': 3, '10': 'autoSettleSafetyMarginSecs'},
   ],
 };
 
 /// Descriptor for `GetArkInfoResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getArkInfoResponseDescriptor = $convert.base64Decode('ChJHZXRBcmtJbmZvUmVzcG9uc2USIwoNc2lnbmVyX3B1YmtleRgBIAEoCVIMc2lnbmVyUHVia2V5EiUKDmZvcmZlaXRfcHVia2V5GAIgASgJUg1mb3JmZWl0UHVia2V5EhgKB25ldHdvcmsYAyABKAlSB25ldHdvcmsSKQoQc2Vzc2lvbl9kdXJhdGlvbhgEIAEoA1IPc2Vzc2lvbkR1cmF0aW9uEjIKFXVuaWxhdGVyYWxfZXhpdF9kZWxheRgFIAEoA1ITdW5pbGF0ZXJhbEV4aXREZWxheRIuChNib2FyZGluZ19leGl0X2RlbGF5GAYgASgDUhFib2FyZGluZ0V4aXREZWxheRImCg92dHhvX21pbl9hbW91bnQYByABKANSDXZ0eG9NaW5BbW91bnQSEgoEZHVzdBgIIAEoA1IEZHVzdBIxChRjaGVja3BvaW50X3RhcHNjcmlwdBgJIAEoCVITY2hlY2twb2ludFRhcHNjcmlwdBInCg9mb3JmZWl0X2FkZHJlc3MYCiABKAlSDmZvcmZlaXRBZGRyZXNz');
+final $typed_data.Uint8List getArkInfoResponseDescriptor = $convert.base64Decode('ChJHZXRBcmtJbmZvUmVzcG9uc2USIwoNc2lnbmVyX3B1YmtleRgBIAEoCVIMc2lnbmVyUHVia2V5EiUKDmZvcmZlaXRfcHVia2V5GAIgASgJUg1mb3JmZWl0UHVia2V5EhgKB25ldHdvcmsYAyABKAlSB25ldHdvcmsSKQoQc2Vzc2lvbl9kdXJhdGlvbhgEIAEoA1IPc2Vzc2lvbkR1cmF0aW9uEjIKFXVuaWxhdGVyYWxfZXhpdF9kZWxheRgFIAEoA1ITdW5pbGF0ZXJhbEV4aXREZWxheRIuChNib2FyZGluZ19leGl0X2RlbGF5GAYgASgDUhFib2FyZGluZ0V4aXREZWxheRImCg92dHhvX21pbl9hbW91bnQYByABKANSDXZ0eG9NaW5BbW91bnQSEgoEZHVzdBgIIAEoA1IEZHVzdBIxChRjaGVja3BvaW50X3RhcHNjcmlwdBgJIAEoCVITY2hlY2twb2ludFRhcHNjcmlwdBInCg9mb3JmZWl0X2FkZHJlc3MYCiABKAlSDmZvcmZlaXRBZGRyZXNzEkIKHmF1dG9fc2V0dGxlX3NhZmV0eV9tYXJnaW5fc2VjcxgLIAEoA1IaYXV0b1NldHRsZVNhZmV0eU1hcmdpblNlY3M=');
 @$core.Deprecated('Use getArkAddressRequestDescriptor instead')
 const GetArkAddressRequest$json = const {
   '1': 'GetArkAddressRequest',

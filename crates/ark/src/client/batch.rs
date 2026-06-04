@@ -991,6 +991,10 @@ impl DelegateSettleSession {
         dust_sats: u64,
         exit_delay: u32,
         network_str: &str,
+        // When set, the renewal time (Unix secs) the delegate becomes valid;
+        // arkd rejects settling before it, and the intent never expires
+        // (expire_at = 0). `None` keeps the legacy 2-minute window.
+        intent_valid_at: Option<u64>,
     ) -> Result<(Self, Vec<[u8; 32]>), String> {
         let secp = Secp256k1::new();
         let network = parse_network(network_str)?;
@@ -1038,6 +1042,7 @@ impl DelegateSettleSession {
                     forfeit_spend_info.clone(),
                     false, // is_onchain = false (existing VTXOs)
                     vi.is_swept,
+                    Vec::new(), // assets — none (ark-core 0.9)
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1063,13 +1068,14 @@ impl DelegateSettleSession {
             .map_err(|e| format!("forfeit address network mismatch: {e}"))?;
 
         // Prepare delegate PSBTs (intent proof + forfeit PSBTs).
-        let delegate = ark_core::batch::prepare_delegate_psbts(
+        let delegate = ark_core::batch::prepare_delegate_psbts_at(
             intent_inputs,
             intent_outputs,
             delegate_cosigner_pk,
             &forfeit_addr,
             Amount::from_sat(dust_sats),
-        ).map_err(|e| format!("prepare_delegate_psbts: {e}"))?;
+            intent_valid_at,
+        ).map_err(|e| format!("prepare_delegate_psbts_at: {e}"))?;
 
         // Compute all sighashes that need FROST signing.
         let mut sighashes = Vec::new();
@@ -1648,35 +1654,43 @@ impl DelegateSettleSession {
                 Event::BatchFinalization(e) => {
                     eprintln!("delegate: BatchFinalization id={}", e.id);
 
-                    // `complete_delegate_forfeit_txs` expects the connector
-                    // graph's LEAVES (the leaf txs whose outputs feed each
-                    // forfeit PSBT), not all chunks. The ASP reconstructs the
-                    // forfeit txid from these specific leaves; passing all
-                    // chunks produces a different completed PSBT and a txid
-                    // the ASP doesn't recognize.
-                    let connectors_graph = TxGraph::new(
-                        self.connector_graph_chunks.drain(..).collect(),
-                    )
-                    .map_err(|e| format!("TxGraph::new (connectors): {e}"))?;
-                    let connector_leaves = connectors_graph.leaves();
-
-                    let completed_forfeits =
-                        ark_core::batch::complete_delegate_forfeit_txs(
-                            &self.delegate.forfeit_psbts,
-                            &connector_leaves,
+                    // ark-core 0.9: a batch with no connector tree carries no
+                    // delegated forfeit txs to complete — skip. Building a
+                    // TxGraph from empty chunks errors otherwise. Mirrors
+                    // ark-client's BatchFinalization handling.
+                    if self.connector_graph_chunks.is_empty() {
+                        eprintln!("delegate: no connectors — no forfeit txs to complete");
+                    } else {
+                        // `complete_delegate_forfeit_txs` expects the connector
+                        // graph's LEAVES (the leaf txs whose outputs feed each
+                        // forfeit PSBT), not all chunks. The ASP reconstructs the
+                        // forfeit txid from these specific leaves; passing all
+                        // chunks produces a different completed PSBT and a txid
+                        // the ASP doesn't recognize.
+                        let connectors_graph = TxGraph::new(
+                            self.connector_graph_chunks.drain(..).collect(),
                         )
-                        .map_err(|e| format!("complete_delegate_forfeit_txs: {e}"))?;
+                        .map_err(|e| format!("TxGraph::new (connectors): {e}"))?;
+                        let connector_leaves = connectors_graph.leaves();
 
-                    // Serialize completed forfeits.
-                    let signed_forfeits: Vec<String> = completed_forfeits
-                        .iter()
-                        .map(|p| encode_psbt_b64(p))
-                        .collect();
+                        let completed_forfeits =
+                            ark_core::batch::complete_delegate_forfeit_txs(
+                                &self.delegate.forfeit_psbts,
+                                &connector_leaves,
+                            )
+                            .map_err(|e| format!("complete_delegate_forfeit_txs: {e}"))?;
 
-                    // No commitment signing needed — forfeits handle it.
-                    asp.submit_signed_forfeit_txs(signed_forfeits, String::new())
-                        .await
-                        .map_err(|e| format!("submit_signed_forfeit_txs: {e}"))?;
+                        // Serialize completed forfeits.
+                        let signed_forfeits: Vec<String> = completed_forfeits
+                            .iter()
+                            .map(|p| encode_psbt_b64(p))
+                            .collect();
+
+                        // No commitment signing needed — forfeits handle it.
+                        asp.submit_signed_forfeit_txs(signed_forfeits, String::new())
+                            .await
+                            .map_err(|e| format!("submit_signed_forfeit_txs: {e}"))?;
+                    }
                 }
                 Event::BatchFinalized(e) => {
                     eprintln!("delegate: BatchFinalized txid={}", e.commitment_txid);

@@ -130,6 +130,7 @@ impl SendSession {
                     vtxo_script_pubkey.clone(),
                     Amount::from_sat(vi.amount_sats),
                     outpoint,
+                    Vec::new(), // assets — none (ark-core 0.9)
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -139,13 +140,28 @@ impl SendSession {
             .parse()
             .map_err(|e| format!("invalid recipient ark address: {e}"))?;
 
-        let outputs = vec![(&recipient, Amount::from_sat(amount_sats))];
+        // ark-core 0.9 takes `SendReceiver`s instead of (&addr, amount) tuples.
+        let receivers = vec![send::SendReceiver::bitcoin(
+            recipient,
+            Amount::from_sat(amount_sats),
+        )];
 
-        // Parse optional change address.
-        let change_addr: Option<ark_core::ArkAddress> = change_ark_address
-            .map(|a| a.parse().map_err(|e| format!("invalid change ark address: {e}")))
-            .transpose()?;
-        let change_ref = change_addr.as_ref();
+        // 0.9 requires a change address (it only emits a change output when
+        // there is leftover value). Default to the sender's own ark address
+        // when the caller didn't pass one.
+        let change_addr: ark_core::ArkAddress = match change_ark_address {
+            Some(a) => a
+                .parse()
+                .map_err(|e| format!("invalid change ark address: {e}"))?,
+            None => crate::client::ark_address(
+                owner_pk_hex,
+                &ark_info.signer_pubkey,
+                ark_info.unilateral_exit_delay as u32,
+                network,
+            )?
+            .parse()
+            .map_err(|e| format!("invalid derived change ark address: {e}"))?,
+        };
 
         // Build server::Info from ArkInfo (only checkpoint_tapscript, dust,
         // vtxo_min_amount are used by build_offchain_transactions).
@@ -155,7 +171,7 @@ impl SendSession {
         let OffchainTransactions {
             ark_tx,
             checkpoint_txs,
-        } = send::build_offchain_transactions(&outputs, change_ref, &send_inputs, &server_info)
+        } = send::build_offchain_transactions(&receivers, &change_addr, &send_inputs, &server_info)
             .map_err(|e| format!("build_offchain_transactions: {e}"))?;
 
         // Compute all sighashes.
@@ -488,6 +504,10 @@ fn build_server_info(ark_info: &ArkInfo, network: Network) -> Result<server::Inf
         deprecated_signers: vec![],
         service_status: HashMap::new(),
         digest: String::new(),
+        // Not enforced by the off-chain send build path; arkd's real limits
+        // come from GetArkInfo. 0 = unset here.
+        max_tx_weight: 0,
+        max_op_return_outputs: 0,
     })
 }
 

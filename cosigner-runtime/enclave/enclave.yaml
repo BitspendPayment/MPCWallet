@@ -26,8 +26,8 @@ app:
   # Secrets are passed as environment variables. No SDK imports needed.
   nix_owner: "BitspendPayment"                  # GitHub owner (required)
   nix_repo: "MPCWallet"                   # GitHub repo name (required)
-  nix_rev: "cf9203b31e25b09e35d2db131357093576acd825"                    # Git commit SHA (required)
-  nix_hash: "sha256-NJdwcnPkc+JtB2sKQw1y/Jwj14k1yWV1pmBWWDIc45M="                   # Nix source hash: nix-prefetch-url --unpack (required)
+  nix_rev: "69e7029b10efdf72d81bb665f2194bcefba65dcf"                    # Git commit SHA (required)
+  nix_hash: "sha256-fPMqEJ+R8OXZjbSSId/HbWlfdU/36QqE8tpf8w3ll3M="                   # Nix source hash: nix-prefetch-url --unpack (required)
   nix_vendor_hash: ""            # Unused: deps are vendored in cosigner-runtime/vendor/ (flake uses cargoVendorDir)
   nix_sub_packages:              # Go sub-packages to build
     - "."
