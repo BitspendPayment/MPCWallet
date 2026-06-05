@@ -1,6 +1,6 @@
 //! Ark protocol WASM operations.
 
-use crate::bindings::exports::component::threshold::types::ThresholdError;
+use crate::exports::component::threshold::types::ThresholdError;
 use crate::convert;
 
 pub fn ark_default_vtxo_script_pubkey(

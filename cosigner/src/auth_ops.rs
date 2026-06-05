@@ -2,7 +2,7 @@
 
 use threshold::auth;
 
-use crate::bindings::exports::component::threshold::types::ThresholdError;
+use crate::exports::component::threshold::types::ThresholdError;
 use crate::convert;
 
 pub fn verify_schnorr_signature(

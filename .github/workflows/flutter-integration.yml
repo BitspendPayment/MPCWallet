@@ -27,13 +27,10 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip1,x86_64-linux-android
+          targets: wasm32-wasip2,x86_64-linux-android
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install cargo-component
-        run: cargo install cargo-component
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -75,7 +72,7 @@ jobs:
       - name: Build MPCWallet host binaries
         run: |
           cargo build --release --manifest-path cosigner-runtime/Cargo.toml
-          (cd cosigner && cargo component build --release)
+          (cd cosigner && cargo build --release --target wasm32-wasip2)
           cargo build --release --manifest-path e2e/signer-server/Cargo.toml
 
       - name: Build FFI for Android x86_64
@@ -124,7 +121,7 @@ jobs:
           ASP_URL: http://127.0.0.1:7070
         run: |
           nohup cosigner-runtime/target/release/cosigner-runtime \
-            --wasm cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+            --wasm cosigner/target/wasm32-wasip2/release/cosigner.wasm \
             --port 7074 > /tmp/cosigner-runtime.log 2>&1 &
           sleep 3
           curl -sS http://127.0.0.1:7074/health || curl -sS http://127.0.0.1:7074/ || true

@@ -108,7 +108,7 @@ Future<Process> startCosignerRuntime(
     '../cosigner-runtime/target/release/cosigner-runtime',
     [
       '--wasm',
-      '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',
+      '../cosigner/target/wasm32-wasip2/release/cosigner.wasm',
       '--port',
       port.toString(),
     ],

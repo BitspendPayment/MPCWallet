@@ -7,7 +7,7 @@ use threshold::polynomial;
 use threshold::random;
 use threshold::scalar::scalar_to_bytes;
 
-use crate::bindings::exports::component::threshold::types::ThresholdError;
+use crate::exports::component::threshold::types::ThresholdError;
 use crate::convert;
 
 pub fn identifier_derive(message: Vec<u8>) -> Result<String, ThresholdError> {

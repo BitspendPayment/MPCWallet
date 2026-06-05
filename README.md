@@ -91,7 +91,7 @@ Handlers run inside `spawn_blocking` so CPU-bound WASM work (FROST round1, DKG p
 
 ### Inner layer: WASM sandbox per user
 
-Threshold cryptography (FROST, DKG, Schnorr verify, Taproot tweaking) lives entirely inside [`cosigner/`](cosigner/), a WASI Component Model crate compiled to `wasm32-wasip1`. The Rust runtime never sees raw secret shares — only opaque session handles into the WASM linear memory.
+Threshold cryptography (FROST, DKG, Schnorr verify, Taproot tweaking) lives entirely inside [`cosigner/`](cosigner/), a WASI Component Model crate compiled to `wasm32-wasip2`. The Rust runtime never sees raw secret shares — only opaque session handles into the WASM linear memory.
 
 Each user actor instantiates the cosigner component into a fresh `wasmtime::Store`:
 
@@ -200,7 +200,7 @@ High-level Dart API that orchestrates the full MPC protocol: drives DKG, signing
 
 ### Threshold library ([crates/threshold/](crates/threshold/))
 
-`#![no_std]` Rust implementation of FROST over secp256k1. Includes the full 3-round DKG, Pedersen VSS, nonce commitments, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native Rust, `wasm32-wasip1` (cosigner WASM), `thumbv8m.main-none-eabihf` (HW signer Secure world), and Dart FFI.
+`#![no_std]` Rust implementation of FROST over secp256k1. Includes the full 3-round DKG, Pedersen VSS, nonce commitments, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native Rust, `wasm32-wasip2` (cosigner WASM), `thumbv8m.main-none-eabihf` (HW signer Secure world), and Dart FFI.
 
 ## Build & Run
 
@@ -215,12 +215,11 @@ High-level Dart API that orchestrates the full MPC protocol: drives DKG, signing
 
 ```bash
 # Rust targets the runtime + cosigner need
-rustup target add wasm32-wasip1                  # cosigner WASM
+rustup target add wasm32-wasip2                  # cosigner WASM
 rustup target add aarch64-linux-android          # FFI for Android arm64
 rustup target add thumbv8m.main-none-eabihf      # HW signer (only if needed)
 rustup toolchain install nightly                  # TrustZone CMSE features (HW signer only)
 
-cargo install cargo-component   # WASI component building
 cargo install probe-rs-tools    # only for HW signer flashing
 ```
 

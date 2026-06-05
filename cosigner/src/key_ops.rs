@@ -2,7 +2,7 @@
 
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 
-use crate::bindings::exports::component::threshold::types::ThresholdError;
+use crate::exports::component::threshold::types::ThresholdError;
 use crate::convert;
 
 pub fn key_package_tweak(

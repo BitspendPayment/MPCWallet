@@ -7,7 +7,7 @@ use threshold::dkg;
 use threshold::random;
 use threshold::scalar::scalar_to_bytes;
 
-use crate::bindings::exports::component::threshold::types::*;
+use crate::exports::component::threshold::types::*;
 use crate::convert;
 use crate::{Round1SecretState, Round2SecretState};
 

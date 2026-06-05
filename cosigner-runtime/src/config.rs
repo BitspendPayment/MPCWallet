@@ -68,7 +68,7 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
             enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
             cosigner_wasm_path: env::var("COSIGNER_WASM_PATH").unwrap_or_else(|_| {
-                "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()
+                "../cosigner/target/wasm32-wasip2/release/cosigner.wasm".to_string()
             }),
             auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")
                 .ok()

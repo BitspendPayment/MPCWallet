@@ -1,5 +1,7 @@
-#[allow(warnings)]
-mod bindings;
+wit_bindgen::generate!({
+    world: "threshold-world",
+    path: "wit",
+});
 
 mod ark_ops;
 mod convert;
@@ -12,7 +14,7 @@ mod session_state;
 
 use std::cell::RefCell;
 
-use bindings::exports::component::threshold::types::*;
+use crate::exports::component::threshold::types::*;
 
 struct Component;
 
@@ -286,4 +288,4 @@ impl Guest for Component {
     type RefreshSession = session_state::RefreshSessionState;
 }
 
-bindings::export!(Component with_types_in bindings);
+export!(Component);

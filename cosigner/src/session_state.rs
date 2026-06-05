@@ -6,7 +6,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use crate::bindings::exports::component::threshold::types::*;
+use crate::exports::component::threshold::types::*;
 
 // ---------------------------------------------------------------------------
 // Helpers

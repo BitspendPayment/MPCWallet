@@ -35,7 +35,7 @@ fn wasm_path() -> PathBuf {
     manifest_dir
         .parent()
         .unwrap()
-        .join("cosigner/target/wasm32-wasip1/release/cosigner.wasm")
+        .join("cosigner/target/wasm32-wasip2/release/cosigner.wasm")
 }
 
 fn create_instance(

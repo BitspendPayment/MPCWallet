@@ -23,10 +23,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip1
-
-      - name: Install cargo-component
-        run: cargo install cargo-component
+          targets: wasm32-wasip2
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -38,13 +35,13 @@ jobs:
           key: cosigner-${{ hashFiles('cosigner/Cargo.lock', 'crates/threshold/Cargo.toml', 'crates/ark/Cargo.toml') }}
 
       - name: Build cosigner WASM
-        run: cd cosigner && cargo component build --release
+        run: cd cosigner && cargo build --release --target wasm32-wasip2
 
       - name: Upload WASM artifact
         uses: actions/upload-artifact@v4
         with:
           name: cosigner-wasm
-          path: cosigner/target/wasm32-wasip1/release/cosigner.wasm
+          path: cosigner/target/wasm32-wasip2/release/cosigner.wasm
           retention-days: 90
 
   release:

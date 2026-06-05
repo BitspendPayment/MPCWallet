@@ -6,7 +6,7 @@ use threshold::dkg::{Round1Package, Round2Package};
 use threshold::identifier::Identifier;
 use threshold::scalar::{scalar_from_bytes, scalar_from_bytes_allow_zero};
 
-use crate::bindings::exports::component::threshold::types::ThresholdError;
+use crate::exports::component::threshold::types::ThresholdError;
 
 pub fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()

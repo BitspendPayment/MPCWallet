@@ -102,7 +102,7 @@ software: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-b
 		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
 		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 			--port 7074'
 
 # 3b) Start regtest + arkd for SOFTWARE signer (no USB device required) — Ark enabled
@@ -144,7 +144,7 @@ software-ark: cosigner-build runtime-build ffi-build ffi-android
 		       ASP_URL=http://127.0.0.1:7070 \
 		       FCM_SERVICE_ACCOUNT_JSON="$$(cat $${FCM_SA_FILE:-$$HOME/Downloads/vtxos-key.json} 2>/dev/null)"; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 			--port 7074'
 
 # 4) Start regtest for hardware device (no Ark) — server runs in foreground
@@ -161,7 +161,7 @@ hardware: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-b
 		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
 		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 			--port 7074'
 
 # 5) Start regtest for hardware device with Ark — server runs in foreground
@@ -189,7 +189,7 @@ hardware-ark: cosigner-build runtime-build ffi-build ffi-android
 		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
 		       ASP_URL=http://127.0.0.1:7070; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 			--port 7074'
 
 # 5) Stop everything (server, signer, mine loop, Docker)
@@ -337,8 +337,8 @@ threshold-ffi-test: ffi-test
 # Server & cosigner
 cosigner-build:
 	@echo "Building cosigner WASM component..."
-	cd cosigner && cargo component build --release
-	@echo "Built: cosigner/target/wasm32-wasip1/release/cosigner.wasm"
+	cd cosigner && cargo build --release --target wasm32-wasip2
+	@echo "Built: cosigner/target/wasm32-wasip2/release/cosigner.wasm"
 
 runtime-build:
 	@echo "Building server..."
@@ -391,7 +391,7 @@ runtime-run: cosigner-build runtime-build
 	export BITCOIN_RPC_USER=admin1 && \
 	export BITCOIN_RPC_PASSWORD=123 && \
 	cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+		--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 		--port 7074 &
 	@sleep 2
 	@echo "MPC Wallet Server running in background."
@@ -485,7 +485,7 @@ signet-hardware-ark: cosigner-build runtime-build ffi-build ffi-android
 	export BITCOIN_NETWORK=signet && \
 	export ASP_URL=$(MUTINYNET_ASP_URL) && \
 	cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+		--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 		--port 7074
 
 signet-down:
@@ -538,7 +538,7 @@ integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init
 		BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
 		ASP_URL=http://127.0.0.1:7070 && \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
+			--wasm ../cosigner/target/wasm32-wasip2/release/cosigner.wasm \
 			--port 7074 &
 	@sleep 5
 	cd app && flutter pub get && \

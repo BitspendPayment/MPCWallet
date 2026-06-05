@@ -84,7 +84,7 @@ void main() {
     serverProcess = await Process.start(
       '../cosigner-runtime/target/release/cosigner-runtime',
       [
-        '--wasm', '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',
+        '--wasm', '../cosigner/target/wasm32-wasip2/release/cosigner.wasm',
         '--port', serverPort.toString(),
       ],
       mode: ProcessStartMode.normal,

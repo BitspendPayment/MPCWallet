@@ -11,7 +11,7 @@ use threshold::point;
 use threshold::scalar::scalar_to_bytes;
 use threshold::signing;
 
-use crate::bindings::exports::component::threshold::types::*;
+use crate::exports::component::threshold::types::*;
 use crate::convert;
 use crate::SigningNonceState;
 
