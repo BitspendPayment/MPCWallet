@@ -210,15 +210,15 @@ High-level Dart API that orchestrates the full MPC protocol: drives DKG, signing
 - Rust (stable + nightly toolchains)
 - Docker + Docker Compose
 - ARM GNU toolchain (`arm-none-eabi-ld`) — only if building HW signer firmware
-- picotool, probe-rs — only if flashing HW signer
+- picotool **2.0+** (older packaged versions lack `seal --sign`), probe-rs — only if flashing HW signer
 - Android device with USB OTG (for HW signer testing)
 
 ```bash
 # Rust targets the runtime + cosigner need
 rustup target add wasm32-wasip1                  # cosigner WASM
 rustup target add aarch64-linux-android          # FFI for Android arm64
-rustup target add thumbv8m.main-none-eabihf      # HW signer (only if needed)
 rustup toolchain install nightly                  # TrustZone CMSE features (HW signer only)
+rustup target add thumbv8m.main-none-eabihf --toolchain nightly   # HW signer (only if needed)
 
 cargo install cargo-component   # WASI component building
 cargo install probe-rs-tools    # only for HW signer flashing
