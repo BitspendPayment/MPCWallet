@@ -64,6 +64,27 @@ final dkgRefreshPart3Ffi = nativeLib
     .lookupFunction<_DkgRefreshPart3Native, _DkgRefreshPart3Dart>(
         'threshold_dkg_refresh_part3');
 
+// eVTXO reshare round 1: deal under an explicit identifier (same signature as
+// refresh_part1: id, max, min, seed_ptr, seed_len).
+typedef _DkgResharePart1Native = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Uint32, Uint32, Pointer<Uint8>, Uint32);
+typedef _DkgResharePart1Dart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, int, int, Pointer<Uint8>, int);
+final dkgResharePart1Ffi = nativeLib
+    .lookupFunction<_DkgResharePart1Native, _DkgResharePart1Dart>(
+        'threshold_dkg_reshare_part1');
+
+// eVTXO reshare finalizer for a pure receiver (the wallet).
+typedef _DkgResharePart3ReceiveNative = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, Uint32);
+typedef _DkgResharePart3ReceiveDart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, int);
+final dkgResharePart3ReceiveFfi = nativeLib
+    .lookupFunction<_DkgResharePart3ReceiveNative, _DkgResharePart3ReceiveDart>(
+        'threshold_dkg_reshare_part3_receive');
+
 // ---------------------------------------------------------------------------
 // Signing bindings
 // ---------------------------------------------------------------------------

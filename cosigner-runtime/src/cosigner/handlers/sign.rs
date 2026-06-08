@@ -43,6 +43,10 @@ pub fn sign_step1(
         &user_id_hex,
     )?;
 
+    // Off-chain contract gate: if any input spends an eVTXO bound to a contract,
+    // run it and refuse to sign on a Deny verdict (no FROST share is produced).
+    super::contract_gate::enforce_contracts(shared, &req.full_transaction)?;
+
     let policy_state = user
         .policy_state
         .as_ref()
@@ -54,7 +58,6 @@ pub fn sign_step1(
         .clone()
         .unwrap_or_else(|| crypto_ops::identifier_derive(user, &req.user_id).unwrap_or_default());
 
-    let mut server_kp_json = policy_state.normal_policy.key_package_json.clone();
     let pkp_json = policy_state.normal_policy.public_key_package_json.clone();
 
     // Policy evaluation
@@ -93,7 +96,14 @@ pub fn sign_step1(
             .delegate_session
             .as_ref()
             .is_some_and(|r| r.awaiting_signatures);
-    let selected_policy_id = if in_settle_context {
+    let selected_policy_id = if let Some(spk_hex) =
+        super::contract_gate::detect_evtxo_spend(&policy_state, &req.full_transaction)
+    {
+        // eVTXO cooperative spend: use the V′ key. The contract gate above has
+        // already enforced the contract; amount-based policies don't apply.
+        tracing::info!("[{user_id_hex}] SignStep1: eVTXO cooperative spend — using V′ key");
+        Some(format!("evtxo:{spk_hex}"))
+    } else if in_settle_context {
         tracing::info!(
             "[{user_id_hex}] SignStep1: settle/delegate context active — \
              skipping policy evaluation"
@@ -101,20 +111,12 @@ pub fn sign_step1(
         None
     } else {
         let id = parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
-        tracing::info!(
-            "[{user_id_hex}] SignStep1: selected_policy_id={:?}",
-            id
-        );
+        tracing::info!("[{user_id_hex}] SignStep1: selected_policy_id={id:?}");
         id
     };
-    if let Some(ref policy_id) = selected_policy_id {
-        if let Some(pp) = policy_state.protected_policies.get(policy_id) {
-            server_kp_json = pp.key_package_json.clone();
-            tracing::info!("[{user_id_hex}] SignStep1: Using Protected Policy {policy_id}");
-        }
-    } else {
-        tracing::info!("[{user_id_hex}] SignStep1: Using Normal Policy");
-    }
+    // Select the signing key (normal / protected / eVTXO V′) for this session.
+    let server_kp_json =
+        parsers::resolve_signing_key(&policy_state, selected_policy_id.as_deref().unwrap_or("")).0;
 
     // Reset stale signing session from a previous (possibly failed) attempt.
     if let Some(h) = user.signing_session {
@@ -281,18 +283,15 @@ pub fn sign_step2(
         .clone()
         .unwrap_or_else(|| crypto_ops::identifier_derive(user, &req.user_id).unwrap_or_default());
 
-    let mut server_kp_json = policy_state.normal_policy.key_package_json.clone();
     let sign_h = user
         .signing_session
         .ok_or_else(|| Status::internal("no signing session"))?;
 
     let current_policy_id = crypto_ops::signing_session_get_current_policy_id(user, sign_h)
         .map_err(|e| Status::internal(format!("get_policy_id: {e}")))?;
-    if !current_policy_id.is_empty() {
-        if let Some(pp) = policy_state.protected_policies.get(&current_policy_id) {
-            server_kp_json = pp.key_package_json.clone();
-        }
-    }
+    // Same resolution as sign_step1 (normal / protected / eVTXO V′) so the key is
+    // consistent across both steps.
+    let server_kp_json = parsers::resolve_signing_key(&policy_state, &current_policy_id).0;
     let server_identifier_hex = parsers::extract_identifier(&server_kp_json)?;
 
     // Store user's signature share.
@@ -340,12 +339,7 @@ pub fn sign_step2(
     }
 
     // Aggregate.
-    let mut server_pkp_json = policy_state.normal_policy.public_key_package_json.clone();
-    if !current_policy_id.is_empty() {
-        if let Some(pp) = policy_state.protected_policies.get(&current_policy_id) {
-            server_pkp_json = pp.public_key_package_json.clone();
-        }
-    }
+    let server_pkp_json = parsers::resolve_signing_key(&policy_state, &current_policy_id).1;
     let comms_json = crypto_ops::signing_session_get_commitments_json(user, sign_h)
         .map_err(|e| Status::internal(format!("get_commitments: {e}")))?;
     let msg_hex = crypto_ops::signing_session_get_message_to_sign(user, sign_h)

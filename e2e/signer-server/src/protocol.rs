@@ -36,6 +36,21 @@ pub enum Request {
         receiver_identifiers: Vec<String>,
     },
 
+    // eVTXO reshare: the signer deals a fresh non-zero polynomial under its
+    // EXISTING identifier but keeps NO resulting share (it's excluded from V′).
+    #[serde(rename = "evtxo_deal_init")]
+    EvtxoDealInit {
+        max_signers: usize,
+        min_signers: usize,
+    },
+
+    #[serde(rename = "evtxo_deal_round2")]
+    EvtxoDealRound2 {
+        round1_packages: HashMap<String, serde_json::Value>,
+        #[serde(default)]
+        receiver_identifiers: Vec<String>,
+    },
+
     #[serde(rename = "generate_nonce")]
     GenerateNonce,
 

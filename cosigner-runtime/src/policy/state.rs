@@ -19,6 +19,10 @@ pub struct PolicyState {
     /// Protected spending policies (policy_id -> ProtectedPolicy).
     #[serde(default)]
     pub protected_policies: HashMap<String, ProtectedPolicy>,
+    /// Programmable eVTXO policies, keyed by eVTXO scriptPubKey (hex). Each binds
+    /// a resharing-derived 2-of-2 key V′ to a WASM contract.
+    #[serde(default)]
+    pub evtxo_policies: HashMap<String, EvtxoPolicy>,
     /// Spending history entries.
     #[serde(default)]
     pub spending_history: Vec<SpendingEntry>,
@@ -44,6 +48,22 @@ pub struct ProtectedPolicy {
     /// Key package as JSON string.
     pub key_package_json: String,
     /// Public key package as JSON string.
+    pub public_key_package_json: String,
+}
+
+/// A programmable eVTXO policy: a fresh 2-of-2 {wallet, cosigner} key `V′`
+/// (derived by resharing, excluding the hardware signer) bound to a WASM
+/// contract. Spending the eVTXO's cooperative leaf requires `V′`, so the cosigner
+/// is a mandatory signer and runs `contract_id`'s contract before co-signing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvtxoPolicy {
+    /// Contract that governs cooperative spends: hex of sha256(component_wasm).
+    pub contract_id_hex: String,
+    /// `V′` x-only public key (the cooperative-leaf key).
+    pub evtxo_pk_xonly_hex: String,
+    /// Cosigner's `V′` key package (JSON, from the reshare finalizer).
+    pub key_package_json: String,
+    /// `V′` public key package (JSON).
     pub public_key_package_json: String,
 }
 

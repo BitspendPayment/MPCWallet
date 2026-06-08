@@ -482,6 +482,7 @@ fn step3_finalize_server_key(
         server_dkg_secret_hex: Some(server_dkg_secret_hex),
         normal_policy,
         protected_policies: HashMap::new(),
+        evtxo_policies: HashMap::new(),
         spending_history: preserved_history,
     };
 

@@ -629,6 +629,123 @@ class MpcClient {
 
   // --- REFRESH ---
 
+  /// Create an eVTXO key (`V′ = V + Δ`, a 2-of-2 {wallet, cosigner} key) bound
+  /// to `contractId`, by resharing the main key. The hardware signer deals but
+  /// is EXCLUDED from the result, so the cosigner is mandatory on cooperative
+  /// spends and runs the contract before co-signing. `serverPk`/`exitDelay` are
+  /// the ASP params (from GetArkInfo) used to build the eVTXO's cooperative leaf.
+  /// Returns the registered scriptPubKey + the wallet's `V′` key material.
+  Future<
+      ({
+        Uint8List scriptPubkey,
+        threshold.KeyPackage keyPackage,
+        threshold.PublicKeyPackage publicKeyPackage,
+      })> createEvtxoKey(
+    Uint8List contractId,
+    Uint8List serverPk,
+    int exitDelay,
+  ) async {
+    if (!isInitialized || _userId == null) {
+      throw StateError('Client not initialized (DKG not run).');
+    }
+    final signer = _requireSigner('createEvtxoKey');
+    final oldKp = _normalPolicy!.keyPackage;
+    final oldPkp = _normalPolicy!.publicKeyPackage;
+    final walletIdentifier = oldKp.identifier;
+    final userId = _userId!;
+    final ts = Int64(DateTime.now().millisecondsSinceEpoch);
+    final emptySig = Uint8List(0); // eVTXO-keygen path is unauthenticated for now
+
+    // 1. Hardware deals a reshare under its existing identifier.
+    final dealInit = await signer.evtxoDealInit(_maxSigners, _minSigners);
+    final hwIdentifier = dealInit.identifier;
+    final hwR1Json = jsonEncode(dealInit.round1Package.toJson());
+
+    // 2. Step 1: wallet (passive) + hardware (dealer) + contract/ASP params.
+    final reqWallet = EvtxoKeygenStep1Request()
+      ..userId = userId
+      ..identifier = walletIdentifier.serialize()
+      ..round1Package = ''
+      ..contractId = contractId
+      ..serverPk = serverPk
+      ..exitDelay = exitDelay
+      ..signature = emptySig
+      ..timestampMs = ts;
+    final reqHw = EvtxoKeygenStep1Request()
+      ..userId = userId
+      ..identifier = hwIdentifier.serialize()
+      ..round1Package = hwR1Json
+      ..contractId = contractId
+      ..serverPk = serverPk
+      ..exitDelay = exitDelay
+      ..signature = emptySig
+      ..timestampMs = ts;
+    final step1Futures = await Future.wait(
+        [_stub.evtxoKeygenStep1(reqWallet), _stub.evtxoKeygenStep1(reqHw)]);
+    final step1Resp = step1Futures[0];
+
+    // 3. Step 2: server computes its round-2 shares.
+    await _stub.evtxoKeygenStep2(EvtxoKeygenStep2Request()
+      ..userId = userId
+      ..identifier = walletIdentifier.serialize()
+      ..signature = emptySig
+      ..timestampMs = ts);
+
+    // 4. Parse the dealer round-1 packages (cosigner + hardware).
+    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
+    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
+    step1Resp.round1Packages.forEach((k, v) {
+      if (v.isEmpty) return; // skip the passive wallet entry
+      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
+      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
+      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
+      dealerR1ForWallet[id] = pkg;
+    });
+
+    // 5. Hardware computes shares for {cosigner, wallet(passive)}.
+    final sharesFromHw = await signer.evtxoDealRound2(
+      dealerR1ForHw,
+      receiverIdentifiers: [walletIdentifier],
+    );
+
+    // 6. Step 3: hardware sends its shares; the wallet sends none (passive).
+    final reqStep3Hw = EvtxoKeygenStep3Request()
+      ..userId = userId
+      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
+      ..signature = emptySig
+      ..timestampMs = ts
+      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
+    final reqStep3Wallet = EvtxoKeygenStep3Request()
+      ..userId = userId
+      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar())
+      ..signature = emptySig
+      ..timestampMs = ts;
+    final step3Futures = await Future.wait(
+        [_stub.evtxoKeygenStep3(reqStep3Wallet), _stub.evtxoKeygenStep3(reqStep3Hw)]);
+    final walletStep3 = step3Futures[0];
+
+    // 7. Wallet finalizes (reshare receiver). Final shareholders = {wallet, cosigner};
+    //    the cosigner is the dealer that isn't the hardware signer.
+    final sharesForWallet = _parseShares(walletStep3.round2PackagesForMe);
+    final cosignerId =
+        dealerR1ForWallet.keys.firstWhere((id) => id != hwIdentifier);
+    final (evtxoKeyPkg, evtxoPkp) = threshold.dkgResharePart3Receive(
+      walletIdentifier,
+      dealerR1ForWallet,
+      sharesForWallet,
+      oldPkp,
+      oldKp,
+      [walletIdentifier, cosignerId],
+      _minSigners,
+    );
+
+    return (
+      scriptPubkey: Uint8List.fromList(walletStep3.evtxoScriptPubkey),
+      keyPackage: evtxoKeyPkg,
+      publicKeyPackage: evtxoPkp,
+    );
+  }
+
   Future<void> createSpendingPolicy(
       Duration interval, Int64 thresholdAmount, String pin) async {
     if (!isInitialized) {

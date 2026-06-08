@@ -5,12 +5,16 @@
 use std::sync::Arc;
 
 use crate::bitcoin::BitcoinHistoryService;
+use crate::contract::ContractHost;
 use crate::fcm_client::FcmClient;
 use crate::persistence::{KvStore, SecretStore};
 
 pub struct SharedServices {
     pub persistence: Arc<dyn KvStore>,
     pub secret_store: Arc<dyn SecretStore>,
+    /// Off-chain contract engine for eVTXO programmability. `None` disables
+    /// contract gating (no contracts directory / engine init failed).
+    pub contract_host: Option<Arc<ContractHost>>,
     pub bitcoin_history: Arc<tokio::sync::Mutex<BitcoinHistoryService>>,
     pub asp_client: Option<Arc<tokio::sync::Mutex<ark::client::AspClient>>>,
     /// Push notifications. None when `FCM_SERVICE_ACCOUNT_CIPHERTEXT` is unset
@@ -38,6 +42,7 @@ impl SharedServices {
         Self {
             persistence,
             secret_store,
+            contract_host: None,
             bitcoin_history,
             asp_client: asp_client.map(|c| Arc::new(tokio::sync::Mutex::new(c))),
             fcm,

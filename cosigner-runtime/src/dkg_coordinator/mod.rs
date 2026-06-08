@@ -5,7 +5,9 @@
 
 mod conv;
 pub mod coordinator;
+pub mod evtxo;
 mod handlers;
 pub mod session;
 
 pub use coordinator::DkgCoordinator;
+pub use evtxo::EvtxoKeygenCoordinator;

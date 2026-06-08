@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod bitcoin;
 pub mod config;
+pub mod contract;
 pub mod cosigner;
 pub mod crypto_ops;
 pub mod dkg_coordinator;

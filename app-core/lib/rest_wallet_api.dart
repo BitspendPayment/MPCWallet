@@ -133,6 +133,61 @@ class RestWalletApi implements WalletApi {
   }
 
   // -------------------------------------------------------------------------
+  // eVTXO key generation (resharing)
+  // -------------------------------------------------------------------------
+
+  @override
+  Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step1', {
+      'user_id': _hex(r.userId),
+      'identifier': _hex(r.identifier),
+      'round1_package': r.round1Package,
+      'contract_id': _hex(r.contractId),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+      'server_pk': _hex(r.serverPk),
+      'exit_delay': r.exitDelay,
+    });
+    return EvtxoKeygenStep1Response()
+      ..round1Packages
+          .addAll((resp['round1_packages'] as Map<String, dynamic>? ?? {})
+              .map((k, v) => MapEntry(k, v.toString())));
+  }
+
+  @override
+  Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step2', {
+      'user_id': _hex(r.userId),
+      'identifier': _hex(r.identifier),
+      'round1_package': r.round1Package,
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+    });
+    return EvtxoKeygenStep2Response()
+      ..allRound1Packages
+          .addAll((resp['all_round1_packages'] as Map<String, dynamic>? ?? {})
+              .map((k, v) => MapEntry(k, v.toString())));
+  }
+
+  @override
+  Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step3', {
+      'user_id': _hex(r.userId),
+      'identifier': _hex(r.identifier),
+      'round2_packages_for_others':
+          r.round2PackagesForOthers.map((k, v) => MapEntry(k, v)),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+    });
+    return EvtxoKeygenStep3Response()
+      ..round2PackagesForMe
+          .addAll((resp['round2_packages_for_me'] as Map<String, dynamic>? ?? {})
+              .map((k, v) => MapEntry(k, v.toString())))
+      ..evtxoAddress = (resp['evtxo_address'] as String? ?? '')
+      ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
+  }
+
+  // -------------------------------------------------------------------------
   // Signing
   // -------------------------------------------------------------------------
 

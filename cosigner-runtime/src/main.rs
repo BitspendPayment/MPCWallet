@@ -3,8 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, cosigner, dkg_coordinator, fcm_client, persistence, rest_api, shared,
-    telemetry, vtxo_stream,
+    bitcoin, config, contract, cosigner, dkg_coordinator, fcm_client, persistence, rest_api,
+    shared, telemetry, vtxo_stream,
 };
 
 #[derive(Parser)]
@@ -147,7 +147,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let shared = Arc::new(shared::SharedServices::new(
+    let mut shared = shared::SharedServices::new(
         persistence,
         secret_store,
         bitcoin_history,
@@ -155,7 +155,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         fcm,
         cfg.auto_settle_safety_margin_secs,
         cfg.actor_idle_threshold_secs,
-    ));
+    );
+
+    // Off-chain contract programmability: resolve user contracts by code-hash
+    // from <data_dir>/contracts. Disabled (gating becomes a no-op) if the engine
+    // fails to initialize.
+    let contract_registry: Box<dyn contract::ContractRegistry> =
+        match std::env::var("CONTRACT_REGISTRY_URL") {
+            Ok(url) if !url.is_empty() => {
+                tracing::info!("Contracts: Warg content registry at {url}");
+                Box::new(contract::WargRegistry::new(url))
+            }
+            _ => {
+                let dir = format!("{}/contracts", cfg.data_dir);
+                tracing::info!("Contracts: local directory at {dir}");
+                Box::new(contract::LocalDirRegistry::new(&dir))
+            }
+        };
+    match contract::ContractHost::new(contract_registry) {
+        Ok(host) => {
+            tracing::info!("Contract engine ready");
+            shared.contract_host = Some(Arc::new(host));
+        }
+        Err(e) => tracing::warn!("Contract engine disabled: {e}"),
+    }
+
+    let shared = Arc::new(shared);
 
     // WASM source: CLI > env > config default.
     let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
@@ -277,6 +302,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // eVTXO key-generation (resharing) coordinator — same TTL/eviction model.
+    let evtxo_coord = dkg_coordinator::EvtxoKeygenCoordinator::new(shared.clone(), dkg_ttl);
+    {
+        let coord = evtxo_coord.clone();
+        tokio::spawn(async move {
+            coord.run_eviction_loop().await;
+        });
+    }
+
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
         std::env::var("PORT")
@@ -287,6 +321,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = rest_api::AppState {
         registry: registry.clone(),
         dkg_coordinator: dkg_coord.clone(),
+        evtxo_coordinator: evtxo_coord.clone(),
         server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
             bitcoin_network: cfg.bitcoin_network.clone(),
         }),

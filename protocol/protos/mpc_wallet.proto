@@ -8,6 +8,12 @@ service MPCWallet {
   rpc DKGStep2 (DKGStep2Request) returns (DKGStep2Response);
   rpc DKGStep3 (DKGStep3Request) returns (DKGStep3Response);
 
+  // eVTXO programmable key generation (resharing: cosigner+hardware deal,
+  // wallet+cosigner receive a new 2-of-2 key V′ bound to a contract).
+  rpc EvtxoKeygenStep1 (EvtxoKeygenStep1Request) returns (EvtxoKeygenStep1Response);
+  rpc EvtxoKeygenStep2 (EvtxoKeygenStep2Request) returns (EvtxoKeygenStep2Response);
+  rpc EvtxoKeygenStep3 (EvtxoKeygenStep3Request) returns (EvtxoKeygenStep3Response);
+
   // Signing
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
   rpc SignStep2 (SignStep2Request) returns (SignStep2Response);
@@ -521,4 +527,51 @@ message RegisterDeviceTokenRequest {
 
 message RegisterDeviceTokenResponse {
     bool ok = 1;
+}
+
+// ---------------------------------------------------------------------------
+// eVTXO key generation (resharing). Authenticated (the main key already exists).
+// Topology mirrors DKG: cosigner + hardware deal; the wallet sends an empty
+// round1 (passive receiver). The resulting 2-of-2 key V′ is held by
+// {wallet, cosigner} only and bound to `contract_id`.
+// ---------------------------------------------------------------------------
+message EvtxoKeygenStep1Request {
+  bytes user_id = 1;
+  bytes identifier = 2;
+  string round1_package = 3;   // JSON (empty for the passive wallet receiver)
+  bytes contract_id = 4;       // sha256(component_wasm): the contract bound to V′
+  bytes signature = 5;         // Schnorr auth signature
+  int64 timestamp_ms = 6;      // replay protection
+  bytes server_pk = 7;         // ASP signer x-only pubkey (for the cooperative leaf)
+  uint32 exit_delay = 8;       // unilateral-exit CSV delay (for the exit leaf)
+}
+
+message EvtxoKeygenStep1Response {
+  map<string, string> round1_packages = 1;
+}
+
+message EvtxoKeygenStep2Request {
+  bytes user_id = 1;
+  bytes identifier = 2;
+  string round1_package = 3;   // JSON
+  bytes signature = 4;
+  int64 timestamp_ms = 5;
+}
+
+message EvtxoKeygenStep2Response {
+  map<string, string> all_round1_packages = 1;
+}
+
+message EvtxoKeygenStep3Request {
+  bytes user_id = 1;
+  bytes identifier = 2;
+  map<string, string> round2_packages_for_others = 3;
+  bytes signature = 4;
+  int64 timestamp_ms = 5;
+}
+
+message EvtxoKeygenStep3Response {
+  map<string, string> round2_packages_for_me = 1;
+  string evtxo_address = 2;        // derived eVTXO address (cosigner-confirmed)
+  bytes evtxo_script_pubkey = 3;   // the registered scriptPubKey
 }

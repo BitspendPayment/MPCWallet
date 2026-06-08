@@ -101,6 +101,34 @@ pub fn evaluate_policy_for_amount(policy_state: &PolicyState, spending_amount: i
     PolicyEngine::evaluate_policy(policy_state, spending_amount)
 }
 
+/// Resolve the `(key_package_json, public_key_package_json)` a signing session
+/// uses for `policy_id`, consistently across sign_step1 and sign_step2:
+/// - `"evtxo:<spk_hex>"` -> the V′ `EvtxoPolicy` for that eVTXO (contract-gated),
+/// - a non-empty protected policy id -> that `ProtectedPolicy`,
+/// - empty / unknown -> the normal policy.
+/// Behaviour for non-eVTXO ids is identical to the prior inline selection.
+pub fn resolve_signing_key(policy_state: &PolicyState, policy_id: &str) -> (String, String) {
+    if let Some(spk_hex) = policy_id.strip_prefix("evtxo:") {
+        if let Some(ep) = policy_state.evtxo_policies.get(spk_hex) {
+            return (
+                ep.key_package_json.clone(),
+                ep.public_key_package_json.clone(),
+            );
+        }
+    } else if !policy_id.is_empty() {
+        if let Some(pp) = policy_state.protected_policies.get(policy_id) {
+            return (
+                pp.key_package_json.clone(),
+                pp.public_key_package_json.clone(),
+            );
+        }
+    }
+    (
+        policy_state.normal_policy.key_package_json.clone(),
+        policy_state.normal_policy.public_key_package_json.clone(),
+    )
+}
+
 /// Parse a JSON object of string-wrapped values into a HashMap.
 pub fn parse_json_string_map(json: &str) -> Result<HashMap<String, String>, Status> {
     let v: serde_json::Value = serde_json::from_str(json)

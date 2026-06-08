@@ -458,6 +458,112 @@ pub extern "C" fn threshold_dkg_refresh_part3(
     }
 }
 
+// ---------------------------------------------------------------------------
+// eVTXO key resharing
+// ---------------------------------------------------------------------------
+
+/// eVTXO reshare round 1: deal a fresh NON-zero polynomial under an EXPLICIT
+/// identifier (the dealer's existing identity). Used by the signer (hardware /
+/// software). Round 2 then uses the regular `threshold_dkg_part2`.
+#[no_mangle]
+pub extern "C" fn threshold_dkg_reshare_part1(
+    id_hex: *const c_char,
+    max_signers: u32,
+    min_signers: u32,
+    seed_ptr: *const u8,
+    seed_len: u32,
+) -> *mut FfiResult {
+    let result = (|| -> Result<(String, *mut c_void), String> {
+        let id_str = read_cstr(id_hex).ok_or("null id_hex")?;
+        let identifier = parse_identifier_hex(&id_str)?;
+
+        let mut rng = OsRng;
+        let secret = random::mod_n_random(&mut rng);
+        let coefficients = if !seed_ptr.is_null() && seed_len > 0 {
+            let seed = super::read_bytes(seed_ptr, seed_len).ok_or("bad seed")?;
+            random::generate_coefficients_seeded(min_signers as usize - 1, &seed)
+        } else {
+            random::generate_coefficients(min_signers as usize - 1, &mut rng)
+        };
+
+        let (secret_pkg, pub_pkg) = dkg::dkg_reshare_part1(
+            &identifier,
+            max_signers as usize,
+            min_signers as usize,
+            &secret,
+            &coefficients,
+            &mut rng,
+        )
+        .map_err(|e| format!("dkg_reshare_part1 failed: {e}"))?;
+
+        let r1_pkg_val: serde_json::Value =
+            serde_json::from_str(&serialize_round1_pkg(&pub_pkg)).unwrap_or_default();
+        let data = serde_json::json!({ "round1Package": r1_pkg_val }).to_string();
+        let handle = box_handle(secret_pkg);
+        Ok((data, handle))
+    })();
+
+    match result {
+        Ok((data, handle)) => FfiResult::ok_with_handle(&data, handle),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
+/// eVTXO reshare finalizer for a pure receiver (the wallet): combine the dealers'
+/// shares with the old share into a new 2-of-2 `V′` key package + PKP. Mirrors
+/// `dkg_reshare_part3_receive` in the threshold crate.
+#[no_mangle]
+pub extern "C" fn threshold_dkg_reshare_part3_receive(
+    my_id_hex: *const c_char,
+    dealer_r1_json: *const c_char,
+    shares_json: *const c_char,
+    old_pkp_json: *const c_char,
+    old_kp_json: *const c_char,
+    receiver_ids_json: *const c_char,
+    min_signers: u32,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let id_str = read_cstr(my_id_hex).ok_or("null my_id_hex")?;
+        let my_id = parse_identifier_hex(&id_str)?;
+
+        let r1_str = read_cstr(dealer_r1_json).ok_or("null dealer_r1_json")?;
+        let shares_str = read_cstr(shares_json).ok_or("null shares_json")?;
+        let old_pkp_str = read_cstr(old_pkp_json).ok_or("null old_pkp_json")?;
+        let old_kp_str = read_cstr(old_kp_json).ok_or("null old_kp_json")?;
+        let ids_str = read_cstr(receiver_ids_json).ok_or("null receiver_ids_json")?;
+
+        let dealer_r1 = parse_round1_pkgs_json(&r1_str)?;
+        let shares = parse_round2_pkgs_json(&shares_str)?;
+        let receiver_ids = parse_identifier_list_json(&ids_str)?;
+        let old_pkp = threshold::keys::PublicKeyPackage::from_json(&old_pkp_str)
+            .map_err(|e| format!("bad old PKP: {e}"))?;
+        let old_kp = threshold::keys::KeyPackage::from_json(&old_kp_str)
+            .map_err(|e| format!("bad old KP: {e}"))?;
+
+        let (kp, pkp) = dkg::dkg_reshare_part3_receive(
+            &my_id,
+            &dealer_r1,
+            &shares,
+            &old_pkp,
+            &old_kp,
+            &receiver_ids,
+            min_signers as usize,
+        )
+        .map_err(|e| format!("dkg_reshare_part3_receive failed: {e}"))?;
+
+        let result = serde_json::json!({
+            "key_package": serde_json::from_str::<serde_json::Value>(&kp.to_json()).unwrap_or_default(),
+            "public_key_package": serde_json::from_str::<serde_json::Value>(&pkp.to_json()).unwrap_or_default(),
+        });
+        Ok(result.to_string())
+    })();
+
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
 // Re-use hex decode for the module (avoids bringing in hex crate at top level)
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {

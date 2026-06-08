@@ -631,6 +631,208 @@ pub fn dkg_refresh_part3(
 }
 
 // ---------------------------------------------------------------------------
+// Key Resharing (eVTXO key generation)
+//
+// Produce a NEW key `V' = V + Δ` shared among a chosen receiver subset, by
+// adding the old share to a fresh NON-zero dealing. Unlike refresh, the group
+// key intentionally CHANGES and the new shareholder set EXCLUDES old holders not
+// in `receiver_identifiers` (e.g. the hardware signer) — so only the receivers
+// can sign `V'`. Dealing reuses `dkg_part1` (random non-zero secret) + `dkg_part2`
+// with the receivers as `receiver_identifiers`.
+// ---------------------------------------------------------------------------
+
+/// Resharing round 1: deal a fresh NON-zero polynomial under an EXPLICIT
+/// identifier (the dealer's existing identity, so self-shares and the receivers'
+/// old shares line up). Unlike `dkg_refresh_part1` the constant term is the
+/// random `secret` (so the group key shifts by Δ); unlike `dkg_part1` the
+/// identifier is supplied rather than derived. Round 2 then uses the regular
+/// `dkg_part2` (commitments are full-length, no identity prepend).
+pub fn dkg_reshare_part1(
+    identifier: &Identifier,
+    max_signers: usize,
+    min_signers: usize,
+    secret: &Scalar,
+    coefficients: &[Scalar],
+    rng: &mut impl RngCore,
+) -> Result<(Round1SecretPackage, Round1Package), Error> {
+    validate_num_signers(min_signers, max_signers)?;
+
+    let (coeffs, commitment_points) =
+        polynomial::generate_secret_polynomial(secret, coefficients);
+    let commitment = VssCommitment {
+        coeffs: commitment_points,
+    };
+    let vk = commitment.to_verifying_key();
+    let sig = compute_proof_of_knowledge(identifier, &coeffs, &vk, rng)?;
+
+    let secret_pkg = Round1SecretPackage {
+        identifier: identifier.clone(),
+        coefficients: coeffs,
+        commitment: commitment.clone(),
+        min_signers,
+        max_signers,
+    };
+    let pub_pkg = Round1Package {
+        commitment,
+        proof_of_knowledge: sig,
+        verifying_key: vk,
+    };
+    Ok((secret_pkg, pub_pkg))
+}
+
+/// Resharing finalizer for a dealer-receiver (e.g. the cosigner): it dealt a
+/// non-zero polynomial AND receives a new share. `round1_pkgs`/`round2_pkgs` are
+/// the OTHER dealers' packages (shares addressed to us); `r2_secret` is our own
+/// dealing. Combines: peer-dealer shares + own self-share + old share, yielding
+/// `V' = V + Δ`. `receiver_identifiers` is the NEW shareholder set; the resulting
+/// PKP holds only these (old holders outside the set are excluded).
+pub fn dkg_reshare_part3(
+    r2_secret: &Round2SecretPackage,
+    round1_pkgs: &BTreeMap<Identifier, Round1Package>,
+    round2_pkgs: &BTreeMap<Identifier, Round2Package>,
+    old_pkp: &PublicKeyPackage,
+    old_kp: &crate::keys::KeyPackage,
+    receiver_identifiers: &[Identifier],
+) -> Result<(crate::keys::KeyPackage, PublicKeyPackage), Error> {
+    if round1_pkgs.len() != round2_pkgs.len() {
+        return Err(Error::IncorrectNumberOfPackages);
+    }
+    for id in round1_pkgs.keys() {
+        if !round2_pkgs.contains_key(id) {
+            return Err(Error::IncorrectPackageMapping);
+        }
+    }
+
+    let mut si = Scalar::ZERO;
+    for (sender_id, pkg2) in round2_pkgs {
+        let r1 = round1_pkgs.get(sender_id).ok_or(Error::UnknownIdentifier)?;
+        let share_point = point::base_mul(&pkg2.secret_share);
+        let expected = r1.commitment.get_verifying_share(&r2_secret.identifier);
+        if !point::points_equal(&share_point, &expected) {
+            return Err(Error::InvalidSecretShare);
+        }
+        si = si + pkg2.secret_share;
+    }
+    si = si + r2_secret.secret_share; // our own dealing self-share
+    si = si + old_kp.secret_share; // reshare: V' = V + Δ
+
+    // Δ commitments: the peer dealers plus this dealer.
+    let mut delta_commitments: BTreeMap<Identifier, VssCommitment> = BTreeMap::new();
+    for (id, pkg) in round1_pkgs {
+        delta_commitments.insert(id.clone(), pkg.commitment.clone());
+    }
+    delta_commitments.insert(r2_secret.identifier.clone(), r2_secret.commitment.clone());
+
+    finalize_reshare(
+        si,
+        old_pkp,
+        &delta_commitments,
+        receiver_identifiers,
+        &r2_secret.identifier,
+        r2_secret.min_signers,
+    )
+}
+
+/// Resharing finalizer for a pure receiver (e.g. the wallet): no self-share.
+/// `dealer_round1_pkgs`/`shares_for_me` cover ALL dealers. Adds the old share.
+pub fn dkg_reshare_part3_receive(
+    my_identifier: &Identifier,
+    dealer_round1_pkgs: &BTreeMap<Identifier, Round1Package>,
+    shares_for_me: &BTreeMap<Identifier, Round2Package>,
+    old_pkp: &PublicKeyPackage,
+    old_kp: &crate::keys::KeyPackage,
+    receiver_identifiers: &[Identifier],
+    min_signers: usize,
+) -> Result<(crate::keys::KeyPackage, PublicKeyPackage), Error> {
+    if dealer_round1_pkgs.len() != shares_for_me.len() {
+        return Err(Error::IncorrectNumberOfPackages);
+    }
+    for id in dealer_round1_pkgs.keys() {
+        if !shares_for_me.contains_key(id) {
+            return Err(Error::IncorrectPackageMapping);
+        }
+    }
+
+    let mut si = Scalar::ZERO;
+    for (dealer_id, pkg2) in shares_for_me {
+        let r1 = dealer_round1_pkgs
+            .get(dealer_id)
+            .ok_or(Error::UnknownIdentifier)?;
+        let share_point = point::base_mul(&pkg2.secret_share);
+        let expected = r1.commitment.get_verifying_share(my_identifier);
+        if !point::points_equal(&share_point, &expected) {
+            return Err(Error::InvalidSecretShare);
+        }
+        si = si + pkg2.secret_share;
+    }
+    si = si + old_kp.secret_share; // reshare: V' = V + Δ
+
+    let mut delta_commitments: BTreeMap<Identifier, VssCommitment> = BTreeMap::new();
+    for (id, pkg) in dealer_round1_pkgs {
+        delta_commitments.insert(id.clone(), pkg.commitment.clone());
+    }
+
+    finalize_reshare(
+        si,
+        old_pkp,
+        &delta_commitments,
+        receiver_identifiers,
+        my_identifier,
+        min_signers,
+    )
+}
+
+/// Shared resharing finalization. Given the new secret share `si` (already
+/// including the old share), the dealer Δ-commitments, and the new receiver set:
+/// compute `V' = V + Δ·G`, fold verifying shares (old + Δ) for the receivers
+/// ONLY, and BIP-340 even-Y normalize. Both finalizers compute the SAME `V'` and
+/// Δ, so they normalize identically and their shares stay consistent.
+fn finalize_reshare(
+    si: Scalar,
+    old_pkp: &PublicKeyPackage,
+    delta_commitments: &BTreeMap<Identifier, VssCommitment>,
+    receiver_identifiers: &[Identifier],
+    my_identifier: &Identifier,
+    min_signers: usize,
+) -> Result<(crate::keys::KeyPackage, PublicKeyPackage), Error> {
+    let secret_share = si;
+    let verifying_share = point::base_mul(&secret_share);
+
+    // Δ polynomial commitment (NON-zero constant term => the key changes).
+    let delta = vss::sum_commitments(
+        &delta_commitments.values().cloned().collect::<Vec<_>>(),
+    )?;
+    // V' = V + Δ·G  (Δ·G is the summed dealer constant-term commitment).
+    let new_vk_point = point::point_add(&old_pkp.verifying_key.point, &delta.coeffs[0]);
+
+    // Fold verifying shares for the NEW receiver set only (excludes old holders
+    // not being re-shared to — e.g. the hardware signer).
+    let mut new_vs: BTreeMap<Identifier, ProjectivePoint> = BTreeMap::new();
+    for id in receiver_identifiers {
+        let vs_old = old_pkp
+            .verifying_shares
+            .get(id)
+            .ok_or(Error::UnknownIdentifier)?;
+        let vs_delta = delta.get_verifying_share(id);
+        new_vs.insert(id.clone(), point::point_add(vs_old, &vs_delta));
+    }
+
+    let pub_pkg = PublicKeyPackage {
+        verifying_shares: new_vs,
+        verifying_key: VerifyingKey::new(new_vk_point),
+    };
+    let key_pkg = crate::keys::KeyPackage {
+        identifier: my_identifier.clone(),
+        secret_share,
+        verifying_share,
+        verifying_key: pub_pkg.verifying_key.clone(),
+        min_signers,
+    };
+
+    Ok((key_pkg.into_even_y(), pub_pkg.into_even_y()))
+}
+
+// ---------------------------------------------------------------------------
 // JSON serialization (wire-compatible with Dart)
 // ---------------------------------------------------------------------------
 

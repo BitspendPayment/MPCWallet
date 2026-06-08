@@ -12,6 +12,11 @@ abstract class WalletApi {
   Future<DKGStep2Response> dKGStep2(DKGStep2Request request);
   Future<DKGStep3Response> dKGStep3(DKGStep3Request request);
 
+  // eVTXO key generation (resharing)
+  Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request request);
+  Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request request);
+  Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request request);
+
   // Signing
   Future<SignStep1Response> signStep1(SignStep1Request request);
   Future<SignStep2Response> signStep2(SignStep2Request request);

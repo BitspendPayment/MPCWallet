@@ -53,6 +53,26 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Minimal Warg content server for the contract e2e. Serves the content slice
+  # the cosigner's lean WargRegistry fetches (GET /content/sha256:<hex>); the
+  # test publishes the example contract with PUT /content. In-memory, no auth.
+  mpc_warg:
+    image: python:3.12-slim
+    container_name: mpc_warg
+    command: ["python", "/srv/warg_content_server.py"]
+    environment:
+      - WARG_PORT=7079
+    ports:
+      - "7079:7079"
+    volumes:
+      - ./scripts/warg_content_server.py:/srv/warg_content_server.py:ro
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:7079/health').status==200 else 1)\""]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+    restart: unless-stopped
+
   # Redis for arkd
   redis:
     image: redis:7-alpine

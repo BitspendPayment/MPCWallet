@@ -13,7 +13,7 @@ use tonic::Status;
 
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
-use crate::dkg_coordinator::DkgCoordinator;
+use crate::dkg_coordinator::{DkgCoordinator, EvtxoKeygenCoordinator};
 use crate::wallet_proto::{self};
 
 /// Per-route extractor types pull what they need from this struct via
@@ -22,6 +22,7 @@ use crate::wallet_proto::{self};
 pub struct AppState {
     pub registry: Arc<CosignerRegistry>,
     pub dkg_coordinator: Arc<DkgCoordinator>,
+    pub evtxo_coordinator: Arc<EvtxoKeygenCoordinator>,
     /// Public deployment metadata served by `/api/server-info`. Built once
     /// at startup from `ServerConfig::bitcoin_network`.
     pub server_info: Arc<wallet_proto::GetServerInfoResponse>,
@@ -36,6 +37,12 @@ impl FromRef<AppState> for Arc<CosignerRegistry> {
 impl FromRef<AppState> for Arc<DkgCoordinator> {
     fn from_ref(s: &AppState) -> Self {
         s.dkg_coordinator.clone()
+    }
+}
+
+impl FromRef<AppState> for Arc<EvtxoKeygenCoordinator> {
+    fn from_ref(s: &AppState) -> Self {
+        s.evtxo_coordinator.clone()
     }
 }
 
@@ -54,6 +61,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/u/{user_id}/dkg/step1", post(dkg_step1))
         .route("/u/{user_id}/dkg/step2", post(dkg_step2))
         .route("/u/{user_id}/dkg/step3", post(dkg_step3))
+        // eVTXO key generation (resharing)
+        .route("/u/{user_id}/evtxo-keygen/step1", post(evtxo_keygen_step1))
+        .route("/u/{user_id}/evtxo-keygen/step2", post(evtxo_keygen_step2))
+        .route("/u/{user_id}/evtxo-keygen/step3", post(evtxo_keygen_step3))
         // Signing
         .route("/u/{user_id}/sign/step1", post(sign_step1))
         .route("/u/{user_id}/sign/step2", post(sign_step2))
@@ -268,6 +279,70 @@ async fn dkg_step3(
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
     };
     match coord.dkg_step3(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// eVTXO key generation (resharing)
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_keygen_step1", fields(user_id = %user_id))]
+async fn evtxo_keygen_step1(
+    State(coord): State<Arc<EvtxoKeygenCoordinator>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoKeygenStep1Request {
+        user_id: user_id_bytes(&user_id),
+        identifier: hex_field(&body, "identifier"),
+        round1_package: str_field(&body, "round1_package"),
+        contract_id: hex_field(&body, "contract_id"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+        server_pk: hex_field(&body, "server_pk"),
+        exit_delay: i64_field(&body, "exit_delay") as u32,
+    };
+    match coord.step1(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_keygen_step2", fields(user_id = %user_id))]
+async fn evtxo_keygen_step2(
+    State(coord): State<Arc<EvtxoKeygenCoordinator>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoKeygenStep2Request {
+        user_id: user_id_bytes(&user_id),
+        identifier: hex_field(&body, "identifier"),
+        round1_package: str_field(&body, "round1_package"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    match coord.step2(&user_id, req).await {
+        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_keygen_step3", fields(user_id = %user_id))]
+async fn evtxo_keygen_step3(
+    State(coord): State<Arc<EvtxoKeygenCoordinator>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoKeygenStep3Request {
+        user_id: user_id_bytes(&user_id),
+        identifier: hex_field(&body, "identifier"),
+        round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    match coord.step3(&user_id, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }

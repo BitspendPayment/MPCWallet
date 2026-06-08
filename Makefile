@@ -21,13 +21,13 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark software software-ark hardware hardware-ark flash down \
+.PHONY: e2e e2e-ark e2e-evtxo warg-up software software-ark hardware hardware-ark flash down \
 	bob-up bob-down \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
 	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
 	threshold-ffi-android ark-ffi-android enclave-ffi-android \
 	threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32 \
-	cosigner-build runtime-build signer-build pico-build \
+	cosigner-build contracts-build runtime-build signer-build pico-build \
 	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	signer-run signer-stop runtime-run runtime-stop \
@@ -82,6 +82,22 @@ e2e: threshold-ffi-build cosigner-build runtime-build signer-run
 e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build cosigner-build runtime-build
 	@echo "Running Ark E2E test..."
 	cd e2e && dart test test/ark_e2e_test.dart
+	-pkill -f "signer-server" || true
+
+# Bring up just the Warg content server (the off-chain contract registry the
+# cosigner gate fetches from). `arkd-up` already includes it; this is for
+# standalone use / debugging.
+warg-up:
+	@echo "Starting Warg content server (mpc_warg)..."
+	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d mpc_warg
+
+# eVTXO contract gate E2E: same stack as e2e-ark (arkd-up brings up mpc_warg too)
+# plus the example WASM contracts. Funds an eVTXO, then asserts the cosigner
+# co-signs an allowed spend (broadcast + confirmed) and refuses over-limit /
+# bad-arg spends.
+e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build cosigner-build runtime-build contracts-build
+	@echo "Running eVTXO contract E2E test..."
+	cd e2e && dart test test/evtxo_contract_e2e_test.dart
 	-pkill -f "signer-server" || true
 
 # 3) Start regtest for SOFTWARE signer (no USB device required) — server in foreground
@@ -339,6 +355,13 @@ cosigner-build:
 	@echo "Building cosigner WASM component..."
 	cd cosigner && cargo build --release --target wasm32-wasip2
 	@echo "Built: cosigner/target/wasm32-wasip2/release/cosigner.wasm"
+
+contracts-build:
+	@echo "Building example WASM contracts (wasm32-wasip2 components)..."
+	cd contracts/examples/spending-limit && cargo build --release
+	@echo "Built: contracts/examples/spending-limit/target/wasm32-wasip2/release/spending_limit.wasm"
+	cd contracts/examples/oracle-gate && cargo build --release
+	@echo "Built: contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm"
 
 runtime-build:
 	@echo "Building server..."

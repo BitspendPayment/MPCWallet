@@ -10,7 +10,10 @@ use tonic::Status;
 
 use threshold::dkg::{Round1SecretPackage, Round2SecretPackage};
 
-use crate::wallet_proto::{DkgStep1Response, DkgStep2Response, DkgStep3Response};
+use crate::wallet_proto::{
+    DkgStep1Response, DkgStep2Response, DkgStep3Response, EvtxoKeygenStep1Response,
+    EvtxoKeygenStep2Response, EvtxoKeygenStep3Response,
+};
 
 pub struct DkgSession {
     pub user_id_hex: String,
@@ -30,11 +33,26 @@ pub struct DkgSession {
     pub round1_secret: Option<Round1SecretPackage>,
     pub round2_secret: Option<Round2SecretPackage>,
 
+    // eVTXO resharing context (empty/None for a normal DKG session). When set,
+    // the ceremony reshares the existing key into a new 2-of-2 V′ bound to a
+    // contract; the cosigner is both a dealer and a final shareholder.
+    pub reshare_contract_id: Vec<u8>,
+    pub reshare_old_kp_json: String,
+    pub reshare_old_pkp_json: String,
+    pub reshare_server_pk: Vec<u8>,
+    pub reshare_exit_delay: u32,
+
     // Rendezvous pools: oneshot replies for participants waiting on the
     // arrival of others before a round can complete.
     pub pending_step1: Vec<oneshot::Sender<Result<DkgStep1Response, Status>>>,
     pub pending_step2: Vec<oneshot::Sender<Result<DkgStep2Response, Status>>>,
     pub pending_step3: Vec<(String, oneshot::Sender<Result<DkgStep3Response, Status>>)>,
+
+    // Rendezvous pools for the eVTXO reshare ceremony (typed for its responses).
+    pub pending_evtxo_step1: Vec<oneshot::Sender<Result<EvtxoKeygenStep1Response, Status>>>,
+    pub pending_evtxo_step2: Vec<oneshot::Sender<Result<EvtxoKeygenStep2Response, Status>>>,
+    pub pending_evtxo_step3:
+        Vec<(String, oneshot::Sender<Result<EvtxoKeygenStep3Response, Status>>)>,
 
     pub last_touch: Instant,
 }
@@ -52,9 +70,17 @@ impl DkgSession {
             round2_relay: HashMap::new(),
             round1_secret: None,
             round2_secret: None,
+            reshare_contract_id: Vec::new(),
+            reshare_old_kp_json: String::new(),
+            reshare_old_pkp_json: String::new(),
+            reshare_server_pk: Vec::new(),
+            reshare_exit_delay: 0,
             pending_step1: Vec::new(),
             pending_step2: Vec::new(),
             pending_step3: Vec::new(),
+            pending_evtxo_step1: Vec::new(),
+            pending_evtxo_step2: Vec::new(),
+            pending_evtxo_step3: Vec::new(),
             last_touch: Instant::now(),
         }
     }

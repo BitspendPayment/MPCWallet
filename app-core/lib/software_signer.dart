@@ -236,6 +236,48 @@ class SoftwareSigner implements HardwareSignerInterface {
   }
 
   @override
+  Future<DkgInitResult> evtxoDealInit(int maxSigners, int minSigners) async {
+    return _lock.synchronized(() async {
+      final kp = _keyPackage;
+      if (kp == null) {
+        throw StateError('no key package — run DKG before resharing');
+      }
+      final identifier = kp.identifier;
+      // Deal a fresh non-zero polynomial under the EXISTING identifier.
+      final (r1Secret, r1Pkg) =
+          dkgResharePart1(identifier, maxSigners, minSigners);
+      _r1Secret = r1Secret;
+      final vk = r1Pkg.commitment.toVerifyingKey();
+      final vkBytes = elemSerializeCompressed(vk.E);
+      return DkgInitResult(
+        round1Package: r1Pkg,
+        verifyingKeyBytes: vkBytes,
+        identifier: identifier,
+      );
+    });
+  }
+
+  @override
+  Future<Map<Identifier, Round2Package>> evtxoDealRound2(
+    Map<Identifier, Round1Package> othersRound1, {
+    List<Identifier> receiverIdentifiers = const [],
+  }) async {
+    return _lock.synchronized(() async {
+      final r1Secret = _r1Secret;
+      if (r1Secret == null) {
+        throw StateError('no reshare round1 secret — call evtxoDealInit first');
+      }
+      final (_, r2Out) = dkgPart2(
+        r1Secret,
+        othersRound1,
+        receiverIdentifiers: receiverIdentifiers,
+      );
+      _r1Secret = null; // done dealing; the signer keeps no V′ share
+      return r2Out;
+    });
+  }
+
+  @override
   Future<DkgFinalResult> dkgRound3(
     Map<Identifier, Round1Package> round1Pkgs,
     Map<Identifier, Round2Package> round2Pkgs, {

@@ -22,6 +22,9 @@ pub struct SignerState {
     public_key_package: Option<PublicKeyPackage>,
     pending_nonce: Option<SigningNonce>,
     dkg_secret: Option<[u8; 32]>,
+    /// Scratch round-1 secret for an in-flight eVTXO reshare deal. The signer
+    /// deals but keeps no resulting V′ share, so there's no round-3 here.
+    reshare_r1_secret: Option<Round1SecretPackage>,
 }
 
 impl SignerState {
@@ -33,6 +36,7 @@ impl SignerState {
             public_key_package: None,
             pending_nonce: None,
             dkg_secret: None,
+            reshare_r1_secret: None,
         }
     }
 
@@ -54,6 +58,14 @@ impl SignerState {
                 round2_packages,
                 receiver_identifiers,
             } => self.handle_dkg_round3(round1_packages, round2_packages, receiver_identifiers),
+            Request::EvtxoDealInit {
+                max_signers,
+                min_signers,
+            } => self.handle_evtxo_deal_init(max_signers, min_signers),
+            Request::EvtxoDealRound2 {
+                round1_packages,
+                receiver_identifiers,
+            } => self.handle_evtxo_deal_round2(round1_packages, receiver_identifiers),
             Request::GenerateNonce => self.handle_generate_nonce(),
             Request::Sign {
                 message_hex,
@@ -198,6 +210,104 @@ impl SignerState {
             }
             Err(e) => Response::Error {
                 error: format!("dkg_round2 failed: {}", e),
+            },
+        }
+    }
+
+    /// eVTXO reshare deal — round 1. Deals a fresh NON-zero polynomial under the
+    /// signer's EXISTING identifier (so it lines up with the cosigner/wallet's
+    /// existing shares). Stores only a scratch round-1 secret.
+    fn handle_evtxo_deal_init(&mut self, max_signers: usize, min_signers: usize) -> Response {
+        let identifier = match &self.key_package {
+            Some(kp) => kp.identifier.clone(),
+            None => {
+                return Response::Error {
+                    error: "no key package; run initial DKG before resharing".into(),
+                }
+            }
+        };
+        let mut rng = OsRng;
+        let secret = random_scalar(&mut rng);
+        let mut coefficients = Vec::with_capacity(min_signers - 1);
+        for _ in 0..(min_signers - 1) {
+            coefficients.push(random_scalar(&mut rng));
+        }
+        match dkg::dkg_reshare_part1(
+            &identifier,
+            max_signers,
+            min_signers,
+            &secret,
+            &coefficients,
+            &mut rng,
+        ) {
+            Ok((secret_pkg, pub_pkg)) => {
+                let id_hex = hex_encode(&secret_pkg.identifier.serialize());
+                let vk_hex = hex_encode(&pub_pkg.verifying_key.serialize());
+                let r1_json = pub_pkg.to_json_value();
+                self.reshare_r1_secret = Some(secret_pkg);
+                Response::DkgInit {
+                    round1_package_json: r1_json,
+                    verifying_key_hex: vk_hex,
+                    identifier_hex: id_hex,
+                }
+            }
+            Err(e) => Response::Error {
+                error: format!("evtxo_deal_init failed: {}", e),
+            },
+        }
+    }
+
+    /// eVTXO reshare deal — round 2. Computes shares for the other parties, then
+    /// DISCARDS the round-2 secret (the signer keeps no V′ share).
+    fn handle_evtxo_deal_round2(
+        &mut self,
+        round1_packages: HashMap<String, serde_json::Value>,
+        receiver_identifier_hexes: Vec<String>,
+    ) -> Response {
+        let r1_secret = match &self.reshare_r1_secret {
+            Some(s) => s,
+            None => {
+                return Response::Error {
+                    error: "no reshare round1 secret (call evtxo_deal_init first)".into(),
+                }
+            }
+        };
+        let mut r1_pkgs: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
+        for (id_hex, pkg_json) in &round1_packages {
+            let id = match parse_identifier(id_hex) {
+                Ok(id) => id,
+                Err(e) => return Response::Error { error: e },
+            };
+            let pkg = match Round1Package::from_json_value(pkg_json) {
+                Ok(p) => p,
+                Err(e) => {
+                    return Response::Error {
+                        error: format!("failed to parse Round1Package: {}", e),
+                    }
+                }
+            };
+            r1_pkgs.insert(id, pkg);
+        }
+        let mut receiver_ids = Vec::new();
+        for hex_str in &receiver_identifier_hexes {
+            match parse_identifier(hex_str) {
+                Ok(id) => receiver_ids.push(id),
+                Err(e) => return Response::Error { error: e },
+            }
+        }
+        match dkg::dkg_part2(r1_secret, &r1_pkgs, &receiver_ids) {
+            Ok((_r2_secret, r2_out)) => {
+                let mut r2_map: HashMap<String, serde_json::Value> = HashMap::new();
+                for (id, pkg) in &r2_out {
+                    r2_map.insert(hex_encode(&id.serialize()), pkg.to_json_value());
+                }
+                self.reshare_r1_secret = None; // done dealing; keep no share
+                Response::DkgRound2 {
+                    round2_packages: r2_map,
+                }
+            }
+            Err(e) => Response::Error {
+                error: format!("evtxo_deal_round2 failed: {}", e),
             },
         }
     }

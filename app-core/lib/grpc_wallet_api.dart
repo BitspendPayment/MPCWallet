@@ -22,6 +22,16 @@ class GrpcWalletApi implements WalletApi {
   Future<DKGStep3Response> dKGStep3(DKGStep3Request r) => _stub.dKGStep3(r);
 
   @override
+  Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request r) =>
+      _stub.evtxoKeygenStep1(r);
+  @override
+  Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request r) =>
+      _stub.evtxoKeygenStep2(r);
+  @override
+  Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request r) =>
+      _stub.evtxoKeygenStep3(r);
+
+  @override
   Future<SignStep1Response> signStep1(SignStep1Request r) => _stub.signStep1(r);
   @override
   Future<SignStep2Response> signStep2(SignStep2Request r) => _stub.signStep2(r);

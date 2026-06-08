@@ -78,6 +78,17 @@ abstract class HardwareSignerInterface {
     List<Identifier> receiverIdentifiers = const [],
   });
 
+  /// eVTXO reshare deal — round 1. Deal a fresh non-zero polynomial under the
+  /// signer's EXISTING identifier. The signer keeps NO resulting share.
+  Future<DkgInitResult> evtxoDealInit(int maxSigners, int minSigners);
+
+  /// eVTXO reshare deal — round 2. Compute shares for the other parties, then
+  /// discard the round-2 secret (the signer keeps no share).
+  Future<Map<Identifier, Round2Package>> evtxoDealRound2(
+    Map<Identifier, Round1Package> othersRound1, {
+    List<Identifier> receiverIdentifiers = const [],
+  });
+
   /// Generate a signing nonce (one-time use).
   Future<frost_comm.SigningCommitments> generateNonce();
 
@@ -274,6 +285,60 @@ class TcpHardwareSigner implements HardwareSignerInterface {
       result[id] = pkg;
     }
 
+    return result;
+  }
+
+  @override
+  Future<DkgInitResult> evtxoDealInit(int maxSigners, int minSigners) async {
+    final resp = await _sendCommand({
+      'cmd': 'evtxo_deal_init',
+      'max_signers': maxSigners,
+      'min_signers': minSigners,
+    });
+    final round1Package =
+        Round1Package.fromJson(resp['round1_package_json'] as Map<String, dynamic>);
+    final verifyingKeyBytes = hex.decode(resp['verifying_key_hex'] as String);
+    final identifier = Identifier.deserialize(
+      Uint8List.fromList(hex.decode(resp['identifier_hex'] as String)),
+    );
+    return DkgInitResult(
+      round1Package: round1Package,
+      verifyingKeyBytes: verifyingKeyBytes,
+      identifier: identifier,
+    );
+  }
+
+  @override
+  Future<Map<Identifier, Round2Package>> evtxoDealRound2(
+    Map<Identifier, Round1Package> othersRound1, {
+    List<Identifier> receiverIdentifiers = const [],
+  }) async {
+    final r1Map = <String, dynamic>{};
+    for (final entry in othersRound1.entries) {
+      r1Map[hex.encode(entry.key.serialize())] = entry.value.toJson();
+    }
+    final cmd = <String, dynamic>{
+      'cmd': 'evtxo_deal_round2',
+      'round1_packages': r1Map,
+    };
+    if (receiverIdentifiers.isNotEmpty) {
+      cmd['receiver_identifiers'] =
+          receiverIdentifiers.map((id) => hex.encode(id.serialize())).toList();
+    }
+    final resp = await _sendCommand(cmd);
+    final r2Map = resp['round2_packages'] as Map<String, dynamic>;
+    final result = <Identifier, Round2Package>{};
+    for (final entry in r2Map.entries) {
+      final id = Identifier.deserialize(
+        Uint8List.fromList(hex.decode(entry.key)),
+      );
+      final pkg = Round2Package.fromJson(
+        entry.value is String
+            ? jsonDecode(entry.value) as Map<String, dynamic>
+            : entry.value as Map<String, dynamic>,
+      );
+      result[id] = pkg;
+    }
     return result;
   }
 

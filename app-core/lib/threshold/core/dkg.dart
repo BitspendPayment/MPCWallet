@@ -620,6 +620,108 @@ PublicKeyPackage pkpFromCommitment(
   }
 }
 
+/// eVTXO reshare round 1: deal a fresh NON-zero polynomial under the dealer's
+/// EXISTING identifier. The polynomial lives in the returned FFI handle; round 2
+/// uses the regular [dkgPart2].
+(Round1SecretPackage, Round1Package) dkgResharePart1(
+  Identifier identifier,
+  int maxSigners,
+  int minSigners, {
+  List<int>? seed,
+}) {
+  final idHex = _bigIntToHex64(identifier.toScalar());
+  final idPtr = idHex.toNativeUtf8();
+
+  Pointer<Uint8> seedPtr;
+  int seedLen;
+  if (seed != null && seed.isNotEmpty) {
+    seedPtr = toNativeBytes(seed);
+    seedLen = seed.length;
+  } else {
+    seedPtr = Pointer<Uint8>.fromAddress(0);
+    seedLen = 0;
+  }
+
+  try {
+    final (data, handle) = callFfi(
+      dkgResharePart1Ffi(idPtr, maxSigners, minSigners, seedPtr, seedLen),
+    );
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final r1Pkg = Round1Package.fromJson(
+      parsed['round1Package'] as Map<String, dynamic>,
+    );
+    final r1Secret = Round1SecretPackage(
+      identifier,
+      <BigInt>[], // coefficients live in the FFI handle; not needed Dart-side
+      r1Pkg.commitment,
+      minSigners,
+      maxSigners,
+      handle,
+    );
+    return (r1Secret, r1Pkg);
+  } finally {
+    calloc.free(idPtr);
+    if (seedLen > 0) calloc.free(seedPtr);
+  }
+}
+
+/// eVTXO reshare finalizer for a pure receiver (the wallet): combine the
+/// dealers' shares with the old share into a new 2-of-2 `V′` key package + PKP.
+/// `receiverIdentifiers` is the NEW shareholder set ({wallet, cosigner}).
+(KeyPackage, PublicKeyPackage) dkgResharePart3Receive(
+  Identifier myIdentifier,
+  Map<Identifier, Round1Package> dealerRound1Pkgs,
+  Map<Identifier, Round2Package> sharesForMe,
+  PublicKeyPackage oldPkp,
+  KeyPackage oldKp,
+  List<Identifier> receiverIdentifiers,
+  int minSigners,
+) {
+  final myIdHex = _bigIntToHex64(myIdentifier.toScalar());
+  final dealerR1Json = _encodeR1PkgsJson(dealerRound1Pkgs);
+  final sharesJson = _encodeR2PkgsJson(sharesForMe);
+  final receiverIdsJson = _encodeIdentifierListJson(receiverIdentifiers);
+  final oldPkpJson = jsonEncode(oldPkp.toJson());
+  final oldKpJson = jsonEncode(oldKp.toJson());
+
+  final myIdPtr = myIdHex.toNativeUtf8();
+  final dealerR1Ptr = dealerR1Json.toNativeUtf8();
+  final sharesPtr = sharesJson.toNativeUtf8();
+  final oldPkpPtr = oldPkpJson.toNativeUtf8();
+  final oldKpPtr = oldKpJson.toNativeUtf8();
+  final receiverIdsPtr = receiverIdsJson.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      dkgResharePart3ReceiveFfi(
+        myIdPtr,
+        dealerR1Ptr,
+        sharesPtr,
+        oldPkpPtr,
+        oldKpPtr,
+        receiverIdsPtr,
+        minSigners,
+      ),
+    );
+
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final kp = KeyPackage.fromJson(
+      parsed['key_package'] as Map<String, dynamic>,
+    );
+    final pkp = PublicKeyPackage.fromJson(
+      parsed['public_key_package'] as Map<String, dynamic>,
+    );
+
+    return (kp, pkp);
+  } finally {
+    calloc.free(myIdPtr);
+    calloc.free(dealerR1Ptr);
+    calloc.free(sharesPtr);
+    calloc.free(oldPkpPtr);
+    calloc.free(oldKpPtr);
+    calloc.free(receiverIdsPtr);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal JSON helpers
 // ---------------------------------------------------------------------------

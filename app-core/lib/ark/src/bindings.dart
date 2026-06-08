@@ -83,3 +83,27 @@ typedef _ArkFreeSendSessionDart = void Function(int);
 final arkFreeSendSessionFfi = nativeLib
     .lookupFunction<_ArkFreeSendSessionNative, _ArkFreeSendSessionDart>(
         'ark_free_send_session');
+
+// ---------------------------------------------------------------------------
+// eVTXO cooperative-spend bindings
+// ---------------------------------------------------------------------------
+
+typedef _ArkBuildEvtxoSpendNative = Pointer<FfiResult> Function(Pointer<Utf8>);
+typedef _ArkBuildEvtxoSpendDart = Pointer<FfiResult> Function(Pointer<Utf8>);
+final arkBuildEvtxoSpendFfi = nativeLib
+    .lookupFunction<_ArkBuildEvtxoSpendNative, _ArkBuildEvtxoSpendDart>(
+        'ark_build_evtxo_spend');
+
+typedef _ArkFinalizeEvtxoSpendNative = Pointer<FfiResult> Function(
+    Uint64, Pointer<Utf8>, Pointer<Utf8>);
+typedef _ArkFinalizeEvtxoSpendDart = Pointer<FfiResult> Function(
+    int, Pointer<Utf8>, Pointer<Utf8>);
+final arkFinalizeEvtxoSpendFfi = nativeLib
+    .lookupFunction<_ArkFinalizeEvtxoSpendNative, _ArkFinalizeEvtxoSpendDart>(
+        'ark_finalize_evtxo_spend');
+
+typedef _ArkFreeEvtxoSpendNative = Void Function(Uint64);
+typedef _ArkFreeEvtxoSpendDart = void Function(int);
+final arkFreeEvtxoSpendFfi = nativeLib
+    .lookupFunction<_ArkFreeEvtxoSpendNative, _ArkFreeEvtxoSpendDart>(
+        'ark_free_evtxo_spend');
