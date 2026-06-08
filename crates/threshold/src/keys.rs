@@ -286,7 +286,7 @@ fn hex_decode_33(s: &str) -> Result<[u8; 33], Error> {
 }
 
 fn hex_decode(s: &str) -> Result<alloc::vec::Vec<u8>, Error> {
-    if s.len() % 2 != 0 {
+    if s.len() % 2 != 0 || !s.is_ascii() {
         return Err(Error::SerializationError);
     }
     let mut out = alloc::vec::Vec::with_capacity(s.len() / 2);

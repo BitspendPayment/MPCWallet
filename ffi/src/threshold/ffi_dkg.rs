@@ -340,6 +340,13 @@ pub extern "C" fn threshold_dkg_refresh_part1(
         let id_str = read_cstr(id_hex).ok_or("null id_hex")?;
         let identifier = parse_identifier_hex(&id_str)?;
 
+        // Guard the `min_signers - 1` below against caller-controlled underflow
+        // (min_signers = 0/1 would wrap to a huge allocation). dkg_refresh_part1
+        // also validates, but only after this coefficient count is computed.
+        if min_signers < 2 {
+            return Err("min_signers must be >= 2".into());
+        }
+
         let mut rng = OsRng;
         let coefficients = if !seed_ptr.is_null() && seed_len > 0 {
             let seed = super::read_bytes(seed_ptr, seed_len).ok_or("bad seed")?;
@@ -463,6 +470,9 @@ mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {
         if s.len() % 2 != 0 {
             return Err("odd hex length".into());
+        }
+        if !s.is_ascii() {
+            return Err("non-ascii hex".into());
         }
         let mut out = Vec::with_capacity(s.len() / 2);
         for i in (0..s.len()).step_by(2) {

@@ -24,7 +24,6 @@ pub unsafe fn borrow_handle<'a, T>(ptr: *mut c_void) -> Option<&'a T> {
 /// # Safety
 /// The pointer must have been produced by `box_handle::<T>` and not yet freed.
 /// After calling this, the pointer is invalid.
-#[allow(dead_code)]
 pub unsafe fn take_handle<T>(ptr: *mut c_void) -> Option<Box<T>> {
     if ptr.is_null() {
         None

@@ -1426,3 +1426,297 @@ fn test_restore_via_redkg_preserves_group_key_and_signing() {
             .expect("post-restore hw+server signature failed");
     }
 }
+
+// ---------------------------------------------------------------------------
+// Independent BIP-340 verification + known-answer + negative tests
+//
+// Every other test verifies signatures with the library's own `Signature::verify`,
+// which reuses the exact `compute_challenge` used during signing. A self-consistent-
+// but-wrong convention therefore passes silently. The tests below cross-check FROST/
+// taproot signatures against k256's INDEPENDENT BIP-340 verifier (`verify_raw`, which
+// — unlike the high-level `verify` — does NOT pre-hash the message), pin Lagrange
+// coefficients to known answers, and assert that forged shares / proofs are rejected.
+// ---------------------------------------------------------------------------
+
+/// x-only (32-byte) encoding of a verifying key's even-Y representative.
+fn x_only_even(vk: &VerifyingKey) -> [u8; 32] {
+    let comp = vk.into_even_y().serialize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&comp[1..33]);
+    out
+}
+
+/// Assert a 64-byte signature verifies under k256's independent BIP-340 verifier.
+fn assert_bip340_independent(sig64: &[u8; 64], x_only_pk: &[u8; 32], message: &[u8]) {
+    use k256::schnorr::{Signature as SchnorrSig, VerifyingKey as SchnorrVk};
+    let vk = SchnorrVk::from_bytes(x_only_pk).expect("x-only verifying key parse");
+    let sig = SchnorrSig::try_from(&sig64[..]).expect("signature parse");
+    vk.verify_raw(message, &sig)
+        .expect("INDEPENDENT BIP-340 verification failed");
+}
+
+/// Run a full FROST sign + aggregate over the given signer set.
+fn frost_sign(
+    signers: &[&KeyPackage],
+    pubkeys: &PublicKeyPackage,
+    message: &[u8],
+) -> threshold::signature::Signature {
+    let mut rng = OsRng;
+    let mut nonces = BTreeMap::new();
+    let mut commitments = BTreeMap::new();
+    for kp in signers {
+        let nonce = new_nonce(&mut rng, &kp.secret_share);
+        commitments.insert(kp.identifier.clone(), nonce.commitments.clone());
+        nonces.insert(kp.identifier.clone(), nonce);
+    }
+    let signing_package = SigningPackage::new(commitments, message.to_vec());
+    let mut shares = BTreeMap::new();
+    for kp in signers {
+        let nonce = nonces.get(&kp.identifier).unwrap();
+        shares.insert(
+            kp.identifier.clone(),
+            sign(&signing_package, nonce, kp).unwrap(),
+        );
+    }
+    aggregate(&signing_package, &shares, pubkeys).unwrap()
+}
+
+/// Like `frost_sign`, but also reports whether the group commitment R was odd-Y
+/// (i.e. whether the BIP-340 nonce-negation branch in signing was exercised).
+fn frost_sign_report_r(
+    signers: &[&KeyPackage],
+    pubkeys: &PublicKeyPackage,
+    message: &[u8],
+) -> (bool, threshold::signature::Signature) {
+    use threshold::binding::{compute_binding_factor_list, compute_group_commitment};
+    let mut rng = OsRng;
+    let mut nonces = BTreeMap::new();
+    let mut commitments = BTreeMap::new();
+    for kp in signers {
+        let nonce = new_nonce(&mut rng, &kp.secret_share);
+        commitments.insert(kp.identifier.clone(), nonce.commitments.clone());
+        nonces.insert(kp.identifier.clone(), nonce);
+    }
+    let signing_package = SigningPackage::new(commitments, message.to_vec());
+    let even_pk = pubkeys.into_even_y();
+    let bfl = compute_binding_factor_list(&signing_package, &even_pk.verifying_key);
+    let group_commitment = compute_group_commitment(&signing_package, &bfl).unwrap();
+    let is_r_odd = !point::has_even_y(&group_commitment.elem);
+
+    let mut shares = BTreeMap::new();
+    for kp in signers {
+        let nonce = nonces.get(&kp.identifier).unwrap();
+        shares.insert(
+            kp.identifier.clone(),
+            sign(&signing_package, nonce, kp).unwrap(),
+        );
+    }
+    let sig = aggregate(&signing_package, &shares, pubkeys).unwrap();
+    (is_r_odd, sig)
+}
+
+#[test]
+fn independent_bip340_frost_2of3_and_3of5() {
+    let message = b"independent bip340 frost";
+
+    let (kps, pubkeys) = run_dealer_dkg(2, 3);
+    let signers: Vec<&KeyPackage> = kps.iter().take(2).collect();
+    let sig = frost_sign(&signers, &pubkeys, message);
+    sig.verify(&pubkeys.verifying_key, message).unwrap();
+    assert_bip340_independent(&sig.serialize(), &x_only_even(&pubkeys.verifying_key), message);
+
+    let (kps5, pk5) = run_dealer_dkg(3, 5);
+    let signers5: Vec<&KeyPackage> = vec![&kps5[1], &kps5[2], &kps5[4]];
+    let sig5 = frost_sign(&signers5, &pk5, message);
+    sig5.verify(&pk5.verifying_key, message).unwrap();
+    assert_bip340_independent(&sig5.serialize(), &x_only_even(&pk5.verifying_key), message);
+}
+
+#[test]
+fn independent_bip340_forced_odd_y_group_key() {
+    // Loop until the group public key is odd-Y, deterministically exercising the
+    // into_even_y() secret-share negation path under an independent verifier.
+    let (kps, pubkeys) = loop {
+        let (k, p) = run_dealer_dkg(2, 3);
+        if !p.verifying_key.has_even_y() {
+            break (k, p);
+        }
+    };
+    assert!(!pubkeys.verifying_key.has_even_y());
+    let message = b"forced odd-Y group key";
+    let signers: Vec<&KeyPackage> = kps.iter().take(2).collect();
+    let sig = frost_sign(&signers, &pubkeys, message);
+    sig.verify(&pubkeys.verifying_key, message).unwrap();
+    assert_bip340_independent(&sig.serialize(), &x_only_even(&pubkeys.verifying_key), message);
+}
+
+#[test]
+fn independent_bip340_both_r_parities() {
+    // Exercise BOTH group-commitment R parities (the nonce-negation branch) and
+    // independently verify each. ~50% per parity → 40 tries makes a miss negligible.
+    let (kps, pubkeys) = run_dealer_dkg(2, 3);
+    let signers: Vec<&KeyPackage> = kps.iter().take(2).collect();
+    let message = b"both R parities";
+    let mut seen_odd = false;
+    let mut seen_even = false;
+    for _ in 0..40 {
+        let (is_odd, sig) = frost_sign_report_r(&signers, &pubkeys, message);
+        sig.verify(&pubkeys.verifying_key, message).unwrap();
+        assert_bip340_independent(&sig.serialize(), &x_only_even(&pubkeys.verifying_key), message);
+        if is_odd {
+            seen_odd = true;
+        } else {
+            seen_even = true;
+        }
+        if seen_odd && seen_even {
+            break;
+        }
+    }
+    assert!(seen_odd && seen_even, "did not exercise both R parities in 40 tries");
+}
+
+#[test]
+fn independent_bip340_taproot_keypath_and_scriptpath() {
+    let message = b"taproot independent verify";
+
+    // Key-path spend: merkle_root = None (NOT an all-zero 32-byte root).
+    let (kps, pubkeys) = run_dealer_dkg(2, 3);
+    let tkps: Vec<KeyPackage> = kps.iter().map(|kp| kp.tweak(None)).collect();
+    let tpk = pubkeys.tweak(None);
+    let signers: Vec<&KeyPackage> = tkps.iter().take(2).collect();
+    let sig = frost_sign(&signers, &tpk, message);
+    sig.verify(&tpk.verifying_key, message).unwrap();
+    assert_bip340_independent(&sig.serialize(), &x_only_even(&tpk.verifying_key), message);
+
+    // Script-path spend: a concrete non-zero 32-byte merkle root.
+    let root = [0x11u8; 32];
+    let (kps2, pubkeys2) = run_dealer_dkg(2, 3);
+    let tkps2: Vec<KeyPackage> = kps2.iter().map(|kp| kp.tweak(Some(&root))).collect();
+    let tpk2 = pubkeys2.tweak(Some(&root));
+    let signers2: Vec<&KeyPackage> = tkps2.iter().take(2).collect();
+    let sig2 = frost_sign(&signers2, &tpk2, message);
+    sig2.verify(&tpk2.verifying_key, message).unwrap();
+    assert_bip340_independent(&sig2.serialize(), &x_only_even(&tpk2.verifying_key), message);
+}
+
+#[test]
+fn lagrange_coeff_known_answers() {
+    let id1 = Identifier::from_u16(1).unwrap();
+    let id2 = Identifier::from_u16(2).unwrap();
+    let id3 = Identifier::from_u16(3).unwrap();
+
+    // S = {1,2}: λ_1(0) = 2, λ_2(0) = -1.
+    let s2 = vec![id1.clone(), id2.clone()];
+    assert_eq!(
+        scalar_to_bytes(&lagrange_coeff_at_zero(&id1, &s2)),
+        scalar_to_bytes(&Scalar::from(2u64))
+    );
+    assert_eq!(
+        scalar_to_bytes(&lagrange_coeff_at_zero(&id2, &s2)),
+        scalar_to_bytes(&(-Scalar::ONE))
+    );
+
+    // S = {1,2,3}: λ_1(0) = 3, λ_2(0) = -3, λ_3(0) = 1.
+    let s3 = vec![id1.clone(), id2.clone(), id3.clone()];
+    assert_eq!(
+        scalar_to_bytes(&lagrange_coeff_at_zero(&id1, &s3)),
+        scalar_to_bytes(&Scalar::from(3u64))
+    );
+    assert_eq!(
+        scalar_to_bytes(&lagrange_coeff_at_zero(&id2, &s3)),
+        scalar_to_bytes(&(-Scalar::from(3u64)))
+    );
+    assert_eq!(
+        scalar_to_bytes(&lagrange_coeff_at_zero(&id3, &s3)),
+        scalar_to_bytes(&Scalar::ONE)
+    );
+}
+
+#[test]
+fn negative_forged_signature_share_rejected() {
+    let (kps, pubkeys) = run_dealer_dkg(2, 3);
+    let signers: Vec<&KeyPackage> = kps.iter().take(2).collect();
+    let message = b"forged share";
+
+    let mut rng = OsRng;
+    let mut nonces = BTreeMap::new();
+    let mut commitments = BTreeMap::new();
+    for kp in &signers {
+        let nonce = new_nonce(&mut rng, &kp.secret_share);
+        commitments.insert(kp.identifier.clone(), nonce.commitments.clone());
+        nonces.insert(kp.identifier.clone(), nonce);
+    }
+    let signing_package = SigningPackage::new(commitments, message.to_vec());
+    let mut shares = BTreeMap::new();
+    for kp in &signers {
+        let nonce = nonces.get(&kp.identifier).unwrap();
+        shares.insert(
+            kp.identifier.clone(),
+            sign(&signing_package, nonce, kp).unwrap(),
+        );
+    }
+
+    // Tamper one participant's share; aggregate must reject it.
+    let first_id = signers[0].identifier.clone();
+    let tampered = threshold::signing::SignatureShare {
+        s: shares.get(&first_id).unwrap().s + Scalar::ONE,
+    };
+    shares.insert(first_id, tampered);
+    assert!(
+        aggregate(&signing_package, &shares, &pubkeys).is_err(),
+        "forged signature share must be rejected by aggregate"
+    );
+}
+
+#[test]
+fn negative_tampered_proof_of_knowledge_rejected() {
+    let mut rng = OsRng;
+    let secret = random_scalar(&mut rng);
+    let coeffs = vec![random_scalar(&mut rng)]; // min_signers = 2 → 1 extra coefficient
+    let (sp, pp) = dkg::dkg_part1(3, 2, &secret, &coeffs, &mut rng).unwrap();
+
+    // Sanity: the honest proof verifies.
+    dkg::verify_proof_of_knowledge(&sp.identifier, &pp.verifying_key, &pp.proof_of_knowledge)
+        .unwrap();
+
+    // Tampered z must be rejected.
+    let bad_z = dkg::DkgSignature {
+        r: pp.proof_of_knowledge.r,
+        z: pp.proof_of_knowledge.z + Scalar::ONE,
+    };
+    assert!(
+        dkg::verify_proof_of_knowledge(&sp.identifier, &pp.verifying_key, &bad_z).is_err(),
+        "tampered PoK z must be rejected"
+    );
+
+    // R = identity must be rejected.
+    let bad_r = dkg::DkgSignature {
+        r: k256::ProjectivePoint::IDENTITY,
+        z: pp.proof_of_knowledge.z,
+    };
+    assert!(
+        dkg::verify_proof_of_knowledge(&sp.identifier, &pp.verifying_key, &bad_r).is_err(),
+        "PoK with R = identity must be rejected"
+    );
+}
+
+#[test]
+fn negative_zero_identifier_rejected() {
+    assert!(Identifier::from_u16(0).is_err());
+    assert!(Identifier::deserialize(&[0u8; 32]).is_err());
+}
+
+#[test]
+fn negative_empty_commitment_rejected_not_panic() {
+    use threshold::vss::sum_commitments;
+
+    // An all-empty commitment set must be rejected, not produce a commitment that
+    // panics in to_verifying_key (the reachable dkg_part3_receive crash).
+    let empty = VssCommitment { coeffs: Vec::new() };
+    assert!(sum_commitments(&[empty]).is_err());
+
+    // Round1Package deserialization rejects an empty commitment array up front
+    // (the commitment is parsed before anything else).
+    let bad = r#"{"commitment":[],"proofOfKnowledge":{"R":"00","Z":"00"},"verifyingKey":{"E":[]}}"#;
+    assert!(Round1Package::from_json(bad).is_err());
+}

@@ -22,6 +22,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err("odd hex length".into());
     }
+    if !s.is_ascii() {
+        return Err("non-ascii hex".into());
+    }
     let mut out = Vec::with_capacity(s.len() / 2);
     for i in (0..s.len()).step_by(2) {
         let byte =
@@ -161,13 +164,17 @@ pub extern "C" fn threshold_frost_sign(
 
         let signing_pkg = parse_signing_package_json(&pkg_str)?;
 
-        let nonce = unsafe { super::handles::borrow_handle::<SigningNonce>(nonce_handle) }
+        // Consume (and free) the nonce handle: a FROST nonce MUST be used exactly
+        // once — reuse leaks the secret share. Taking ownership here frees the
+        // native SigningNonce when this call returns and makes the handle invalid,
+        // so a reuse attempt fails instead of producing a second share.
+        let nonce = unsafe { super::handles::take_handle::<SigningNonce>(nonce_handle) }
             .ok_or("null nonce_handle")?;
 
         let kp = KeyPackage::from_json(&kp_str).map_err(|e| format!("bad key package: {e}"))?;
 
         let share =
-            signing::sign(&signing_pkg, nonce, &kp).map_err(|e| format!("sign failed: {e}"))?;
+            signing::sign(&signing_pkg, &nonce, &kp).map_err(|e| format!("sign failed: {e}"))?;
 
         Ok(hex_encode(&scalar_to_bytes(&share.s)))
     })();

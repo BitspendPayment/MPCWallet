@@ -26,9 +26,12 @@ SignatureShare sign(
   final spPtr = spJson.toNativeUtf8();
   final kpPtr = kpJson.toNativeUtf8();
   try {
-    final shareHex = callFfiData(
-      frostSignFfi(spPtr, signingNonce.handle, kpPtr),
-    );
+    // Accessing `.handle` throws if the nonce was already used. Once frostSignFfi
+    // is invoked the Rust side has taken ownership of (and freed) the handle, so
+    // mark it consumed regardless of whether parsing the result succeeds.
+    final resultPtr = frostSignFfi(spPtr, signingNonce.handle, kpPtr);
+    signingNonce.markConsumed();
+    final shareHex = callFfiData(resultPtr);
     return SignatureShare(BigInt.parse(shareHex, radix: 16));
   } finally {
     calloc.free(spPtr);

@@ -106,6 +106,12 @@ pub fn compute_group_commitment(
         group_commitment = point::point_add(&group_commitment, &rho_b);
     }
 
+    // A group commitment of identity (R = O) has no x-only / parity and would
+    // otherwise propagate into has_even_y / serialization. Reject it cleanly.
+    if point::is_identity(&group_commitment) {
+        return Err(Error::IdentityCommitment);
+    }
+
     Ok(GroupCommitment {
         elem: group_commitment,
     })

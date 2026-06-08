@@ -14,6 +14,9 @@ fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     if s.len() % 2 != 0 {
         return Err("odd hex length".into());
     }
+    if !s.is_ascii() {
+        return Err("non-ascii hex".into());
+    }
     let mut out = Vec::with_capacity(s.len() / 2);
     for i in (0..s.len()).step_by(2) {
         let byte =

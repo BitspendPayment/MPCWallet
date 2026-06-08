@@ -24,12 +24,21 @@ pub fn point_negate(p: &ProjectivePoint) -> ProjectivePoint {
 }
 
 /// Serialize a point to 33-byte compressed form.
+///
+/// The identity (point at infinity) has no valid 33-byte compressed encoding
+/// (SEC1 encodes it as a single `0x00` byte). Rather than panic across the FFI
+/// boundary, return an all-zero (invalid) encoding: honest flows never serialize
+/// the identity, untrusted identity points are rejected earlier
+/// (`compute_group_commitment`, `verify_proof_of_knowledge`), and a `0x00`-prefixed
+/// buffer fails to deserialize — so this fails closed.
 pub fn serialize_compressed(p: &ProjectivePoint) -> [u8; 33] {
     let affine = AffinePoint::from(*p);
     let encoded = affine.to_encoded_point(true);
     let bytes = encoded.as_bytes();
     let mut out = [0u8; 33];
-    out.copy_from_slice(bytes);
+    if bytes.len() == 33 {
+        out.copy_from_slice(bytes);
+    }
     out
 }
 
@@ -54,12 +63,16 @@ pub fn deserialize_compressed(b: &[u8; 33]) -> Result<ProjectivePoint, Error> {
 }
 
 /// Check if a point has even Y coordinate.
+///
+/// The identity has no Y coordinate; it is never a valid group nonce R or key,
+/// so it is reported as not-even rather than panicking.
 pub fn has_even_y(p: &ProjectivePoint) -> bool {
     let affine = AffinePoint::from(*p);
     let encoded = affine.to_encoded_point(false); // uncompressed
-    let y_bytes = encoded.y().expect("point at infinity");
-    // Even if last byte is even
-    (y_bytes[31] & 1) == 0
+    match encoded.y() {
+        Some(y_bytes) => (y_bytes[31] & 1) == 0,
+        None => false,
+    }
 }
 
 /// Check if a point is the identity (point at infinity).

@@ -13,6 +13,7 @@ class SigningNonce {
   final SigningCommitments commitments;
   /// Opaque FFI handle for the Rust-side nonce.
   final Pointer<Void>? _handle;
+  bool _consumed = false;
 
   SigningNonce(this.hiding, this.binding, this.commitments, [this._handle]);
 
@@ -21,8 +22,21 @@ class SigningNonce {
     if (h == null || h.address == 0) {
       throw StateError('SigningNonce has no FFI handle');
     }
+    // The Rust `sign` FFI consumes (frees) the nonce handle. Reusing a nonce is a
+    // fatal key-leak bug, so a second access is rejected rather than passing a
+    // dangling pointer.
+    if (_consumed) {
+      throw StateError('SigningNonce already used — nonce reuse is forbidden');
+    }
     return h;
   }
+
+  /// Mark this nonce as consumed after `sign` has taken ownership of its handle.
+  void markConsumed() {
+    _consumed = true;
+  }
+
+  bool get isConsumed => _consumed;
 }
 
 class SigningCommitments {

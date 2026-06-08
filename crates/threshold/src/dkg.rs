@@ -121,6 +121,11 @@ pub fn verify_proof_of_knowledge(
     vk: &VerifyingKey,
     sig: &DkgSignature,
 ) -> Result<(), Error> {
+    // Reject a degenerate proof whose commitment R is the identity (would
+    // otherwise panic when serialized into the challenge).
+    if point::is_identity(&sig.r) {
+        return Err(Error::InvalidProofOfKnowledge);
+    }
     let c = dkg_challenge(id, vk, &sig.r);
     let z_g = point::base_mul(&sig.z);
     let c_neg = -c;
@@ -352,6 +357,15 @@ pub fn dkg_part3_receive(
     for id in dealer_round1_pkgs.keys() {
         if !shares_for_me.contains_key(id) {
             return Err(Error::IncorrectPackageMapping);
+        }
+    }
+
+    // Each dealer's VSS commitment must have exactly `min_signers` coefficients
+    // (mirrors dkg_part2). Rejects empty/wrong-length commitments that would
+    // otherwise produce a degenerate sharing or panic in to_verifying_key.
+    for pkg in dealer_round1_pkgs.values() {
+        if pkg.commitment.coeffs.len() != min_signers {
+            return Err(Error::IncorrectNumberOfCommitments);
         }
     }
 
@@ -780,7 +794,7 @@ fn hex_decode_33(s: &str) -> Result<[u8; 33], Error> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, Error> {
-    if s.len() % 2 != 0 {
+    if s.len() % 2 != 0 || !s.is_ascii() {
         return Err(Error::SerializationError);
     }
     let mut out = Vec::with_capacity(s.len() / 2);

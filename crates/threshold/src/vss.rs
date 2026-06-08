@@ -37,6 +37,12 @@ impl VssCommitment {
     /// Deserialize from JSON: a list of hex-encoded 33-byte compressed points.
     pub fn from_json_value(v: &serde_json::Value) -> Result<Self, Error> {
         let arr = v.as_array().ok_or(Error::SerializationError)?;
+        // A VSS commitment always has at least the constant-term commitment; an
+        // empty coefficient list is invalid and would later panic in
+        // `to_verifying_key` (coeffs[0]).
+        if arr.is_empty() {
+            return Err(Error::IncorrectNumberOfCommitments);
+        }
         let mut coeffs = Vec::with_capacity(arr.len());
         for item in arr {
             let hex_str = item.as_str().ok_or(Error::SerializationError)?;
@@ -68,9 +74,7 @@ pub fn sum_commitments(commitments: &[VssCommitment]) -> Result<VssCommitment, E
     }
     let l = commitments[0].coeffs.len();
     if l == 0 {
-        return Ok(VssCommitment {
-            coeffs: Vec::new(),
-        });
+        return Err(Error::IncorrectNumberOfCommitments);
     }
 
     let mut group = alloc::vec![ProjectivePoint::IDENTITY; l];
@@ -105,7 +109,7 @@ fn hex_decode_33(s: &str) -> Result<[u8; 33], Error> {
 }
 
 fn hex_decode(s: &str) -> Result<Vec<u8>, Error> {
-    if s.len() % 2 != 0 {
+    if s.len() % 2 != 0 || !s.is_ascii() {
         return Err(Error::SerializationError);
     }
     let mut out = Vec::with_capacity(s.len() / 2);
