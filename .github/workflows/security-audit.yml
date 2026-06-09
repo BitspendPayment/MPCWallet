@@ -1,0 +1,57 @@
+name: Security Audit
+
+# Phase 1 security CI — RUSTSEC advisory scan over every committed Cargo.lock.
+# There is no root workspace, so each lock is audited separately. cosigner-runtime
+# VENDORS its dependencies (cosigner-runtime/vendor/**), which Dependabot cannot
+# see — so auditing its lock here is the only signal for those crates.
+#
+# Runs daily because new advisories are published without any code change.
+#
+# ADVISORY in Phase 1 (continue-on-error): surfaces advisories without blocking
+# merges on a yet-untriaged backlog. Once triaged, drop `continue-on-error` to
+# make a new advisory fail the gate.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '**/Cargo.lock'
+      - '**/Cargo.toml'
+      - '.github/workflows/security-audit.yml'
+  pull_request:
+    paths:
+      - '**/Cargo.lock'
+      - '**/Cargo.toml'
+      - '.github/workflows/security-audit.yml'
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: cargo audit (${{ matrix.lock }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        lock:
+          - crates/threshold/Cargo.lock
+          - crates/ark/Cargo.lock
+          - ffi/Cargo.lock
+          - cosigner/Cargo.lock
+          - cosigner-runtime/Cargo.lock
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        continue-on-error: true
+        run: |
+          echo "::group::audit ${{ matrix.lock }}"
+          cargo audit --file ${{ matrix.lock }} || echo "::warning title=cargo-audit::advisories found in ${{ matrix.lock }}"
+          echo "::endgroup::"

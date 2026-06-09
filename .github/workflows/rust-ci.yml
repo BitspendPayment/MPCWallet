@@ -1,0 +1,100 @@
+name: Rust CI
+
+# Phase 1 security CI — correctness gate for the crypto crates.
+# Until now NO workflow ran `cargo test`, so the threshold tests (incl. the
+# BIP-340 independent-verify KAT and the panic-safety negatives) never gated a
+# PR. This makes them blocking. There is no root cargo workspace, so every crate
+# is driven through its own manifest.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'crates/**'
+      - 'ffi/**'
+      - '.github/workflows/rust-ci.yml'
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'ffi/**'
+      - '.github/workflows/rust-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # BLOCKING — the unit/integration tests must pass.
+  test:
+    name: test (${{ matrix.crate.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        crate:
+          - { name: threshold, dir: crates/threshold, args: '--features std' }
+          - { name: ark,       dir: crates/ark,       args: '' }
+          - { name: ffi,       dir: ffi,              args: '' }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.crate.dir }}
+      # ffi (via enclave-client / build scripts) needs protoc in a clean runner.
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo test --locked
+        run: cargo test --manifest-path ${{ matrix.crate.dir }}/Cargo.toml --locked ${{ matrix.crate.args }}
+
+  # BLOCKING — the threshold crate is no_std (default). Building it without std
+  # guards the WASM/cosigner/embedded path against accidental std dependence.
+  no-std:
+    name: no_std build (threshold)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/threshold
+      - run: cargo build --manifest-path crates/threshold/Cargo.toml --no-default-features --locked
+
+  # ADVISORY (Phase 1) — the tree is not yet rustfmt/clippy clean, so these
+  # surface issues without blocking merges. After a dedicated cleanup PR, remove
+  # `continue-on-error`, run `cargo fmt --check` (no `|| …`), and add
+  # `-- -D warnings` to clippy to make them blocking.
+  lint:
+    name: lint (advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Install protobuf compiler
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: cargo fmt --check
+        continue-on-error: true
+        run: |
+          for m in crates/threshold crates/ark ffi; do
+            echo "::group::fmt $m"
+            cargo fmt --manifest-path "$m/Cargo.toml" -- --check || echo "::warning title=rustfmt::$m is not rustfmt-clean"
+            echo "::endgroup::"
+          done
+      - name: cargo clippy
+        continue-on-error: true
+        run: |
+          echo "::group::clippy threshold"
+          cargo clippy --manifest-path crates/threshold/Cargo.toml --all-targets --features std || echo "::warning title=clippy::threshold has clippy findings"
+          echo "::endgroup::"
+          echo "::group::clippy ark"
+          cargo clippy --manifest-path crates/ark/Cargo.toml --all-targets || echo "::warning title=clippy::ark has clippy findings"
+          echo "::endgroup::"
+          echo "::group::clippy ffi"
+          cargo clippy --manifest-path ffi/Cargo.toml --all-targets || echo "::warning title=clippy::ffi has clippy findings"
+          echo "::endgroup::"

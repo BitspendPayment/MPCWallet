@@ -1,0 +1,15 @@
+# gitleaks config — uses the built-in ruleset plus repo-specific allowlists.
+# See .github/workflows/secret-scan.yml.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Allowlist vendored upstream test fixtures and local-only key material"
+paths = [
+  # Vendored dependency sources contain upstream TEST keys (der, elliptic-curve,
+  # jsonwebtoken, hyper-rustls, …). They are not project secrets.
+  '''cosigner-runtime/vendor/.*''',
+  # keys/ is gitignored and never committed; allowlisted defensively.
+  '''keys/.*''',
+]

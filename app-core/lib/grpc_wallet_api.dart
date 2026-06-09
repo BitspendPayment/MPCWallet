@@ -1,7 +1,6 @@
 /// gRPC implementation of [WalletApi] — wraps the generated [MPCWalletClient] stub.
 library;
 
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:protocol/protocol.dart';
 import 'wallet_api.dart';

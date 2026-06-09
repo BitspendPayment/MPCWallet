@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:app_core/policy.dart';
 import 'package:app_core/auth_helper.dart';
 import 'package:app_core/ark/ark_send.dart';
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:app_core/wallet_api.dart';
 import 'package:app_core/grpc_wallet_api.dart';

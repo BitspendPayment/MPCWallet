@@ -1,0 +1,43 @@
+name: Dart CI
+
+# Phase 1 security CI — analyze + unit-test the hand-written client crypto code.
+# Today only the slow emulator/e2e Dart suites run; app-core's fast unit tests
+# (incl. the SigningNonce reuse guard) never gate a PR. The generated protobuf
+# stubs under protocol/lib/src/generated are committed, so no codegen is needed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'app-core/**'
+      - 'protocol/**'
+      - '.github/workflows/dart-ci.yml'
+  pull_request:
+    paths:
+      - 'app-core/**'
+      - 'protocol/**'
+      - '.github/workflows/dart-ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # BLOCKING — app-core is pure Dart (no Flutter SDK dependency).
+  analyze-test:
+    name: app-core analyze + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+      - name: dart pub get
+        working-directory: app-core
+        run: dart pub get
+      - name: dart analyze
+        working-directory: app-core
+        run: dart analyze
+      - name: dart test
+        working-directory: app-core
+        run: dart test
