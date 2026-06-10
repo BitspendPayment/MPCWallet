@@ -40,7 +40,10 @@ use crate::wallet_proto::{
 use super::conv;
 use super::session::DkgSession;
 
-const TOTAL_PARTICIPANTS: usize = 3;
+// Real 2-of-2 {wallet, cosigner}: both parties deal, both hold a share, no
+// recovery/hardware third party. `receiver_identifiers` stays empty — each side's
+// only round1 package is the other's (dkg_part2/3 require pkgs+receivers == n-1).
+const TOTAL_PARTICIPANTS: usize = 2;
 const THRESHOLD_COUNT: usize = 2;
 
 pub(super) type Reply<T> = oneshot::Sender<Result<T, Status>>;
@@ -376,32 +379,15 @@ fn step3_finalize_server_key(
         .map_err(|e| Status::internal(format!("derive: {e}")))?;
     let server_identifier_hex = hex::encode(server_identifier.serialize());
 
-    // Extract recovery ID from the first non-server, non-receiver dealer's
-    // round1 package's `verifyingKey.E` field.
-    let round1_all_json = sess.round1_packages_json();
-    let round1_all: serde_json::Value = serde_json::from_str(&round1_all_json)
-        .map_err(|e| Status::internal(format!("parse round1: {e}")))?;
-
-    let mut user_recovery_id_hex: Option<String> = None;
-    if let Some(obj) = round1_all.as_object() {
-        for (id_hex, pkg_val_raw) in obj {
-            if id_hex != &server_identifier_hex && !sess.is_receiver(id_hex) {
-                let pkg_str = pkg_val_raw.as_str().unwrap_or("{}");
-                if let Ok(pkg_val) = serde_json::from_str::<serde_json::Value>(pkg_str) {
-                    if let Some(e_arr) = pkg_val["verifyingKey"]["E"].as_array() {
-                        let bytes: Vec<u8> = e_arr
-                            .iter()
-                            .filter_map(|v| v.as_u64().map(|n| n as u8))
-                            .collect();
-                        if !bytes.is_empty() {
-                            user_recovery_id_hex = Some(hex::encode(&bytes));
-                        }
-                    }
-                }
-                break;
-            }
-        }
-    }
+    // 2-of-2 {wallet, cosigner}: the wallet is the only non-server dealer. Its
+    // FROST verifying share is the canonical user_id the client authenticates as;
+    // there is no recovery identity (no hardware/backup third party).
+    let wallet_identifier_hex = sess
+        .round1_packages
+        .keys()
+        .find(|id| *id != &server_identifier_hex)
+        .cloned()
+        .ok_or_else(|| Status::internal("2-of-2 DKG: wallet dealer not found"))?;
 
     let round1_pkgs_json = sess.round1_packages_excluding_json(&server_identifier_hex);
     let round2_received_json = sess.round2_received_json();
@@ -432,17 +418,13 @@ fn step3_finalize_server_key(
     let kp_json = kp.to_json();
     let pkp_json = pkp.to_json();
 
-    // Decide policy_user_id (and signing identifier) from receiver list.
-    let (policy_user_id, user_signing_identifier_hex) = if let Some(first) = receiver_ids.first() {
-        let receiver_id_hex = hex::encode(first.serialize());
-        let vs_hex = parsers::extract_verifying_share(&pkp_json, &receiver_id_hex)?;
-        (vs_hex, Some(receiver_id_hex))
-    } else {
-        (user_id_hex.to_string(), None)
-    };
+    // The wallet's FROST verifying share is the canonical user_id (the client
+    // authenticates as it). No recovery identity in a 2-of-2.
+    let policy_user_id = parsers::extract_verifying_share(&pkp_json, &wallet_identifier_hex)?;
+    let user_signing_identifier_hex = Some(wallet_identifier_hex);
 
     let server_dkg_secret_hex = sess.server_internal_secret_hex.clone();
-    let recovery_id = user_recovery_id_hex.unwrap_or_default();
+    let recovery_id = String::new();
 
     // Restore: if this recovery_id was previously associated with another
     // user_id, preserve their spending history (read straight from sled —

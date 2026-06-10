@@ -306,7 +306,10 @@ async fn evtxo_keygen_step1(
         exit_delay: i64_field(&body, "exit_delay") as u32,
     };
     match coord.step1(&user_id, req).await {
-        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        // One-shot register: return the eVTXO spk (hex, per the REST convention).
+        Ok(resp) => Ok(Json(json!({
+            "evtxo_script_pubkey": to_hex(&resp.evtxo_script_pubkey),
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }

@@ -6,7 +6,6 @@ import 'dart:typed_data';
 import 'package:app_core/ark/ark_send.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:e2e/mock_fcm_server.dart';
@@ -135,9 +134,6 @@ void main() {
   Process? serverProcess;
   late int serverPort;
 
-  MpcClient createClient(HardwareSignerInterface signer) =>
-      MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: signer);
-
   setUpAll(() async {
     print('--- eVTXO-through-arkd E2E Setup ---');
     tempDir = await Directory.systemTemp.createTemp('mpc_evtxo_arkd_');
@@ -236,14 +232,11 @@ void main() {
 
   test('eVTXO through arkd: mint via send, arkd co-signs cooperative spend, deny over-limit/bad-arg',
       () async {
-    // 1. Alice + Bob DKG.
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    // 1. Alice + Bob real 2-of-2 DKG (no signer; distinct local stores).
+    final alice =
+        MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'alice');
     await alice.doDkg();
-    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await bobSigner.connect();
-    final bob = createClient(bobSigner);
+    final bob = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'bob');
     await bob.doDkg();
     final bobArk = await bob.getArkAddress();
     print('1. DKG done. alice=${alice.userId?.substring(0, 12)}, bob=${bob.userId?.substring(0, 12)}');

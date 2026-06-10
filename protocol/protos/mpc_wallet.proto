@@ -550,7 +550,8 @@ message EvtxoKeygenStep1Request {
 }
 
 message EvtxoKeygenStep1Response {
-  map<string, string> round1_packages = 1;
+  map<string, string> round1_packages = 1;   // legacy (reshare); unused in 2-of-2
+  bytes evtxo_script_pubkey = 2;              // 2-of-2: one-shot register returns the spk
 }
 
 message EvtxoKeygenStep2Request {

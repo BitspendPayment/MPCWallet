@@ -23,15 +23,12 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
-use rand::rngs::OsRng;
-use rand::Rng;
 use tokio::sync::oneshot;
 use tokio::time::{interval, MissedTickBehavior};
 use tonic::Status;
 
 use threshold::dkg;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
-use threshold::random;
 
 use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
@@ -181,90 +178,85 @@ fn step1(
     reply: Reply<EvtxoKeygenStep1Response>,
 ) {
     sess.last_touch = Instant::now();
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    let identifier_hex = hex::encode(&req.identifier);
-    tracing::info!("[{user_id_hex}] EvtxoKeygenStep1 from {identifier_hex}");
-
-    // Capture reshare context (contract + ASP params) from whichever caller has it.
-    if !req.contract_id.is_empty() {
-        sess.reshare_contract_id = req.contract_id.clone();
-    }
-    // Contract bytes are supplied at creation; validated + stored at finalize.
-    if !req.contract_wasm.is_empty() {
-        sess.reshare_contract_wasm = req.contract_wasm.clone();
-    }
-    if !req.server_pk.is_empty() {
-        sess.reshare_server_pk = req.server_pk.clone();
-    }
-    if req.exit_delay != 0 {
-        sess.reshare_exit_delay = req.exit_delay;
-    }
-
-    if req.round1_package.is_empty() {
-        // Wallet = passive receiver.
-        sess.receiver_identifiers.insert(identifier_hex);
-    } else {
-        // Hardware = remote dealer.
-        sess.round1_packages.insert(identifier_hex, req.round1_package.clone());
-    }
-
-    // Cosigner self-deal (first caller only).
-    if sess.round1_secret.is_none() {
-        if let Err(e) = step1_cosigner_deal(sess, shared, &user_id_hex) {
-            let _ = reply.send(Err(e));
-            return;
-        }
-    }
-
-    if sess.total_participants() >= TOTAL_PARTICIPANTS {
-        let response = EvtxoKeygenStep1Response {
-            round1_packages: sess.round1_packages.clone(),
-        };
-        for s in sess.pending_evtxo_step1.drain(..) {
-            let _ = s.send(Ok(response.clone()));
-        }
-        let _ = reply.send(Ok(response));
-    } else {
-        sess.pending_evtxo_step1.push(reply);
-    }
+    let _ = reply.send(register_evtxo(shared, &req));
 }
 
-fn step1_cosigner_deal(
-    sess: &mut DkgSession,
+/// One-shot eVTXO registration for a real 2-of-2: the eVTXO reuses the main key V
+/// (no reshare — in a 2-of-2 the cosigner is already mandatory for every V
+/// signature, so the gate is unbypassable). Validate + store the contract, derive
+/// the eVTXO spk from V (cooperative-leaf key == exit key == V), register
+/// `spk -> contract_id`, and store an `EvtxoPolicy` whose key package IS the main
+/// key (so the gate's key selection in `sign.rs` picks V). Returns the eVTXO spk.
+fn register_evtxo(
     shared: &SharedServices,
-    user_id_hex: &str,
-) -> Result<(), Status> {
-    // The cosigner reshares from its EXISTING share under its EXISTING identifier.
-    let policy = load_policy(shared, user_id_hex)?;
-    let old_kp_json = policy.normal_policy.key_package_json.clone();
-    let old_pkp_json = policy.normal_policy.public_key_package_json.clone();
-    let cosigner_id_hex = parsers::extract_identifier(&old_kp_json)?;
-    let cosigner_id = conv::parse_identifier_hex(&cosigner_id_hex)?;
+    req: &EvtxoKeygenStep1Request,
+) -> Result<EvtxoKeygenStep1Response, Status> {
+    let user_id_hex = parsers::user_id_hex(&req.user_id);
+    tracing::info!("[{user_id_hex}] RegisterEvtxo (2-of-2, reuses main key V)");
 
-    // Deal a fresh NON-zero polynomial (Δ) under the cosigner's existing id.
-    let mut rng = OsRng;
-    let secret = random::mod_n_random(&mut rng);
-    let mut seed = [0u8; 32];
-    rng.fill(&mut seed);
-    let coefficients = random::generate_coefficients_seeded(THRESHOLD_COUNT - 1, &seed);
-    let (r1_secret, r1_pub) = dkg::dkg_reshare_part1(
-        &cosigner_id,
-        TOTAL_PARTICIPANTS,
-        THRESHOLD_COUNT,
-        &secret,
-        &coefficients,
-        &mut rng,
-    )
-    .map_err(|e| Status::internal(format!("dkg_reshare_part1: {e}")))?;
+    if req.contract_id.len() != 32 {
+        return Err(Status::invalid_argument("contract_id must be 32 bytes"));
+    }
+    let mut contract_id = [0u8; 32];
+    contract_id.copy_from_slice(&req.contract_id);
 
-    // For the reshare, `server_id_hex` holds the cosigner's EXISTING identifier
-    // directly (not a vk to derive from).
-    sess.server_id_hex = cosigner_id_hex.clone();
-    sess.round1_packages.insert(cosigner_id_hex, r1_pub.to_json());
-    sess.round1_secret = Some(r1_secret);
-    sess.reshare_old_kp_json = old_kp_json;
-    sess.reshare_old_pkp_json = old_pkp_json;
-    Ok(())
+    if req.contract_wasm.is_empty() {
+        return Err(Status::invalid_argument(
+            "contract_wasm is required when creating an eVTXO",
+        ));
+    }
+    if contract::sha256_id(&req.contract_wasm) != contract_id {
+        return Err(Status::invalid_argument(
+            "contract_wasm does not match contract_id (sha256 mismatch)",
+        ));
+    }
+    if let Some(host) = shared.contract_host.as_ref() {
+        host.validate(&req.contract_wasm)
+            .map_err(|e| Status::invalid_argument(format!("invalid contract: {e}")))?;
+    }
+    shared
+        .persistence
+        .put(
+            contract::CONTRACT_WASM_TREE,
+            &hex::encode(contract_id),
+            &hex::encode(&req.contract_wasm),
+        )
+        .map_err(|e| Status::internal(format!("store contract wasm: {e}")))?;
+
+    // The eVTXO reuses the main 2-of-2 key V for both the cooperative-leaf key and
+    // the exit key; the cosigner signs it with its existing main key package.
+    let mut policy = load_policy(shared, &user_id_hex)?;
+    let kp_json = policy.normal_policy.key_package_json.clone();
+    let pkp_json = policy.normal_policy.public_key_package_json.clone();
+    let v_xonly = xonly_from_vk(&parsers::extract_verifying_key(&pkp_json)?);
+    let server_pk_xonly = hex::encode(&req.server_pk);
+
+    let spk = contract_gate::register_evtxo(
+        shared.persistence.as_ref(),
+        &server_pk_xonly,
+        &v_xonly,
+        &v_xonly,
+        req.exit_delay,
+        &contract_id,
+    )?;
+    let spk_hex = hex::encode(&spk);
+
+    policy.evtxo_policies.insert(
+        spk_hex,
+        EvtxoPolicy {
+            contract_id_hex: hex::encode(contract_id),
+            evtxo_pk_xonly_hex: v_xonly,
+            key_package_json: kp_json,
+            public_key_package_json: pkp_json,
+        },
+    );
+    persist_policy(shared, &user_id_hex, &policy)?;
+
+    tracing::info!("[{user_id_hex}] eVTXO registered (reuses main key)");
+    Ok(EvtxoKeygenStep1Response {
+        round1_packages: HashMap::new(),
+        evtxo_script_pubkey: spk,
+    })
 }
 
 // ============================================================================

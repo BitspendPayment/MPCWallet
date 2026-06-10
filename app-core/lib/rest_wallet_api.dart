@@ -149,10 +149,9 @@ class RestWalletApi implements WalletApi {
       'server_pk': _hex(r.serverPk),
       'exit_delay': r.exitDelay,
     });
+    // One-shot register (2-of-2): the response carries the eVTXO scriptPubKey (hex).
     return EvtxoKeygenStep1Response()
-      ..round1Packages
-          .addAll((resp['round1_packages'] as Map<String, dynamic>? ?? {})
-              .map((k, v) => MapEntry(k, v.toString())));
+      ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
   }
 
   @override

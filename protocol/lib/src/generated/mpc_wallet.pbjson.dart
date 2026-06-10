@@ -1186,6 +1186,7 @@ const EvtxoKeygenStep1Response$json = {
   '1': 'EvtxoKeygenStep1Response',
   '2': [
     {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.EvtxoKeygenStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
+    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
   ],
   '3': [EvtxoKeygenStep1Response_Round1PackagesEntry$json],
 };
@@ -1204,8 +1205,9 @@ const EvtxoKeygenStep1Response_Round1PackagesEntry$json = {
 final $typed_data.Uint8List evtxoKeygenStep1ResponseDescriptor = $convert.base64Decode(
     'ChhFdnR4b0tleWdlblN0ZXAxUmVzcG9uc2USYQoPcm91bmQxX3BhY2thZ2VzGAEgAygLMjgubX'
     'BjX3dhbGxldC5FdnR4b0tleWdlblN0ZXAxUmVzcG9uc2UuUm91bmQxUGFja2FnZXNFbnRyeVIO'
-    'cm91bmQxUGFja2FnZXMaQQoTUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKAlSA2tleR'
-    'IUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
+    'cm91bmQxUGFja2FnZXMSLgoTZXZ0eG9fc2NyaXB0X3B1YmtleRgCIAEoDFIRZXZ0eG9TY3JpcH'
+    'RQdWJrZXkaQQoTUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1'
+    'ZRgCIAEoCVIFdmFsdWU6AjgB');
 
 @$core.Deprecated('Use evtxoKeygenStep2RequestDescriptor instead')
 const EvtxoKeygenStep2Request$json = {

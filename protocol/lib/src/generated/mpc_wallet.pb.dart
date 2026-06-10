@@ -5095,10 +5095,14 @@ class EvtxoKeygenStep1Request extends $pb.GeneratedMessage {
 class EvtxoKeygenStep1Response extends $pb.GeneratedMessage {
   factory EvtxoKeygenStep1Response({
     $core.Map<$core.String, $core.String>? round1Packages,
+    $core.List<$core.int>? evtxoScriptPubkey,
   }) {
     final $result = create();
     if (round1Packages != null) {
       $result.round1Packages.addAll(round1Packages);
+    }
+    if (evtxoScriptPubkey != null) {
+      $result.evtxoScriptPubkey = evtxoScriptPubkey;
     }
     return $result;
   }
@@ -5108,6 +5112,7 @@ class EvtxoKeygenStep1Response extends $pb.GeneratedMessage {
 
   static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoKeygenStep1Response', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
     ..m<$core.String, $core.String>(1, _omitFieldNames ? '' : 'round1Packages', entryClassName: 'EvtxoKeygenStep1Response.Round1PackagesEntry', keyFieldType: $pb.PbFieldType.OS, valueFieldType: $pb.PbFieldType.OS, packageName: const $pb.PackageName('mpc_wallet'))
+    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
     ..hasRequiredFields = false
   ;
 
@@ -5134,6 +5139,15 @@ class EvtxoKeygenStep1Response extends $pb.GeneratedMessage {
 
   @$pb.TagNumber(1)
   $core.Map<$core.String, $core.String> get round1Packages => $_getMap(0);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get evtxoScriptPubkey => $_getN(1);
+  @$pb.TagNumber(2)
+  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasEvtxoScriptPubkey() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEvtxoScriptPubkey() => clearField(2);
 }
 
 class EvtxoKeygenStep2Request extends $pb.GeneratedMessage {

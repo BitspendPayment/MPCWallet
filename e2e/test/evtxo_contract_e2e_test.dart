@@ -5,7 +5,6 @@ import 'dart:typed_data';
 
 import 'package:app_core/ark/ark_evtxo_spend.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:e2e/regtest_helper.dart';
@@ -157,10 +156,6 @@ void main() {
   Process? serverProcess;
   late int serverPort;
 
-  MpcClient createClient(HardwareSignerInterface signer) {
-    return MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: signer);
-  }
-
   setUpAll(() async {
     print('--- eVTXO Contract E2E Setup ---');
     tempDir = await Directory.systemTemp.createTemp('mpc_evtxo_e2e_');
@@ -225,11 +220,10 @@ void main() {
 
   test('eVTXO contract gate: fund, deny over-limit, deny bad-arg, allow + confirm',
       () async {
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = createClient(signer);
+    // Real 2-of-2 {wallet, cosigner}: no signer.
+    final client = MpcClient.rest('http://127.0.0.1:$serverPort');
 
-    // 1. DKG → main key V (2-of-3).
+    // 1. DKG → main key V (2-of-2).
     await client.doDkg();
     print('1. DKG complete: userId=${client.userId?.substring(0, 16)}...');
 

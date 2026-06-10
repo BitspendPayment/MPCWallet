@@ -103,7 +103,7 @@ class MpcClient {
   /// Create an MpcClient using gRPC transport (HTTP/2).
   MpcClient(
     grpc_base.ClientChannel channel, {
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
@@ -122,7 +122,7 @@ class MpcClient {
   /// Create an MpcClient using REST transport (HTTP/1.1).
   MpcClient.rest(
     String baseUrl, {
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
@@ -145,7 +145,7 @@ class MpcClient {
   static Future<MpcClient> attested(
     String baseUrl, {
     required String expectedPcr0,
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
@@ -216,7 +216,8 @@ class MpcClient {
     Hive.init(storePath);
   }
 
-  bool get isInitialized => _normalPolicy != null && _recoveryPolicy != null;
+  // Real 2-of-2: a completed DKG yields the normal policy; there is no recovery policy.
+  bool get isInitialized => _normalPolicy != null;
 
   bool get hasSpendingPolicy => _protectedPolicies.isNotEmpty;
 
@@ -322,155 +323,66 @@ class MpcClient {
   /// without contributing key material. Group key = s_hw + s_server.
   Future<void> doDkg() async {
     await _store.init();
-    final signer = _requireSigner('doDkg');
 
-    // 0. Quick connectivity test
-    print('[DKG] Step 0: Testing signer connectivity (getInfo)...');
-    try {
-      final info = await signer.getInfo();
-      print('[DKG] Step 0: Signer responded: hasKeyPackage=${info.hasKeyPackage}');
-    } catch (e) {
-      print('[DKG] Step 0: Signer getInfo FAILED: $e');
-    }
+    // Real 2-of-2 {wallet, cosigner}: the wallet is a dealer (its own secret) and
+    // the cosigner is the other dealer. Both hold a share; both are mandatory to
+    // sign. No hardware signer, no recovery share.
+    final secret = threshold.newSecretKey();
+    final coefficients =
+        List<BigInt>.generate(_minSigners - 1, (_) => threshold.modNRandom());
+    final (r1Secret, r1Pkg) =
+        threshold.dkgPart1(_maxSigners, _minSigners, secret, coefficients);
 
-    // 1. Hardware signer generates secret (dealer)
-    print('[DKG] Step 1: Calling signer.dkgInit...');
-    final dkgInit = await signer.dkgInit(_maxSigners, _minSigners);
-    print('[DKG] Step 1: signer.dkgInit complete');
-    final hwVerifyingKey = dkgInit.verifyingKeyBytes;
-    final hwIdentifier = dkgInit.identifier;
+    final walletVkBytes =
+        threshold.elemSerializeCompressed(r1Pkg.commitment.toVerifyingKey().E);
+    final walletIdentifier = threshold.Identifier.derive(walletVkBytes);
+    // Temporary session label during DKG (endpoints are unauthenticated until the
+    // group key exists). The canonical user_id is the verifying share, set below.
+    final tempUserId = Uint8List.fromList(walletVkBytes);
 
-    // 2. Derive wallet identifier deterministically from HW signer's VK
-    final walletIdInput = Uint8List.fromList(
-      [...'wallet:'.codeUnits, ...hwVerifyingKey],
-    );
-    final walletIdentifier = threshold.Identifier.derive(walletIdInput);
-
-    // Use HW VK as temporary session key during DKG
-    final tempUserId = Uint8List.fromList(hwVerifyingKey);
-
-    // 3. Send Round1 packages to server:
-    //    - Wallet: empty round1 = passive receiver
-    //    - HW signer: actual round1 = dealer
-    final hwR1Json = jsonEncode(dkgInit.round1Package.toJson());
-
-    final reqWallet = DKGStep1Request()
+    // Step 1 — wallet sends its round1 (dealer). The server self-inits as the
+    // second dealer and completes the round once both are registered.
+    final step1Resp = await _stub.dKGStep1(DKGStep1Request()
       ..userId = tempUserId
       ..identifier = walletIdentifier.serialize()
-      ..round1Package = ''; // passive receiver
+      ..round1Package = jsonEncode(r1Pkg.toJson()));
 
-    final reqHw = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json;
-
-    print('[DKG] Step 1: Sending DKGStep1 to server...');
-    final step1Futures = await Future.wait(
-        [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
-    final step1Resp = step1Futures[0];
-    print('[DKG] Step 1: Server responded with ${step1Resp.round1Packages.length} packages');
-
-    // 4. Trigger Step 2 on server (server computes round2)
-    print('[DKG] Step 2: Calling DKGStep2...');
+    // Step 2 — server computes its round2 share for the wallet.
     await _stub.dKGStep2(DKGStep2Request()..userId = tempUserId);
-    print('[DKG] Step 2: Server responded');
 
-    // 5. Parse dealer R1 packages (for HW signer and wallet)
-    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
-    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
-
+    // The server's round1 package (the other dealer).
+    final round1Pkgs = <threshold.Identifier, threshold.Round1Package>{};
     step1Resp.round1Packages.forEach((k, v) {
-      if (v.isEmpty) return; // skip passive receiver entries
+      if (v.isEmpty) return;
       final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      // HW signer needs all other dealers' R1 (= server's)
-      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
-      // Wallet needs all dealers' R1 (= HW signer + server)
-      dealerR1ForWallet[id] = pkg;
+      if (id == walletIdentifier) return; // skip our own
+      round1Pkgs[id] = threshold.Round1Package.fromJson(jsonDecode(v));
     });
 
-    // 6. HW signer computes shares for server + wallet
-    print('[DKG] Step 3: Calling signer.dkgRound2 (${dealerR1ForHw.length} packages)...');
-    final sharesFromHw = await signer.dkgRound2(
-      dealerR1ForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-    print('[DKG] Step 3: signer.dkgRound2 complete');
+    // Wallet computes its round2 share for the server.
+    final (r2Secret, sharesFromWallet) =
+        threshold.dkgPart2(r1Secret, round1Pkgs);
 
-    // 7. Send Round2 packages to server
-    //    - HW signer: actual shares for others
-    //    - Wallet: empty (passive receiver)
-    final reqStep3Hw = DKGStep3Request()
+    // Step 3 — wallet sends its round2 share; server finalizes.
+    final step3Resp = await _stub.dKGStep3(DKGStep3Request()
       ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
+      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar())
+      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromWallet)));
 
-    final reqStep3Wallet = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar());
-    // wallet sends no round2 packages (passive receiver)
+    // Wallet finalizes (full participant) → its key package + the group PKP.
+    final sharesForWallet = _parseShares(step3Resp.round2PackagesForMe);
+    final (walletKeyPkg, pubKeyPkg) =
+        threshold.dkgPart3(r1Secret, r2Secret, round1Pkgs, sharesForWallet);
 
-    print('[DKG] Step 3: Sending DKGStep3 to server...');
-    final step3Futures = await Future.wait(
-        [_stub.dKGStep3(reqStep3Wallet), _stub.dKGStep3(reqStep3Hw)]);
-    print('[DKG] Step 3: Server responded');
-
-    // 8. Wallet receives shares from dealers (HW signer + server)
-    final sharesForWallet = _parseShares(step3Futures[0].round2PackagesForMe);
-    final sharesForHw = _parseShares(step3Futures[1].round2PackagesForMe);
-
-    // 9. Wallet finalizes as passive receiver
-    final allParticipantIds = <threshold.Identifier>[
-      ...dealerR1ForWallet.keys,
-      walletIdentifier,
-    ];
-    final (walletKeyPkg, pubKeyPkg) = threshold.dkgPart3Receive(
-      walletIdentifier,
-      dealerR1ForWallet,
-      sharesForWallet,
-      _minSigners,
-      _maxSigners,
-      allParticipantIds,
-    );
-
-    // 10. HW signer finalizes (stores key internally)
-    final dkgResult = await signer.dkgRound3(
-      dealerR1ForHw,
-      sharesForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 11. Wallet's DKG secret share becomes the auth key
+    // The wallet's DKG share is its signing + auth key.
     _signingSecret = threshold.SecretKey(walletKeyPkg.secretShare);
     _userId = threshold
         .elemSerializeCompressed(walletKeyPkg.verifyingShare)
         .toList();
-    _recoveryId = hwVerifyingKey.toList();
 
-    // 12. Store policies
     _normalPolicy = SpendingPolicy(
         id: "normal_policy_id",
         keyPackage: walletKeyPkg,
-        publicKeyPackage: pubKeyPkg);
-
-    // Recovery policy: secret share stays on hardware signer (store zero locally)
-    final recoveryVerifyingShare =
-        pubKeyPkg.verifyingShares[dkgResult.identifier];
-    if (recoveryVerifyingShare == null) {
-      throw StateError("Recovery identifier not found in public key package");
-    }
-
-    final recoveryKeyPkg = threshold.KeyPackage(
-      dkgResult.identifier,
-      BigInt.zero, // secret stays on hardware signer
-      recoveryVerifyingShare,
-      pubKeyPkg.verifyingKey,
-      _minSigners,
-    );
-
-    _recoveryPolicy = RecoveryPolicy(
-        id: "recovery_policy_id",
-        keyPackage: recoveryKeyPkg,
         publicKeyPackage: pubKeyPkg);
 
     _authHelper = ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
@@ -629,12 +541,12 @@ class MpcClient {
 
   // --- REFRESH ---
 
-  /// Create an eVTXO key (`V′ = V + Δ`, a 2-of-2 {wallet, cosigner} key) bound
-  /// to `contractId`, by resharing the main key. The hardware signer deals but
-  /// is EXCLUDED from the result, so the cosigner is mandatory on cooperative
-  /// spends and runs the contract before co-signing. `serverPk`/`exitDelay` are
-  /// the ASP params (from GetArkInfo) used to build the eVTXO's cooperative leaf.
-  /// Returns the registered scriptPubKey + the wallet's `V′` key material.
+  /// Register a contract eVTXO that reuses the main 2-of-2 key V — no reshare. In a
+  /// real 2-of-2 the cosigner is already mandatory for every V signature, so the
+  /// contract gate is unbypassable without a separate key. One register call: the
+  /// cosigner validates `sha256(contractWasm)==contractId`, stores the wasm, derives
+  /// the eVTXO spk from V + the ASP `serverPk`/`exitDelay`, and registers it.
+  /// Spending the cooperative leaf uses the wallet's main key package (returned).
   Future<
       ({
         Uint8List scriptPubkey,
@@ -649,104 +561,19 @@ class MpcClient {
     if (!isInitialized || _userId == null) {
       throw StateError('Client not initialized (DKG not run).');
     }
-    final signer = _requireSigner('createEvtxoKey');
-    final oldKp = _normalPolicy!.keyPackage;
-    final oldPkp = _normalPolicy!.publicKeyPackage;
-    final walletIdentifier = oldKp.identifier;
-    final userId = _userId!;
     final ts = Int64(DateTime.now().millisecondsSinceEpoch);
-    final emptySig = Uint8List(0); // eVTXO-keygen path is unauthenticated for now
-
-    // 1. Hardware deals a reshare under its existing identifier.
-    final dealInit = await signer.evtxoDealInit(_maxSigners, _minSigners);
-    final hwIdentifier = dealInit.identifier;
-    final hwR1Json = jsonEncode(dealInit.round1Package.toJson());
-
-    // 2. Step 1: wallet (passive) + hardware (dealer) + contract/ASP params.
-    // The wallet carries the contract bytes; the cosigner validates
-    // sha256(contractWasm)==contractId and persists them (no external registry).
-    final reqWallet = EvtxoKeygenStep1Request()
-      ..userId = userId
-      ..identifier = walletIdentifier.serialize()
-      ..round1Package = ''
+    final resp = await _stub.evtxoKeygenStep1(EvtxoKeygenStep1Request()
+      ..userId = _userId!
       ..contractId = contractId
       ..contractWasm = contractWasm
       ..serverPk = serverPk
       ..exitDelay = exitDelay
-      ..signature = emptySig
-      ..timestampMs = ts;
-    final reqHw = EvtxoKeygenStep1Request()
-      ..userId = userId
-      ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json
-      ..contractId = contractId
-      ..serverPk = serverPk
-      ..exitDelay = exitDelay
-      ..signature = emptySig
-      ..timestampMs = ts;
-    final step1Futures = await Future.wait(
-        [_stub.evtxoKeygenStep1(reqWallet), _stub.evtxoKeygenStep1(reqHw)]);
-    final step1Resp = step1Futures[0];
-
-    // 3. Step 2: server computes its round-2 shares.
-    await _stub.evtxoKeygenStep2(EvtxoKeygenStep2Request()
-      ..userId = userId
-      ..identifier = walletIdentifier.serialize()
-      ..signature = emptySig
+      ..signature = Uint8List(0) // eVTXO-keygen path is unauthenticated for now
       ..timestampMs = ts);
-
-    // 4. Parse the dealer round-1 packages (cosigner + hardware).
-    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
-    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
-    step1Resp.round1Packages.forEach((k, v) {
-      if (v.isEmpty) return; // skip the passive wallet entry
-      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
-      dealerR1ForWallet[id] = pkg;
-    });
-
-    // 5. Hardware computes shares for {cosigner, wallet(passive)}.
-    final sharesFromHw = await signer.evtxoDealRound2(
-      dealerR1ForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 6. Step 3: hardware sends its shares; the wallet sends none (passive).
-    final reqStep3Hw = EvtxoKeygenStep3Request()
-      ..userId = userId
-      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
-      ..signature = emptySig
-      ..timestampMs = ts
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
-    final reqStep3Wallet = EvtxoKeygenStep3Request()
-      ..userId = userId
-      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar())
-      ..signature = emptySig
-      ..timestampMs = ts;
-    final step3Futures = await Future.wait(
-        [_stub.evtxoKeygenStep3(reqStep3Wallet), _stub.evtxoKeygenStep3(reqStep3Hw)]);
-    final walletStep3 = step3Futures[0];
-
-    // 7. Wallet finalizes (reshare receiver). Final shareholders = {wallet, cosigner};
-    //    the cosigner is the dealer that isn't the hardware signer.
-    final sharesForWallet = _parseShares(walletStep3.round2PackagesForMe);
-    final cosignerId =
-        dealerR1ForWallet.keys.firstWhere((id) => id != hwIdentifier);
-    final (evtxoKeyPkg, evtxoPkp) = threshold.dkgResharePart3Receive(
-      walletIdentifier,
-      dealerR1ForWallet,
-      sharesForWallet,
-      oldPkp,
-      oldKp,
-      [walletIdentifier, cosignerId],
-      _minSigners,
-    );
-
     return (
-      scriptPubkey: Uint8List.fromList(walletStep3.evtxoScriptPubkey),
-      keyPackage: evtxoKeyPkg,
-      publicKeyPackage: evtxoPkp,
+      scriptPubkey: Uint8List.fromList(resp.evtxoScriptPubkey),
+      keyPackage: _normalPolicy!.keyPackage,
+      publicKeyPackage: _normalPolicy!.publicKeyPackage,
     );
   }
 
