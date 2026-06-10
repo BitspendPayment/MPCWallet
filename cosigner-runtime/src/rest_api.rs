@@ -299,6 +299,7 @@ async fn evtxo_keygen_step1(
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
         contract_id: hex_field(&body, "contract_id"),
+        contract_wasm: hex_field(&body, "contract_wasm"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         server_pk: hex_field(&body, "server_pk"),
@@ -343,7 +344,14 @@ async fn evtxo_keygen_step3(
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
     match coord.step3(&user_id, req).await {
-        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+        // Hand-build with hex-encoded bytes (the REST convention; cf. sign_step2).
+        // Generic serde would emit `evtxo_script_pubkey` as a JSON array, which the
+        // Dart client decodes as hex.
+        Ok(resp) => Ok(Json(json!({
+            "round2_packages_for_me": resp.round2_packages_for_me,
+            "evtxo_address": resp.evtxo_address,
+            "evtxo_script_pubkey": to_hex(&resp.evtxo_script_pubkey),
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }

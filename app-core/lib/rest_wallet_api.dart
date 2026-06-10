@@ -143,6 +143,7 @@ class RestWalletApi implements WalletApi {
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
       'contract_id': _hex(r.contractId),
+      'contract_wasm': _hex(r.contractWasm),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
       'server_pk': _hex(r.serverPk),

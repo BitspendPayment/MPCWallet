@@ -8,13 +8,18 @@
 //! compiled `Component` per id (compilation is expensive).
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use wasmtime::component::Component;
 
 use super::crypto_host;
 use super::{ContractEngine, EvalContext, Verdict};
+use crate::persistence::KvStore;
+
+/// Persistence tree holding contract bytes: hex(contract_id) -> hex(wasm).
+/// Populated at eVTXO creation; the gate resolves contracts from it.
+pub const CONTRACT_WASM_TREE: &str = "contract_wasm";
 
 /// On-chain contract identity: sha256(component_wasm), revealed in the spend
 /// witness and committed (hashed once more) in the eVTXO tapleaf.
@@ -38,7 +43,7 @@ impl core::fmt::Display for RegistryError {
     }
 }
 
-fn sha256_id(bytes: &[u8]) -> ContractId {
+pub fn sha256_id(bytes: &[u8]) -> ContractId {
     let mut id = [0u8; 32];
     id.copy_from_slice(&crypto_host::sha256(bytes));
     id
@@ -74,89 +79,28 @@ impl ContractRegistry for InMemoryRegistry {
     }
 }
 
-/// Local-directory registry: `<dir>/<hex(id)>.wasm`, re-verified on load.
-pub struct LocalDirRegistry {
-    dir: PathBuf,
+/// Resolves contract bytes from the cosigner's own KV (the `contract_wasm` tree),
+/// stored at eVTXO creation. Re-verified (sha256) on load.
+pub struct KvRegistry {
+    store: Arc<dyn KvStore>,
 }
 
-impl LocalDirRegistry {
-    pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+impl KvRegistry {
+    pub fn new(store: Arc<dyn KvStore>) -> Self {
+        Self { store }
     }
 }
 
-impl ContractRegistry for LocalDirRegistry {
+impl ContractRegistry for KvRegistry {
     fn fetch(&self, id: &ContractId) -> Result<Vec<u8>, RegistryError> {
-        let path = self.dir.join(format!("{}.wasm", hex::encode(id)));
-        let bytes = std::fs::read(&path).map_err(|e| match e.kind() {
-            std::io::ErrorKind::NotFound => RegistryError::NotFound,
-            _ => RegistryError::Backend(e.to_string()),
-        })?;
-        if &sha256_id(&bytes) != id {
-            return Err(RegistryError::HashMismatch);
-        }
-        Ok(bytes)
-    }
-}
-
-/// Build the Warg content-store URL for a content digest.
-/// Warg content is addressed as `sha256:<hex>` under the registry's `/content/`.
-fn warg_content_url(base_url: &str, id: &ContractId) -> String {
-    format!(
-        "{}/content/sha256:{}",
-        base_url.trim_end_matches('/'),
-        hex::encode(id)
-    )
-}
-
-/// Lean Warg backend: fetch a component by its content digest straight from the
-/// registry's content endpoint, then re-hash to verify (content-addressed). The
-/// on-chain hashlock already commits the exact bytes, so this gives full
-/// integrity; it deliberately skips Warg's transparency-log/provenance checks to
-/// keep the enclave TCB small (no extra dependencies — reuses `reqwest`).
-pub struct WargRegistry {
-    base_url: String,
-    client: reqwest::Client,
-    handle: tokio::runtime::Handle,
-}
-
-impl WargRegistry {
-    /// Construct against a Warg registry base URL. Must be called from within a
-    /// Tokio runtime (it captures the current `Handle` to drive async fetches
-    /// from the synchronous gate).
-    pub fn new(base_url: impl Into<String>) -> Self {
-        Self {
-            base_url: base_url.into(),
-            client: reqwest::Client::new(),
-            handle: tokio::runtime::Handle::current(),
-        }
-    }
-}
-
-impl ContractRegistry for WargRegistry {
-    fn fetch(&self, id: &ContractId) -> Result<Vec<u8>, RegistryError> {
-        let url = warg_content_url(&self.base_url, id);
-        let client = self.client.clone();
-        // The gate runs inside spawn_blocking, so block_on on the captured
-        // handle is the safe sync→async bridge (same pattern as other I/O here).
-        let bytes = self.handle.block_on(async move {
-            let resp = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| RegistryError::Backend(e.to_string()))?;
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                return Err(RegistryError::NotFound);
-            }
-            if !resp.status().is_success() {
-                return Err(RegistryError::Backend(format!("HTTP {}", resp.status())));
-            }
-            resp.bytes()
-                .await
-                .map(|b| b.to_vec())
-                .map_err(|e| RegistryError::Backend(e.to_string()))
-        })?;
-
+        let hex_id = hex::encode(id);
+        let hex_bytes = self
+            .store
+            .get(CONTRACT_WASM_TREE, &hex_id)
+            .map_err(|e| RegistryError::Backend(e.to_string()))?
+            .ok_or(RegistryError::NotFound)?;
+        let bytes = hex::decode(&hex_bytes)
+            .map_err(|e| RegistryError::Backend(format!("decode stored wasm: {e}")))?;
         if sha256_id(&bytes) != *id {
             return Err(RegistryError::HashMismatch);
         }
@@ -179,6 +123,13 @@ impl ContractHost {
             registry,
             cache: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Statically validate contract bytes (compile + no-WASI import check) without
+    /// running them. Used at eVTXO creation to reject a malformed or
+    /// capability-grabbing contract before it is stored + funded.
+    pub fn validate(&self, wasm: &[u8]) -> Result<(), String> {
+        self.engine.validate(wasm)
     }
 
     /// Fetch (if needed), compile (cached), and evaluate the contract against
@@ -208,13 +159,50 @@ impl ContractHost {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::persistence::PersistenceError;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Default)]
+    struct MemStore(StdMutex<HashMap<String, String>>);
+    impl KvStore for MemStore {
+        fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
+            Ok(self.0.lock().unwrap().get(&format!("{tree}/{key}")).cloned())
+        }
+        fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
+            self.0.lock().unwrap().insert(format!("{tree}/{key}"), value.to_string());
+            Ok(())
+        }
+        fn delete(&self, tree: &str, key: &str) -> Result<(), PersistenceError> {
+            self.0.lock().unwrap().remove(&format!("{tree}/{key}"));
+            Ok(())
+        }
+        fn get_all(&self, _tree: &str) -> Result<HashMap<String, String>, PersistenceError> {
+            Ok(HashMap::new())
+        }
+        fn clear(&self, _tree: &str) -> Result<(), PersistenceError> {
+            Ok(())
+        }
+    }
 
     #[test]
-    fn warg_content_url_is_sha256_addressed() {
-        let id = [0xabu8; 32];
-        let expected = format!("https://reg.example.com/content/sha256:{}", "ab".repeat(32));
-        // trailing slash trimmed exactly once
-        assert_eq!(warg_content_url("https://reg.example.com/", &id), expected);
-        assert_eq!(warg_content_url("https://reg.example.com", &id), expected);
+    fn kv_registry_round_trips_and_verifies() {
+        let store = Arc::new(MemStore::default());
+        let bytes = b"\x00asm\x01\x00\x00\x00 some contract bytes".to_vec();
+        let id = sha256_id(&bytes);
+        store
+            .put(CONTRACT_WASM_TREE, &hex::encode(id), &hex::encode(&bytes))
+            .unwrap();
+
+        let reg = KvRegistry::new(store.clone());
+        assert_eq!(reg.fetch(&id).unwrap(), bytes);
+
+        // Unknown id → NotFound.
+        assert!(matches!(reg.fetch(&[0u8; 32]), Err(RegistryError::NotFound)));
+
+        // Corrupted stored bytes (hash no longer matches the key) → HashMismatch.
+        store
+            .put(CONTRACT_WASM_TREE, &hex::encode(id), &hex::encode(b"tampered"))
+            .unwrap();
+        assert!(matches!(reg.fetch(&id), Err(RegistryError::HashMismatch)));
     }
 }

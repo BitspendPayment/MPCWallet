@@ -91,3 +91,18 @@ fn rejects_non_component_bytes() {
     // Garbage / non-component bytes must not compile into a usable contract.
     assert!(engine.compile(b"not a wasm component").is_err());
 }
+
+#[test]
+fn static_validate_accepts_real_contract_rejects_garbage() {
+    let engine = ContractEngine::new().expect("engine");
+    let wasm = std::fs::read(wasm_path()).unwrap_or_else(|_| {
+        panic!("build the contract first: (cd contracts/examples/spending-limit && cargo build --release)")
+    });
+    // A real no_std contract that imports ONLY `crypto` passes static validation
+    // (well-formed component + no forbidden imports) — without being executed.
+    assert!(engine.validate(&wasm).is_ok(), "valid contract should pass");
+
+    // Malformed bytes are rejected with a clear reason, not a panic.
+    let err = engine.validate(b"\x00asm not a component").unwrap_err();
+    assert!(err.contains("not a valid wasm component"), "got: {err}");
+}

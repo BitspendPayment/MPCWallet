@@ -75,6 +75,26 @@ impl ContractEngine {
         Component::from_binary(&self.engine, wasm)
     }
 
+    /// Statically validate contract bytes without executing them: must compile to a
+    /// component importing nothing but its own `bitcoin:contract` package (no wasi).
+    /// Behavioural correctness / termination stay fail-closed at evaluate time.
+    pub fn validate(&self, wasm: &[u8]) -> Result<(), String> {
+        let component = self
+            .compile(wasm)
+            .map_err(|e| format!("not a valid wasm component: {e}"))?;
+        for (name, _item) in component.component_type().imports(&self.engine) {
+            // Only the contract's own `bitcoin:contract` package (`crypto` host fns
+            // + `tx` types). Anything else — notably `wasi:*` — is forbidden.
+            if !name.starts_with("bitcoin:contract/") {
+                return Err(format!(
+                    "contract imports forbidden interface `{name}` (only the \
+                     `bitcoin:contract` package is allowed)"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate a contract against a transaction context in a NO-WASI sandbox.
     /// Any failure mode (forbidden wasi import, trap, OOM, out-of-fuel) maps to
     /// `Verdict::Deny` — fail-closed.

@@ -4940,6 +4940,7 @@ class EvtxoKeygenStep1Request extends $pb.GeneratedMessage {
     $fixnum.Int64? timestampMs,
     $core.List<$core.int>? serverPk,
     $core.int? exitDelay,
+    $core.List<$core.int>? contractWasm,
   }) {
     final $result = create();
     if (userId != null) {
@@ -4966,6 +4967,9 @@ class EvtxoKeygenStep1Request extends $pb.GeneratedMessage {
     if (exitDelay != null) {
       $result.exitDelay = exitDelay;
     }
+    if (contractWasm != null) {
+      $result.contractWasm = contractWasm;
+    }
     return $result;
   }
   EvtxoKeygenStep1Request._() : super();
@@ -4981,6 +4985,7 @@ class EvtxoKeygenStep1Request extends $pb.GeneratedMessage {
     ..aInt64(6, _omitFieldNames ? '' : 'timestampMs')
     ..a<$core.List<$core.int>>(7, _omitFieldNames ? '' : 'serverPk', $pb.PbFieldType.OY)
     ..a<$core.int>(8, _omitFieldNames ? '' : 'exitDelay', $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(9, _omitFieldNames ? '' : 'contractWasm', $pb.PbFieldType.OY)
     ..hasRequiredFields = false
   ;
 
@@ -5076,6 +5081,15 @@ class EvtxoKeygenStep1Request extends $pb.GeneratedMessage {
   $core.bool hasExitDelay() => $_has(7);
   @$pb.TagNumber(8)
   void clearExitDelay() => clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.List<$core.int> get contractWasm => $_getN(8);
+  @$pb.TagNumber(9)
+  set contractWasm($core.List<$core.int> v) { $_setBytes(8, v); }
+  @$pb.TagNumber(9)
+  $core.bool hasContractWasm() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearContractWasm() => clearField(9);
 }
 
 class EvtxoKeygenStep1Response extends $pb.GeneratedMessage {

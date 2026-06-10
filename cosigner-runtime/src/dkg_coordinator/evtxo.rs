@@ -33,6 +33,7 @@ use threshold::dkg;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::random;
 
+use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
 use crate::policy::store::persist_policy;
 use crate::policy::{EvtxoPolicy, PolicyState};
@@ -187,6 +188,10 @@ fn step1(
     // Capture reshare context (contract + ASP params) from whichever caller has it.
     if !req.contract_id.is_empty() {
         sess.reshare_contract_id = req.contract_id.clone();
+    }
+    // Contract bytes are supplied at creation; validated + stored at finalize.
+    if !req.contract_wasm.is_empty() {
+        sess.reshare_contract_wasm = req.contract_wasm.clone();
     }
     if !req.server_pk.is_empty() {
         sess.reshare_server_pk = req.server_pk.clone();
@@ -414,6 +419,32 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     }
     let mut contract_id = [0u8; 32];
     contract_id.copy_from_slice(&sess.reshare_contract_id);
+
+    // Require the bytes, verify they match the committed id, and persist them so
+    // the gate can resolve the contract at spend time.
+    if sess.reshare_contract_wasm.is_empty() {
+        return Err(Status::invalid_argument(
+            "contract_wasm is required when creating an eVTXO",
+        ));
+    }
+    if contract::sha256_id(&sess.reshare_contract_wasm) != contract_id {
+        return Err(Status::invalid_argument(
+            "contract_wasm does not match contract_id (sha256 mismatch)",
+        ));
+    }
+    // Reject a malformed or WASI-grabbing contract now, not as a permanent Deny at spend.
+    if let Some(host) = shared.contract_host.as_ref() {
+        host.validate(&sess.reshare_contract_wasm)
+            .map_err(|e| Status::invalid_argument(format!("invalid contract: {e}")))?;
+    }
+    shared
+        .persistence
+        .put(
+            contract::CONTRACT_WASM_TREE,
+            &hex::encode(contract_id),
+            &hex::encode(&sess.reshare_contract_wasm),
+        )
+        .map_err(|e| Status::internal(format!("store contract wasm: {e}")))?;
 
     let spk = contract_gate::register_evtxo(
         shared.persistence.as_ref(),

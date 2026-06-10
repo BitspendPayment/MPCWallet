@@ -37,6 +37,7 @@ pub struct DkgSession {
     // the ceremony reshares the existing key into a new 2-of-2 V′ bound to a
     // contract; the cosigner is both a dealer and a final shareholder.
     pub reshare_contract_id: Vec<u8>,
+    pub reshare_contract_wasm: Vec<u8>,
     pub reshare_old_kp_json: String,
     pub reshare_old_pkp_json: String,
     pub reshare_server_pk: Vec<u8>,
@@ -71,6 +72,7 @@ impl DkgSession {
             round1_secret: None,
             round2_secret: None,
             reshare_contract_id: Vec::new(),
+            reshare_contract_wasm: Vec::new(),
             reshare_old_kp_json: String::new(),
             reshare_old_pkp_json: String::new(),
             reshare_server_pk: Vec::new(),

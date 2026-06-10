@@ -18,10 +18,16 @@ class ArkSendSession {
   final List<Uint8List> sighashes;
   final Uint8List arkTxBytes;
 
+  /// PSBT to pass as `fullTransaction` to the cosigner so the contract gate fires
+  /// and V′ is selected. For an eVTXO spend this is the checkpoint PSBT (input 0
+  /// carries the eVTXO `witness_utxo`); for a normal send it equals `arkTxBytes`.
+  final Uint8List gateTxBytes;
+
   ArkSendSession._({
     required this.handle,
     required this.sighashes,
     required this.arkTxBytes,
+    required this.gateTxBytes,
   });
 
   /// Build an off-chain Ark send transaction via FFI.
@@ -57,16 +63,20 @@ class ArkSendSession {
       final handle = result['handle'] as int;
       final sighashHexes = (result['sighashes'] as List).cast<String>();
       final arkTxHex = result['ark_tx_bytes'] as String;
+      // `gate_tx_bytes` may be absent for older builds → fall back to ark tx.
+      final gateTxHex = (result['gate_tx_bytes'] as String?) ?? arkTxHex;
 
       final sighashes = sighashHexes
           .map((hex) => Uint8List.fromList(_hexDecode(hex)))
           .toList();
       final arkTxBytes = Uint8List.fromList(_hexDecode(arkTxHex));
+      final gateTxBytes = Uint8List.fromList(_hexDecode(gateTxHex));
 
       return ArkSendSession._(
         handle: handle,
         sighashes: sighashes,
         arkTxBytes: arkTxBytes,
+        gateTxBytes: gateTxBytes,
       );
     } finally {
       calloc.free(paramsPtr);
@@ -112,6 +122,27 @@ class ArkSignedSend {
   });
 }
 
+/// Derive the Ark address for an eVTXO output key (x-only `qEvtxo` = the eVTXO
+/// scriptPubkey bytes [2..]), so a normal off-chain send can mint a VTXO at it
+/// through arkd. `serverPk`/`qEvtxo` are 32-byte x-only keys.
+String arkEvtxoArkAddress({
+  required Uint8List serverPk,
+  required Uint8List qEvtxo,
+  required String network,
+}) {
+  final params = jsonEncode({
+    'server_pk': _hexEncode(serverPk),
+    'q_evtxo': _hexEncode(qEvtxo),
+    'network': network,
+  });
+  final ptr = params.toNativeUtf8();
+  try {
+    return callFfiData(arkEvtxoArkAddressFfi(ptr.cast()));
+  } finally {
+    calloc.free(ptr);
+  }
+}
+
 List<int> _hexDecode(String hex) {
   final result = <int>[];
   for (var i = 0; i < hex.length; i += 2) {
@@ -119,4 +150,7 @@ List<int> _hexDecode(String hex) {
   }
   return result;
 }
+
+String _hexEncode(List<int> bytes) =>
+    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 

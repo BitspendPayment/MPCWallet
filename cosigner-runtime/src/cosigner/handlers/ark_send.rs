@@ -937,6 +937,14 @@ pub fn submit_ark_send(
             if asp_cp.inputs[0].tap_scripts.is_empty() {
                 asp_cp.inputs[0].tap_scripts = client_cp.inputs[0].tap_scripts.clone();
             }
+            // arkd drops the client's `condition` witness field when it re-serializes
+            // the checkpoint, yet re-evaluates the condition at FinalizeTx — carry it back.
+            for (k, v) in &client_cp.inputs[0].unknown {
+                asp_cp.inputs[0]
+                    .unknown
+                    .entry(k.clone())
+                    .or_insert_with(|| v.clone());
+            }
             for ((pk, lh), sig) in &client_cp.inputs[0].tap_script_sigs {
                 asp_cp.inputs[0]
                     .tap_script_sigs

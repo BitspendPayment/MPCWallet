@@ -52,6 +52,36 @@ pub fn csv_sig_script(exit_delay: u32, owner_pk: &[u8; 32]) -> Vec<u8> {
     script
 }
 
+/// BIP-68 relative-locktime sequence, matching ark-core's `parse_sequence_number`
+/// (and arkd): `< 512` → block height; `>= 512` → seconds, encoded as
+/// `TYPE_FLAG | ceil(secs / 512)`. Used so an eVTXO's exit leaf is a valid Ark
+/// closure the ASP accepts.
+fn bip68_sequence(delay: u32) -> u32 {
+    const TYPE_FLAG: u32 = 1 << 22;
+    if delay < 512 {
+        delay
+    } else {
+        TYPE_FLAG | ((delay + 511) / 512)
+    }
+}
+
+/// Exit leaf in ark-lib `CSVMultisigClosure` layout: `<bip68_seq> OP_CSV OP_DROP
+/// <owner_pk> OP_CHECKSIG`. Unlike [`csv_sig_script`] (the MPC-wallet default
+/// VTXO layout), this is byte-identical to what ark-core/arkd produce, so an
+/// eVTXO carrying it passes the ASP's `ParseVtxoScript`/`DecodeClosure`. The
+/// sequence is BIP-68 encoded (see [`bip68_sequence`]).
+pub fn evtxo_exit_script(exit_delay: u32, owner_pk: &[u8; 32]) -> Vec<u8> {
+    let seq_bytes = script_number_encode(bip68_sequence(exit_delay) as i64);
+    let mut script = Vec::with_capacity(seq_bytes.len() + 1 + 2 + 34);
+    push_script_number(&mut script, &seq_bytes);
+    script.push(OP_CSV);
+    script.push(OP_DROP);
+    script.push(0x20); // OP_PUSHBYTES_32
+    script.extend_from_slice(owner_pk);
+    script.push(OP_CHECKSIG);
+    script
+}
+
 /// Build a default Ark VTXO taproot tree with two leaves at depth 1:
 /// - Leaf 0 (forfeit): `<server_pk> OP_CHECKSIGVERIFY <owner_pk> OP_CHECKSIG`
 /// - Leaf 1 (exit): `<owner_pk> OP_CHECKSIGVERIFY <sequence> OP_CSV OP_DROP`
@@ -156,7 +186,7 @@ pub fn evtxo_tree(
     exit_delay: u32,
 ) -> TapNode {
     let cooperative = TapLeaf::new(contract_cooperative_script(commit, server_pk, evtxo_pk));
-    let exit = TapLeaf::new(csv_sig_script(exit_delay, owner_pk));
+    let exit = TapLeaf::new(evtxo_exit_script(exit_delay, owner_pk));
     TapNode::Branch(
         alloc::boxed::Box::new(TapNode::Leaf(cooperative)),
         alloc::boxed::Box::new(TapNode::Leaf(exit)),
@@ -199,7 +229,7 @@ pub fn evtxo_exit_spend_info(
     exit_delay: u32,
 ) -> Option<(Vec<u8>, ControlBlock)> {
     let tree = evtxo_tree(commit, server_pk, evtxo_pk, owner_pk, exit_delay);
-    let leaf = TapLeaf::new(csv_sig_script(exit_delay, owner_pk));
+    let leaf = TapLeaf::new(evtxo_exit_script(exit_delay, owner_pk));
     let cb = ControlBlock::new(&UNSPENDABLE_KEY_X_ONLY, &leaf, &tree)?;
     Some((leaf.script, cb))
 }
@@ -296,7 +326,7 @@ mod evtxo_tests {
         // The exit leaf is the standard CSV script keyed by the main owner key.
         let (exit, _) =
             evtxo_exit_spend_info(&COMMIT, &SERVER_PK, &EVTXO_PK, &OWNER_PK, 144).unwrap();
-        assert_eq!(exit, csv_sig_script(144, &OWNER_PK));
+        assert_eq!(exit, evtxo_exit_script(144, &OWNER_PK));
     }
 
     #[test]
@@ -312,5 +342,23 @@ mod evtxo_tests {
         let evtxo = evtxo_script_pubkey(&COMMIT, &SERVER_PK, &EVTXO_PK, &OWNER_PK, 144).unwrap();
         let plain = vtxo_script_pubkey(&default_vtxo_tree(&SERVER_PK, &OWNER_PK, 144)).unwrap();
         assert_ne!(evtxo, plain);
+    }
+
+    #[test]
+    fn evtxo_exit_leaf_matches_arklib_csv_layout() {
+        // ark-lib CSVMultisigClosure: <bip68_seq> OP_CSV OP_DROP <key> OP_CHECKSIG.
+        // 86016s ≥ 512 → time-based: (1<<22) | ceil(86016/512=168) = 0x4000a8.
+        let s = evtxo_exit_script(86016, &OWNER_PK);
+        assert_eq!(s[0], 0x03); // push 3 bytes
+        assert_eq!(&s[1..4], &[0xa8, 0x00, 0x40]); // 0x4000a8, little-endian
+        assert_eq!(s[4], OP_CSV);
+        assert_eq!(s[5], OP_DROP);
+        assert_eq!(s[6], 0x20); // OP_PUSHBYTES_32
+        assert_eq!(&s[7..39], &OWNER_PK);
+        assert_eq!(s[39], OP_CHECKSIG);
+        // < 512 → raw block height (no type flag); 144 needs a sign byte.
+        let b = evtxo_exit_script(144, &OWNER_PK);
+        assert_eq!(b[0], 0x02);
+        assert_eq!(&b[1..3], &[0x90, 0x00]);
     }
 }

@@ -11,6 +11,6 @@ pub use engine::{
     ContractEngine, EvalContext, Outpoint, PrevoutInfo, Transaction, Txin, Txout, Verdict,
 };
 pub use registry::{
-    ContractHost, ContractId, ContractRegistry, InMemoryRegistry, LocalDirRegistry, RegistryError,
-    WargRegistry,
+    sha256_id, ContractHost, ContractId, ContractRegistry, InMemoryRegistry, KvRegistry,
+    RegistryError, CONTRACT_WASM_TREE,
 };

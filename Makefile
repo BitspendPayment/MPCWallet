@@ -21,7 +21,7 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark e2e-evtxo warg-up software software-ark hardware hardware-ark flash down \
+.PHONY: e2e e2e-ark e2e-evtxo e2e-evtxo-arkd software software-ark hardware hardware-ark flash down \
 	bob-up bob-down \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
 	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
@@ -84,20 +84,21 @@ e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-
 	cd e2e && dart test test/ark_e2e_test.dart
 	-pkill -f "signer-server" || true
 
-# Bring up just the Warg content server (the off-chain contract registry the
-# cosigner gate fetches from). `arkd-up` already includes it; this is for
-# standalone use / debugging.
-warg-up:
-	@echo "Starting Warg content server (mpc_warg)..."
-	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d mpc_warg
-
-# eVTXO contract gate E2E: same stack as e2e-ark (arkd-up brings up mpc_warg too)
-# plus the example WASM contracts. Funds an eVTXO, then asserts the cosigner
-# co-signs an allowed spend (broadcast + confirmed) and refuses over-limit /
-# bad-arg spends.
+# eVTXO contract gate E2E: same stack as e2e-ark plus the example WASM contracts.
+# The contract is handed to the cosigner at eVTXO creation (no registry). Funds
+# an eVTXO, then asserts the cosigner co-signs an allowed spend (broadcast +
+# confirmed) and refuses over-limit / bad-arg spends.
 e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build cosigner-build runtime-build contracts-build
 	@echo "Running eVTXO contract E2E test..."
 	cd e2e && dart test test/evtxo_contract_e2e_test.dart
+	-pkill -f "signer-server" || true
+
+# Full eVTXO-through-arkd E2E: mint the contract eVTXO via a normal Ark send, then
+# spend its cooperative leaf through arkd (arkd genuinely co-signs the server leg;
+# the cosigner gates the V′ leg). Same stack as e2e-ark + the example contracts.
+e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build cosigner-build runtime-build contracts-build
+	@echo "Running eVTXO-through-arkd E2E test..."
+	cd e2e && dart test test/evtxo_arkd_e2e_test.dart
 	-pkill -f "signer-server" || true
 
 # 3) Start regtest for SOFTWARE signer (no USB device required) — server in foreground

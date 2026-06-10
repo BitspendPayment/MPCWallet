@@ -15,16 +15,17 @@ import 'package:test/test.dart';
 
 /// End-to-end test for the off-chain WASM contract gate, on a live regtest chain.
 ///
-/// Flow: publish the `oracle-gate` contract to a Warg content server (docker) →
-/// derive an eVTXO key bound to it by resharing (`createEvtxoKey`) → fund the
-/// eVTXO on-chain → spend its cooperative leaf, where the cosigner runs the
+/// Flow: derive an eVTXO key bound to the `oracle-gate` contract by resharing
+/// (`createEvtxoKey`) — the contract wasm is handed to the cosigner at creation,
+/// which validates `sha256(wasm)==contract_id` and stores it (no registry) → fund
+/// the eVTXO on-chain → spend its cooperative leaf, where the cosigner runs the
 /// committed contract and only co-signs (releasing its V′ share) on `allow`:
 ///   * allow  (within-limit output + good contract args) → tx broadcasts + confirms
 ///   * deny   (over-limit output)                        → cosigner refuses to sign
 ///   * deny   (bad contract args)                        → cosigner refuses to sign
 ///
-/// Prereqs (mirrors `make e2e-ark`, plus the Warg server):
-///   make arkd-up && make bitcoin-init && make arkd-init   # bitcoind + arkd + mpc_warg
+/// Prereqs (mirrors `make e2e-ark`):
+///   make arkd-up && make bitcoin-init && make arkd-init   # bitcoind + arkd
 ///   the hardware signer-server on 127.0.0.1:9090
 ///   the cosigner.wasm + cosigner-runtime + ffi + contracts built
 
@@ -33,9 +34,6 @@ import 'package:test/test.dart';
 /// the eVTXO cooperative spend.
 const arkdSignerKeyHex =
     'afcd3fa10f82a05fddc9574fdb13b3991b568e89cc39a72ba4401df8abef35f0';
-
-/// The Warg content server published on the host by the `mpc_warg` docker service.
-const wargBaseUrl = 'http://127.0.0.1:7079';
 
 const oracleGateWasmPath =
     '../contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm';
@@ -96,8 +94,9 @@ class ArkdAdmin {
   }
 }
 
-/// Spawn the cosigner-runtime against the regtest fixtures, with the contract
-/// gate pointed at the Warg content server.
+/// Spawn the cosigner-runtime against the regtest fixtures. The contract gate
+/// resolves contracts from the cosigner's own storage (populated at eVTXO
+/// creation), so no registry env is needed.
 Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
   final serverReady = Completer<void>();
   final serverFailed = Completer<void>();
@@ -109,9 +108,6 @@ Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
     'ASP_URL': 'http://127.0.0.1:7070',
     'BITCOIN_NETWORK': 'regtest',
     'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
-    // Enables the contract gate (Warg content registry). Without this the gate
-    // is a no-op and the deny cases would not fire.
-    'CONTRACT_REGISTRY_URL': wargBaseUrl,
     'HOME': dataDir.path,
   };
   final proc = await Process.start(
@@ -181,15 +177,7 @@ void main() {
     await btc.getNewAddress();
     print('  Bitcoind: OK');
 
-    // 2. Warg content server (mpc_warg docker service)
-    final wargHealth = await http.get(Uri.parse('$wargBaseUrl/health'));
-    if (wargHealth.statusCode != 200) {
-      throw Exception(
-          'Warg content server not reachable at $wargBaseUrl. Run: make warg-up');
-    }
-    print('  Warg: OK');
-
-    // 3. arkd
+    // 2. arkd
     arkd = ArkdAdmin();
     bool arkdReady = false;
     for (int i = 0; i < 10; i++) {
@@ -256,19 +244,16 @@ void main() {
     print('2. ArkInfo: serverPk=${serverPkHex.substring(0, 16)}..., '
         'exitDelay=$exitDelay');
 
-    // 3. Publish oracle-gate to Warg; the returned digest is the contract_id.
+    // 3. The contract bytes are the source of truth: contract_id = sha256(wasm).
+    //    No registry to publish to — the wasm is handed to the cosigner at creation.
     final wasmBytes = await File(oracleGateWasmPath).readAsBytes();
-    final putResp = await http.put(Uri.parse('$wargBaseUrl/content'),
-        body: wasmBytes);
-    expect(putResp.statusCode, equals(201), reason: 'Warg PUT failed');
-    final digest = jsonDecode(putResp.body)['digest'] as String; // "sha256:<hex>"
-    final contractIdHex = digest.substring('sha256:'.length);
-    final contractId =
-        Uint8List.fromList(BytesUtils.fromHexString(contractIdHex));
-    print('3. Published contract_id=${contractIdHex.substring(0, 16)}...');
+    final contractId = Uint8List.fromList(QuickCrypto.sha256Hash(wasmBytes));
+    print('3. contract_id=${BytesUtils.toHexString(contractId).substring(0, 16)}...');
 
-    // 4. Derive the eVTXO key (resharing → V′; cosigner registers the spk).
-    final evtxo = await client.createEvtxoKey(contractId, serverPk, exitDelay);
+    // 4. Derive the eVTXO key (resharing → V′). The cosigner validates
+    //    sha256(wasm)==contract_id, persists the wasm, and registers the spk.
+    final evtxo =
+        await client.createEvtxoKey(contractId, wasmBytes, serverPk, exitDelay);
     final vPrimeXonly = _xonlyOf(evtxo.publicKeyPackage);
     final fundingAddr = _bcrtP2trFromSpk(evtxo.scriptPubkey);
     print('4. eVTXO key created; funding address=$fundingAddr');

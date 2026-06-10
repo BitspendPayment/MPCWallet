@@ -157,21 +157,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.actor_idle_threshold_secs,
     );
 
-    // Off-chain contract programmability: resolve user contracts by code-hash
-    // from <data_dir>/contracts. Disabled (gating becomes a no-op) if the engine
-    // fails to initialize.
+    // Contracts are stored in the cosigner's own KV at eVTXO creation; the gate
+    // resolves them from there. Gating is a no-op if the engine fails to init.
     let contract_registry: Box<dyn contract::ContractRegistry> =
-        match std::env::var("CONTRACT_REGISTRY_URL") {
-            Ok(url) if !url.is_empty() => {
-                tracing::info!("Contracts: Warg content registry at {url}");
-                Box::new(contract::WargRegistry::new(url))
-            }
-            _ => {
-                let dir = format!("{}/contracts", cfg.data_dir);
-                tracing::info!("Contracts: local directory at {dir}");
-                Box::new(contract::LocalDirRegistry::new(&dir))
-            }
-        };
+        Box::new(contract::KvRegistry::new(shared.persistence.clone()));
     match contract::ContractHost::new(contract_registry) {
         Ok(host) => {
             tracing::info!("Contract engine ready");

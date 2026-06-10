@@ -1168,6 +1168,7 @@ const EvtxoKeygenStep1Request$json = {
     {'1': 'timestamp_ms', '3': 6, '4': 1, '5': 3, '10': 'timestampMs'},
     {'1': 'server_pk', '3': 7, '4': 1, '5': 12, '10': 'serverPk'},
     {'1': 'exit_delay', '3': 8, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'contract_wasm', '3': 9, '4': 1, '5': 12, '10': 'contractWasm'},
   ],
 };
 
@@ -1178,7 +1179,7 @@ final $typed_data.Uint8List evtxoKeygenStep1RequestDescriptor = $convert.base64D
     'bmQxUGFja2FnZRIfCgtjb250cmFjdF9pZBgEIAEoDFIKY29udHJhY3RJZBIcCglzaWduYXR1cm'
     'UYBSABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBiABKANSC3RpbWVzdGFtcE1zEhsK'
     'CXNlcnZlcl9waxgHIAEoDFIIc2VydmVyUGsSHQoKZXhpdF9kZWxheRgIIAEoDVIJZXhpdERlbG'
-    'F5');
+    'F5EiMKDWNvbnRyYWN0X3dhc20YCSABKAxSDGNvbnRyYWN0V2FzbQ==');
 
 @$core.Deprecated('Use evtxoKeygenStep1ResponseDescriptor instead')
 const EvtxoKeygenStep1Response$json = {

@@ -107,3 +107,9 @@ typedef _ArkFreeEvtxoSpendDart = void Function(int);
 final arkFreeEvtxoSpendFfi = nativeLib
     .lookupFunction<_ArkFreeEvtxoSpendNative, _ArkFreeEvtxoSpendDart>(
         'ark_free_evtxo_spend');
+
+typedef _ArkEvtxoArkAddressNative = Pointer<FfiResult> Function(Pointer<Utf8>);
+typedef _ArkEvtxoArkAddressDart = Pointer<FfiResult> Function(Pointer<Utf8>);
+final arkEvtxoArkAddressFfi = nativeLib
+    .lookupFunction<_ArkEvtxoArkAddressNative, _ArkEvtxoArkAddressDart>(
+        'ark_evtxo_ark_address');

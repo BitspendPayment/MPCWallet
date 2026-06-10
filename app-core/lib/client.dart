@@ -642,6 +642,7 @@ class MpcClient {
         threshold.PublicKeyPackage publicKeyPackage,
       })> createEvtxoKey(
     Uint8List contractId,
+    Uint8List contractWasm,
     Uint8List serverPk,
     int exitDelay,
   ) async {
@@ -662,11 +663,14 @@ class MpcClient {
     final hwR1Json = jsonEncode(dealInit.round1Package.toJson());
 
     // 2. Step 1: wallet (passive) + hardware (dealer) + contract/ASP params.
+    // The wallet carries the contract bytes; the cosigner validates
+    // sha256(contractWasm)==contractId and persists them (no external registry).
     final reqWallet = EvtxoKeygenStep1Request()
       ..userId = userId
       ..identifier = walletIdentifier.serialize()
       ..round1Package = ''
       ..contractId = contractId
+      ..contractWasm = contractWasm
       ..serverPk = serverPk
       ..exitDelay = exitDelay
       ..signature = emptySig

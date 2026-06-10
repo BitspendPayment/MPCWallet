@@ -9,6 +9,7 @@ use std::ptr;
 
 use ark::taptree::TapLeaf;
 
+mod evtxo_address;
 mod evtxo_spend;
 mod send;
 
@@ -377,6 +378,23 @@ pub extern "C" fn ark_finalize_evtxo_spend(
 #[no_mangle]
 pub extern "C" fn ark_free_evtxo_spend(handle: u64) {
     evtxo_spend::free_evtxo_spend(handle);
+}
+
+/// Derive the Ark address for an eVTXO output key, so a normal off-chain send can
+/// mint a VTXO at it through arkd.
+///
+/// Input: JSON `{ "server_pk": hex, "q_evtxo": hex, "network": "regtest" }`.
+/// Returns the bech32m Ark address string.
+#[no_mangle]
+pub extern "C" fn ark_evtxo_ark_address(params_json: *const c_char) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let json = read_cstr(params_json).ok_or("null params_json")?;
+        evtxo_address::evtxo_ark_address(&json)
+    })();
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
 }
 
 #[cfg(test)]

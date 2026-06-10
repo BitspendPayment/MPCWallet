@@ -544,6 +544,9 @@ message EvtxoKeygenStep1Request {
   int64 timestamp_ms = 6;      // replay protection
   bytes server_pk = 7;         // ASP signer x-only pubkey (for the cooperative leaf)
   uint32 exit_delay = 8;       // unilateral-exit CSV delay (for the exit leaf)
+  bytes contract_wasm = 9;     // the contract component bytes; the cosigner validates
+                               // sha256(contract_wasm)==contract_id and persists them in
+                               // its own storage (no external registry)
 }
 
 message EvtxoKeygenStep1Response {
