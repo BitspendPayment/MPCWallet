@@ -5,7 +5,6 @@ import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
 import 'package:fixnum/fixnum.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/mock_fcm_server.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:hive/hive.dart';
@@ -169,12 +168,9 @@ void main() {
   late String fcmTestProjectId;
   late Map<String, String> cosignerExtraEnv;
 
-  MpcClient createClient(HardwareSignerInterface signer, {String? storageId}) {
-    return MpcClient.rest(
-      'http://127.0.0.1:$serverPort',
-      hardwareSigner: signer,
-      storageId: storageId,
-    );
+  // Real 2-of-2 {wallet, cosigner}: no signer. Distinct storageId per wallet.
+  MpcClient createClient({String? storageId}) {
+    return MpcClient.rest('http://127.0.0.1:$serverPort', storageId: storageId);
   }
 
   setUpAll(() async {
@@ -317,9 +313,7 @@ void main() {
   // shape: unauthenticated, no DKG required, returns whatever the runtime
   // was started with.
   test('GetServerInfo returns the configured bitcoin_network', () async {
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = createClient(signer);
+    final client = createClient();
 
     final info = await client.getServerInfo();
     print('   bitcoin_network=${info.bitcoinNetwork}');
@@ -333,9 +327,7 @@ void main() {
   test('Ark: DKG + GetArkInfo + GetArkAddress + GetBoardingAddress', () async {
     // 1. DKG Setup
     print('1. DKG Setup');
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = createClient(signer);
+    final client = createClient();
 
     await client.doDkg();
     print('   DKG Complete. userId=${client.userId?.substring(0, 16)}...');
@@ -403,9 +395,7 @@ void main() {
   test('Ark: Full flow - fund boarding, settle, send Alice→Bob', () async {
     // 1. Alice DKG
     print('1. Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
     print('   Alice userId=${alice.userId?.substring(0, 16)}...');
 
@@ -513,9 +503,7 @@ void main() {
 
     // 6. Bob DKG
     print('6. Bob DKG');
-    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await bobSigner.connect();
-    final bob = createClient(bobSigner);
+    final bob = createClient(storageId: "bob");
     await bob.doDkg();
     print('   Bob userId=${bob.userId?.substring(0, 16)}...');
 
@@ -705,12 +693,12 @@ void main() {
     expect(bobFinalBalance, equals(totalSent),
         reason: 'Bob should have received $totalSent sats total');
 
-    // 13. Clean up — delete policy
-    print('13. Deleting policy');
+    // 13. The protected policy was created + enforced above (the PIN send).
+    //     Policy *management* (delete/update) is deferred in the 2-of-2 migration:
+    //     it still authorizes via the removed recovery signer (see issue #48).
     final policy = alice.activeSpendingPolicy;
-    expect(policy, isNotNull);
-    await alice.deletePolicy(policy!.id);
-    print('   Policy deleted');
+    expect(policy, isNotNull,
+        reason: 'PIN-protected policy should have been created + enforced');
 
     print('Full Ark E2E flow complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
@@ -724,9 +712,7 @@ void main() {
   // means any intent fires on the next tick — no need to override in tests.
   test('Ark: auto-settle drives stored delegate intent without client', () async {
     print('1. Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
 
     print('2. Fund boarding + settle');
@@ -852,9 +838,7 @@ void main() {
   //     code path; this test guards against regressions)
   test('Ark: cosigner-runtime restart preserves rehydrated state', () async {
     print('1. Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
 
     print('2. Fund boarding + settle');
@@ -969,14 +953,10 @@ void main() {
     // here since each test does its own DKG and there's no signer-state
     // overlap between tests).
     print('1. Alice + Bob DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
 
-    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await bobSigner.connect();
-    final bob = createClient(bobSigner);
+    final bob = createClient(storageId: "bob");
     await bob.doDkg();
 
     // Snapshot mock sends BEFORE registering — prior tests may have left
@@ -1115,9 +1095,7 @@ void main() {
   test('Ark: delegate intent survives cosigner-runtime restart + auto-settles',
       () async {
     print('1. Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
 
     print('2. Fund boarding + settle');
@@ -1263,9 +1241,7 @@ void main() {
       'Ark: auto-settle tick cold-spawns user from sled after restart, no prior RPC',
       () async {
     print('1. Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = createClient(aliceSigner);
+    final alice = createClient(storageId: "alice");
     await alice.doDkg();
 
     print('2. Fund boarding + settle');

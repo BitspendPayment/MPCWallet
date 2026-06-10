@@ -23,7 +23,6 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -145,9 +144,7 @@ void main() {
   test('MutinyNet Ark: Board + Send', () async {
     // 1. Alice DKG
     Log.step(1, 'Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: aliceSigner);
+    final alice = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: "alice_mutinynet_ark");
     await alice.doDkg();
     Log.ok('Alice DKG complete.');
 
@@ -214,9 +211,7 @@ void main() {
 
     // 9. Bob DKG
     Log.step(9, 'Bob DKG');
-    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await bobSigner.connect();
-    final bob = MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: bobSigner, storageId: 'bob_mutinynet_ark');
+    final bob = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'bob_mutinynet_ark');
     await bob.doDkg();
     final bobArkAddress = await bob.getArkAddress();
     Log.ok('Bob Ark address: $bobArkAddress');
