@@ -97,6 +97,17 @@ final dkgResharePart3ReceiveFfi = nativeLib
     .lookupFunction<_DkgResharePart3ReceiveNative, _DkgResharePart3ReceiveDart>(
         'threshold_dkg_reshare_part3_receive');
 
+// Per-participant key-preserving refresh of a V′ share onto a new participant
+// identifier (multi-user onboarding). Args: holder_kp_json, id_set_json,
+// participant_id_hex, cosigner_id_hex, slope_hex.
+typedef _RefreshShareToIdNative = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _RefreshShareToIdDart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+final refreshShareToIdFfi = nativeLib
+    .lookupFunction<_RefreshShareToIdNative, _RefreshShareToIdDart>(
+        'threshold_refresh_share_to_id');
+
 // ---------------------------------------------------------------------------
 // Signing bindings
 // ---------------------------------------------------------------------------

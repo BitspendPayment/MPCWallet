@@ -630,6 +630,57 @@ pub extern "C" fn threshold_dkg_reshare_part3_receive(
     }
 }
 
+/// Per-participant key-preserving REFRESH of one holder's `V′` share onto a new
+/// participant identifier (the multi-user onboarding primitive). The author calls
+/// this with its own `V′` key package; the cosigner does the same on its side. The
+/// participant later sums the two `at_participant` halves into `P_i` and the cosigner
+/// sums the two `at_cosigner` halves into `C_i`. Returns JSON
+/// `{ "at_participant": scalar_hex, "at_cosigner": scalar_hex }`. Mirrors
+/// `dkg::refresh_share_to_id`.
+#[no_mangle]
+pub extern "C" fn threshold_refresh_share_to_id(
+    holder_kp_json: *const c_char,
+    id_set_json: *const c_char,
+    participant_id_hex: *const c_char,
+    cosigner_id_hex: *const c_char,
+    slope_hex: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let kp_str = read_cstr(holder_kp_json).ok_or("null holder_kp_json")?;
+        let id_set_str = read_cstr(id_set_json).ok_or("null id_set_json")?;
+        let part_str = read_cstr(participant_id_hex).ok_or("null participant_id_hex")?;
+        let cos_str = read_cstr(cosigner_id_hex).ok_or("null cosigner_id_hex")?;
+        let slope_str = read_cstr(slope_hex).ok_or("null slope_hex")?;
+
+        let holder_kp = threshold::keys::KeyPackage::from_json(&kp_str)
+            .map_err(|e| format!("bad holder KP: {e}"))?;
+        let id_set = parse_identifier_list_json(&id_set_str)?;
+        let participant_id = parse_identifier_hex(&part_str)?;
+        let cosigner_id = parse_identifier_hex(&cos_str)?;
+        let slope = parse_scalar_hex(&slope_str)?;
+
+        let (at_p, at_c) = dkg::refresh_share_to_id(
+            &holder_kp,
+            &id_set,
+            &participant_id,
+            &cosigner_id,
+            &slope,
+        )
+        .map_err(|e| format!("refresh_share_to_id failed: {e}"))?;
+
+        let data = serde_json::json!({
+            "at_participant": hex_encode(&threshold::scalar::scalar_to_bytes(&at_p)),
+            "at_cosigner": hex_encode(&threshold::scalar::scalar_to_bytes(&at_c)),
+        });
+        Ok(data.to_string())
+    })();
+
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
 // Re-use hex decode for the module (avoids bringing in hex crate at top level)
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {

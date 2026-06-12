@@ -782,6 +782,41 @@ pub fn dkg_reshare_part3_receive(
     )
 }
 
+/// Key-preserving REFRESH of one holder's share of a 2-of-2 `V′` onto a NEW
+/// participant identifier — the per-participant onboarding primitive for multi-user
+/// contracts. Unlike a reshare (non-zero Δ ⇒ key changes), this keeps `V′` fixed and
+/// only moves the coefficients.
+///
+/// The holder (author or cosigner) of `V′`, shared at `id_set` (= the current
+/// shareholder ids, e.g. `{author_id, cosigner_id}`), derives its additive piece
+/// `x = λ_holder · ss` (λ = Lagrange coefficient of the holder over `id_set` at 0),
+/// then deals a FRESH degree-1 polynomial `s(t) = x + slope·t` and returns
+/// `(s(participant_id), s(cosigner_id))`.
+///
+/// When BOTH holders run this (independent `slope`s) and the participant sums the two
+/// `s(participant_id)` halves into `P_i` while the cosigner sums the two
+/// `s(cosigner_id)` halves into `C_i`, `{P_i, C_i}` is a fresh Shamir 2-of-2 sharing
+/// of the SAME secret `v′` at `{participant_id, cosigner_id}` — `V′` is UNCHANGED.
+/// Independent per-participant slopes ⇒ different participants cannot pool their `P_i`
+/// to reconstruct `v′`. `ss` is already BIP-340 even-Y normalized (from the V′
+/// finalizer), so `v′` and thus the refreshed shares are consistent with `V′` with no
+/// further normalization.
+pub fn refresh_share_to_id(
+    holder_kp: &crate::keys::KeyPackage,
+    id_set: &[Identifier],
+    participant_id: &Identifier,
+    cosigner_id: &Identifier,
+    slope: &Scalar,
+) -> Result<(Scalar, Scalar), Error> {
+    let lambda = crate::lagrange::lagrange_coeff_at_zero(&holder_kp.identifier, id_set);
+    let x = lambda * holder_kp.secret_share;
+    // s(t) = x + slope·t (degree-1; constant term is this holder's additive piece).
+    let coeffs = [x, *slope];
+    let at_participant = polynomial::evaluate_polynomial(participant_id, &coeffs);
+    let at_cosigner = polynomial::evaluate_polynomial(cosigner_id, &coeffs);
+    Ok((at_participant, at_cosigner))
+}
+
 /// Shared resharing finalization. Given the new secret share `si` (already
 /// including the old share), the dealer Δ-commitments, and the new receiver set:
 /// compute `V' = V + Δ·G`, fold verifying shares (old + Δ) for the receivers

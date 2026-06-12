@@ -36,7 +36,7 @@ use threshold::random;
 use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
 use crate::policy::store::persist_policy;
-use crate::policy::{EvtxoPolicy, PolicyState};
+use crate::policy::{EvtxoPolicy, PolicyState, RecipientCosignerShare};
 use crate::shared::SharedServices;
 use crate::wallet_proto::{
     EvtxoKeygenStep1Request, EvtxoKeygenStep1Response, EvtxoKeygenStep2Request,
@@ -343,13 +343,21 @@ fn register_evtxo(
     )?;
     let spk_hex = hex::encode(&spk);
 
+    // Single-author contract: one recipient (the author), keyed by its user_id.
+    let mut recipient_shares = HashMap::new();
+    recipient_shares.insert(
+        user_id_hex.clone(),
+        RecipientCosignerShare {
+            key_package_json: kp_json,
+            public_key_package_json: pkp_json,
+        },
+    );
     policy.evtxo_policies.insert(
         spk_hex,
         EvtxoPolicy {
             contract_id_hex: hex::encode(contract_id),
             evtxo_pk_xonly_hex: v_xonly,
-            key_package_json: kp_json,
-            public_key_package_json: pkp_json,
+            recipient_shares,
         },
     );
     persist_policy(shared, &user_id_hex, &policy)?;
@@ -554,16 +562,25 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     )?;
     let spk_hex = hex::encode(&spk);
 
-    // Persist the EvtxoPolicy under the user's policy (keyed by eVTXO spk).
+    // Persist the EvtxoPolicy under the user's policy (keyed by eVTXO spk). The
+    // author is the sole recipient for now; the per-participant refresh (Phase 3)
+    // adds further recipients keyed by their own verifying share.
     let user_id_hex = sess.user_id_hex.clone();
     let mut policy = load_policy(shared, &user_id_hex)?;
+    let mut recipient_shares = HashMap::new();
+    recipient_shares.insert(
+        user_id_hex.clone(),
+        RecipientCosignerShare {
+            key_package_json: kp_json,
+            public_key_package_json: pkp_json,
+        },
+    );
     policy.evtxo_policies.insert(
         spk_hex,
         EvtxoPolicy {
             contract_id_hex: hex::encode(&contract_id),
             evtxo_pk_xonly_hex: evtxo_pk_xonly,
-            key_package_json: kp_json,
-            public_key_package_json: pkp_json,
+            recipient_shares,
         },
     );
     persist_policy(shared, &user_id_hex, &policy)?;

@@ -84,8 +84,14 @@ pub fn sign_step1(
         format!("evtxo:{spk_hex}")
     });
     // Select the signing key (normal / eVTXO V′) for this session.
-    let server_kp_json =
-        parsers::resolve_signing_key(&policy_state, selected_policy_id.as_deref().unwrap_or("")).0;
+    // recipient_vk = the authenticated user (the author is the recipient in a
+    // single-author contract). The V′ contract actor will pass its claimed share.
+    let server_kp_json = parsers::resolve_signing_key(
+        &policy_state,
+        selected_policy_id.as_deref().unwrap_or(""),
+        &user_id_hex,
+    )
+    .0;
 
     // Reset stale signing session from a previous (possibly failed) attempt.
     if let Some(h) = user.signing_session {
@@ -260,7 +266,8 @@ pub fn sign_step2(
         .map_err(|e| Status::internal(format!("get_policy_id: {e}")))?;
     // Same resolution as sign_step1 (normal / protected / eVTXO V′) so the key is
     // consistent across both steps.
-    let server_kp_json = parsers::resolve_signing_key(&policy_state, &current_policy_id).0;
+    let server_kp_json =
+        parsers::resolve_signing_key(&policy_state, &current_policy_id, &user_id_hex).0;
     let server_identifier_hex = parsers::extract_identifier(&server_kp_json)?;
 
     // Store user's signature share.
@@ -308,7 +315,8 @@ pub fn sign_step2(
     }
 
     // Aggregate.
-    let server_pkp_json = parsers::resolve_signing_key(&policy_state, &current_policy_id).1;
+    let server_pkp_json =
+        parsers::resolve_signing_key(&policy_state, &current_policy_id, &user_id_hex).1;
     let comms_json = crypto_ops::signing_session_get_commitments_json(user, sign_h)
         .map_err(|e| Status::internal(format!("get_commitments: {e}")))?;
     let msg_hex = crypto_ops::signing_session_get_message_to_sign(user, sign_h)

@@ -776,6 +776,50 @@ PublicKeyPackage pkpFromCommitment(
   }
 }
 
+/// Per-participant key-preserving REFRESH of [holderKp]'s `V′` share onto a new
+/// participant identifier. The author calls this with its own `V′` key package
+/// ([idSet] = the current `V′` shareholder ids {author, cosigner}; [cosignerId] =
+/// the cosigner's id; [slope] a fresh random scalar). Returns
+/// `(atParticipant, atCosigner)`: the author's half evaluated at the participant's
+/// id and at the cosigner's id. The participant sums the author's + cosigner's
+/// `atParticipant` into `P_i`; the cosigner sums the `atCosigner` halves into `C_i`.
+(BigInt, BigInt) refreshShareToId(
+  KeyPackage holderKp,
+  List<Identifier> idSet,
+  Identifier participantId,
+  Identifier cosignerId,
+  BigInt slope,
+) {
+  final kpJson = jsonEncode(holderKp.toJson());
+  final idSetJson = _encodeIdentifierListJson(idSet);
+  final partHex = _bigIntToHex64(participantId.toScalar());
+  final cosHex = _bigIntToHex64(cosignerId.toScalar());
+  final slopeHex = _bigIntToHex64(slope);
+
+  final kpPtr = kpJson.toNativeUtf8();
+  final idSetPtr = idSetJson.toNativeUtf8();
+  final partPtr = partHex.toNativeUtf8();
+  final cosPtr = cosHex.toNativeUtf8();
+  final slopePtr = slopeHex.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      refreshShareToIdFfi(kpPtr, idSetPtr, partPtr, cosPtr, slopePtr),
+    );
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final atP = bytesToBigInt(
+        Uint8List.fromList(hex.decode(parsed['at_participant'] as String)));
+    final atC = bytesToBigInt(
+        Uint8List.fromList(hex.decode(parsed['at_cosigner'] as String)));
+    return (atP, atC);
+  } finally {
+    calloc.free(kpPtr);
+    calloc.free(idSetPtr);
+    calloc.free(partPtr);
+    calloc.free(cosPtr);
+    calloc.free(slopePtr);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal JSON helpers
 // ---------------------------------------------------------------------------
