@@ -21,16 +21,6 @@ abstract class WalletApi {
   Future<SignStep1Response> signStep1(SignStep1Request request);
   Future<SignStep2Response> signStep2(SignStep2Request request);
 
-  // Refresh
-  Future<RefreshStep1Response> refreshStep1(RefreshStep1Request request);
-  Future<RefreshStep2Response> refreshStep2(RefreshStep2Request request);
-  Future<RefreshStep3Response> refreshStep3(RefreshStep3Request request);
-
-  // Policy
-  Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest request);
-  Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest request);
-  Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest request);
-
   // Transactions
   Future<BroadcastTransactionResponse> broadcastTransaction(
       BroadcastTransactionRequest request);

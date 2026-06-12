@@ -101,9 +101,9 @@ void main() {
     expect(sig, isNotNull, reason: '2-of-2 FROST signature should verify');
     print('   2-of-2 DKG + sign round-trip OK');
 
-    // Part C: register an eVTXO that REUSES the main key V (no reshare). The
-    // cosigner validates+stores the contract and derives the spk from V; the
-    // returned key package is the main key (V == V′).
+    // Part C: create a contract eVTXO key via a real 2-of-2 reshare {wallet,
+    // cosigner}. The cosigner validates+stores the contract and finalizes a fresh
+    // V′ = V + Δ_wallet + Δ_cosigner (≠ V), then derives + registers the eVTXO spk.
     final wasm = await File(
             '../contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm')
         .readAsBytes();
@@ -113,7 +113,12 @@ void main() {
     print('   eVTXO spk: ${BytesUtils.toHexString(evtxo.scriptPubkey)}');
     expect(evtxo.scriptPubkey.length, equals(34), reason: 'OP_1 <32> taproot spk');
     expect(evtxo.scriptPubkey[0], equals(0x51));
-    // V == V′ by construction: createEvtxoKey returns the wallet's main key package.
-    print('   eVTXO register (reuses main key) OK');
+    // V′ MUST differ from V — a genuine reshare, not the old V′ == V register.
+    final vPrimeXonly = evtxo.publicKeyPackage.verifyingKey.E.substring(2);
+    expect(vPrimeXonly, isNot(equals(gpk)),
+        reason: 'V′ must differ from V (real 2-of-2 reshare)');
+    print('   V  x-only: $gpk');
+    print('   V′ x-only: $vPrimeXonly');
+    print('   eVTXO reshare (fresh V′) OK');
   }, timeout: Timeout(Duration(minutes: 2)));
 }

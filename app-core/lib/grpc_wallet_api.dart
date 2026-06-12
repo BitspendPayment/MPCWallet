@@ -1,7 +1,6 @@
 /// gRPC implementation of [WalletApi] — wraps the generated [MPCWalletClient] stub.
 library;
 
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:protocol/protocol.dart';
 import 'wallet_api.dart';
@@ -35,26 +34,6 @@ class GrpcWalletApi implements WalletApi {
   Future<SignStep1Response> signStep1(SignStep1Request r) => _stub.signStep1(r);
   @override
   Future<SignStep2Response> signStep2(SignStep2Request r) => _stub.signStep2(r);
-
-  @override
-  Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) =>
-      _stub.refreshStep1(r);
-  @override
-  Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) =>
-      _stub.refreshStep2(r);
-  @override
-  Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) =>
-      _stub.refreshStep3(r);
-
-  @override
-  Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) =>
-      _stub.getPolicyId(r);
-  @override
-  Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) =>
-      _stub.updatePolicy(r);
-  @override
-  Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) =>
-      _stub.deletePolicy(r);
 
   @override
   Future<BroadcastTransactionResponse> broadcastTransaction(

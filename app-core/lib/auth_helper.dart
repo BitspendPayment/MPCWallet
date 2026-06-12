@@ -57,50 +57,6 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
-  /// Creates an authentication signature for RefreshStep1.
-  AuthSignature signForRefreshStep1() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep1,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for RefreshStep2.
-  AuthSignature signForRefreshStep2() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep2,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for RefreshStep3.
-  AuthSignature signForRefreshStep3() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep3,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for GetPolicyId.
-  AuthSignature signForGetPolicyId() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opGetPolicyId,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
   /// Creates an authentication signature for FetchHistory.
   AuthSignature signForFetchHistory() {
     final timestamp = currentTimestamp;

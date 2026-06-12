@@ -4,7 +4,6 @@ use tonic::Status;
 
 use crate::auth::message::{OP_SIGN_STEP1, OP_SIGN_STEP2};
 use crate::crypto_ops;
-use crate::policy::SpendingEntry;
 use crate::shared::SharedServices;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
@@ -12,7 +11,7 @@ use crate::cosigner::handlers::parsers;
 use crate::cosigner::cosigner::CosignerInstance;
 
 use super::helpers::{
-    auth_check, calculate_spent_amount, ensure_policy_loaded, persist_policy,
+    auth_check, calculate_spent_amount, ensure_policy_loaded,
 };
 
 const THRESHOLD_COUNT: u32 = 2;
@@ -72,49 +71,19 @@ pub fn sign_step1(
         calculate_spent_amount(user, &req.full_transaction, &pkp_json).unwrap_or(0);
     tracing::info!("[{user_id_hex}] SignStep1: spent_amount={spent_amount}");
 
-    // Policy bypass for settle/settleDelegate: when this SignStep1 is
-    // being driven from an active settle round (boarding) or delegate
-    // Phase-1 sign (settleDelegate is still waiting on the client's
-    // signature shares), we force the normal key package. Spending
-    // policies gate fund egress (sends + redeems); they don't gate
-    // "promote my UTXO into a fresh VTXO" or "re-delegate so my VTXO
-    // doesn't expire." Auto-settle runs from a background isolate or
-    // cosigner tick task where no user PIN is available, so requiring
-    // a protected policy would break the whole class of unattended
-    // settlements.
-    //
-    // Crucially, the bypass must NOT fire just because a stored,
-    // already-signed delegate intent happens to be sitting in
-    // `state.delegate_session`. After Phase 2 stores signatures, the
-    // record persists for the tick task — but any subsequent unrelated
-    // SignStep1 (e.g. an off-chain Ark send) is a normal egress and
-    // must be policy-gated. `awaiting_signatures` distinguishes the
-    // two: it's true only between Phase 1 (returns sighashes) and
-    // Phase 2 (signs them).
-    let in_settle_context = state.settle_session.is_some()
-        || state
-            .delegate_session
-            .as_ref()
-            .is_some_and(|r| r.awaiting_signatures);
-    let selected_policy_id = if let Some(spk_hex) =
-        super::contract_gate::detect_evtxo_spend(&policy_state, &req.full_transaction)
-    {
-        // eVTXO cooperative spend: use the V′ key. The contract gate above has
-        // already enforced the contract; amount-based policies don't apply.
+    // The only non-normal signing key is the eVTXO V′: if an input spends a
+    // contract-bound eVTXO, the gate above has already enforced the contract,
+    // and we sign its cooperative leaf with V′. Everything else uses the normal
+    // 2-of-2 key.
+    let selected_policy_id = super::contract_gate::detect_evtxo_spend(
+        &policy_state,
+        &req.full_transaction,
+    )
+    .map(|spk_hex| {
         tracing::info!("[{user_id_hex}] SignStep1: eVTXO cooperative spend — using V′ key");
-        Some(format!("evtxo:{spk_hex}"))
-    } else if in_settle_context {
-        tracing::info!(
-            "[{user_id_hex}] SignStep1: settle/delegate context active — \
-             skipping policy evaluation"
-        );
-        None
-    } else {
-        let id = parsers::evaluate_policy_for_amount(&policy_state, spent_amount);
-        tracing::info!("[{user_id_hex}] SignStep1: selected_policy_id={id:?}");
-        id
-    };
-    // Select the signing key (normal / protected / eVTXO V′) for this session.
+        format!("evtxo:{spk_hex}")
+    });
+    // Select the signing key (normal / eVTXO V′) for this session.
     let server_kp_json =
         parsers::resolve_signing_key(&policy_state, selected_policy_id.as_deref().unwrap_or("")).0;
 
@@ -257,7 +226,7 @@ pub fn sign_step1(
 pub fn sign_step2(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
-    shared: &SharedServices,
+    _shared: &SharedServices,
     req: SignStep2Request,
 ) -> Result<SignStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -347,8 +316,6 @@ pub fn sign_step2(
     let signing_pkg_json = parsers::build_signing_package_json(&comms_json, &msg_hex)?;
     let shares_json = crypto_ops::signing_session_get_shares_json(user, sign_h)
         .map_err(|e| Status::internal(format!("get_shares: {e}")))?;
-    let pending = crypto_ops::signing_session_get_pending_amount(user, sign_h)
-        .map_err(|e| Status::internal(format!("get_pending: {e}")))?;
 
     let agg_pkp_json = if user.script_path_spend {
         server_pkp_json.clone()
@@ -373,17 +340,6 @@ pub fn sign_step2(
         hex::decode(z_hex).map_err(|e| Status::internal(format!("hex decode Z: {e}")))?;
 
     tracing::info!("[{user_id_hex}] SignStep2: Aggregated");
-
-    // Record spending.
-    if pending > 0 {
-        if let Some(ps) = user.policy_state.as_mut() {
-            ps.spending_history.push(SpendingEntry {
-                timestamp_ms: parsers::now_ms(),
-                amount_sats: pending,
-            });
-            let _ = persist_policy(shared, &user_id_hex, ps);
-        }
-    }
 
     // Reset session.
     let sign_h = user.signing_session.unwrap();

@@ -3,8 +3,7 @@
 /// Proves the full path against a real co-signing server:
 ///   1. SoftwareSigner drives a real DKG → group key established server-side
 ///   2. exportEncryptedBackup produces a blob that round-trips
-///   3. A fresh SoftwareSigner from the blob can authorize a policy-delete
-///      (which exercises _frostSignWithBothKeys end-to-end)
+///   3. A fresh SoftwareSigner from the blob carries the DKG KeyPackage
 ///   4. doRestore() with a re-hydrated signer reproduces the same group
 ///      verifying key (the hallmark of recovery)
 ///
@@ -25,7 +24,6 @@ import 'package:app_core/client.dart';
 import 'package:app_core/software_signer.dart';
 import 'package:e2e/logger.dart';
 import 'package:e2e/regtest_helper.dart';
-import 'package:fixnum/fixnum.dart';
 import 'package:hive/hive.dart';
 import 'package:test/test.dart';
 
@@ -165,7 +163,7 @@ void main() {
   }
 
   test(
-    'SoftwareSigner e2e: DKG → backup → wipe → rehydrate → policy delete → restore',
+    'SoftwareSigner e2e: DKG → backup → wipe → rehydrate → restore',
     () async {
       // ----- 1. DKG with an in-process software signer ----------------------
       Log.step(1, 'Initial DKG with SoftwareSigner');
@@ -200,27 +198,15 @@ void main() {
       expect(signer1.hasBackupableState, isFalse,
           reason: 'wipe() must clear all in-memory recovery state');
 
-      // ----- 3. Optional non-recovery op proves the share isn't needed ------
-      // A regular spend doesn't touch _frostSignWithBothKeys. We don't fund
-      // the wallet here (keeps the test scope tight), but assert the API:
-      // the client is still usable for non-policy paths even without a signer.
+      // ----- 3. The client stays usable signer-less for normal sessions -----
+      // We don't fund the wallet here (keeps the test scope tight), just
+      // assert the API: the client runs without a signer attached.
       expect(client1.hardwareSigner, isNull,
           reason: 'client should run signer-less for normal sessions');
 
-      // ----- 4. Re-hydrate from blob and authorize a policy operation -------
-      Log.step(3, 'Re-hydrate signer from blob; delete-policy round-trip');
+      // ----- 4. Re-hydrate from blob and confirm the KeyPackage round-trips -
+      Log.step(3, 'Re-hydrate signer from blob; verify KeyPackage survives');
 
-      // First create a policy (no recovery signer required).
-      const pin = '424242';
-      await client1.createSpendingPolicy(
-          const Duration(hours: 1), Int64(50000), pin);
-      expect(client1.hasSpendingPolicy, isTrue,
-          reason: 'createSpendingPolicy should succeed without recovery signer');
-      final policyId = client1.activeSpendingPolicy!.id;
-      Log.ok('Spending policy created: $policyId');
-
-      // Now delete it — this hits _frostSignWithBothKeys, which requires the
-      // recovery signer. Re-hydrate from the blob, attach, run, detach, wipe.
       final signer2 =
           await SoftwareSigner.fromEncryptedBackup(blob: backupBlob, password: password);
       await signer2.connect();
@@ -228,17 +214,8 @@ void main() {
       expect(info.hasKeyPackage, isTrue,
           reason: 'rehydrated signer must carry the KeyPackage from DKG');
       expect(info.identifierHex, isNotNull);
-
-      client1.hardwareSigner = signer2;
-      try {
-        await client1.deletePolicy(policyId);
-      } finally {
-        client1.hardwareSigner = null;
-        await signer2.wipe();
-      }
-      expect(client1.hasSpendingPolicy, isFalse,
-          reason: 'policy must be removed after deletion');
-      Log.ok('Policy deleted with rehydrated signer.');
+      await signer2.wipe();
+      Log.ok('Signer rehydrated from blob with intact KeyPackage.');
 
       // Wrong password must reject without leaking state.
       await expectLater(
@@ -285,7 +262,7 @@ void main() {
       final info2 = await signer4.getInfo();
       expect(info2.hasKeyPackage, isTrue,
           reason:
-              'post-restore blob must carry the refreshed KeyPackage for future policy ops');
+              'post-restore blob must carry the refreshed KeyPackage');
       await signer4.wipe();
 
       Log.separator();

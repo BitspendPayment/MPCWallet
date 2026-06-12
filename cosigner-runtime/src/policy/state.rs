@@ -16,16 +16,10 @@ pub struct PolicyState {
     pub server_dkg_secret_hex: Option<String>,
     /// Normal (default) spending policy.
     pub normal_policy: NormalPolicy,
-    /// Protected spending policies (policy_id -> ProtectedPolicy).
-    #[serde(default)]
-    pub protected_policies: HashMap<String, ProtectedPolicy>,
     /// Programmable eVTXO policies, keyed by eVTXO scriptPubKey (hex). Each binds
     /// a resharing-derived 2-of-2 key V′ to a WASM contract.
     #[serde(default)]
     pub evtxo_policies: HashMap<String, EvtxoPolicy>,
-    /// Spending history entries.
-    #[serde(default)]
-    pub spending_history: Vec<SpendingEntry>,
 }
 
 /// Normal (default) spending policy.
@@ -35,19 +29,6 @@ pub struct NormalPolicy {
     /// Key package as JSON string (from WASM).
     pub key_package_json: String,
     /// Public key package as JSON string (from WASM).
-    pub public_key_package_json: String,
-}
-
-/// Protected spending policy with threshold and time interval.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProtectedPolicy {
-    pub id: String,
-    pub threshold_sats: i64,
-    pub start_time_ms: i64,
-    pub interval_seconds: i64,
-    /// Key package as JSON string.
-    pub key_package_json: String,
-    /// Public key package as JSON string.
     pub public_key_package_json: String,
 }
 
@@ -65,13 +46,6 @@ pub struct EvtxoPolicy {
     pub key_package_json: String,
     /// `V′` public key package (JSON).
     pub public_key_package_json: String,
-}
-
-/// A spending history entry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SpendingEntry {
-    pub timestamp_ms: i64,
-    pub amount_sats: i64,
 }
 
 /// Per-user UTXO cache.

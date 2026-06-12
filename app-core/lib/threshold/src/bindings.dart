@@ -74,6 +74,18 @@ final dkgResharePart1Ffi = nativeLib
     .lookupFunction<_DkgResharePart1Native, _DkgResharePart1Dart>(
         'threshold_dkg_reshare_part1');
 
+// eVTXO reshare finalizer for a DEALER (the author): r2_secret handle, peer
+// round1 pkgs, shares dealt to me, old PKP, old KP, receiver ids.
+typedef _DkgResharePart3Native = Pointer<FfiResult> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>);
+typedef _DkgResharePart3Dart = Pointer<FfiResult> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>);
+final dkgResharePart3Ffi = nativeLib
+    .lookupFunction<_DkgResharePart3Native, _DkgResharePart3Dart>(
+        'threshold_dkg_reshare_part3');
+
 // eVTXO reshare finalizer for a pure receiver (the wallet).
 typedef _DkgResharePart3ReceiveNative = Pointer<FfiResult> Function(
     Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,

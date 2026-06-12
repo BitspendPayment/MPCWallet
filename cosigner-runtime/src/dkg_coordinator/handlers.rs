@@ -427,15 +427,13 @@ fn step3_finalize_server_key(
     let recovery_id = String::new();
 
     // Restore: if this recovery_id was previously associated with another
-    // user_id, preserve their spending history (read straight from sled —
-    // there's no in-memory recovery index). Then clean up the old policy entries.
-    let preserved_history = if !recovery_id.is_empty() {
-        let mut preserved = Vec::new();
+    // user_id, clean up the old policy entries (read straight from sled —
+    // there's no in-memory recovery index).
+    if !recovery_id.is_empty() {
         if let Ok(Some(old_user_id)) = shared.persistence.get("policy_recovery_idx", &recovery_id) {
             if let Ok(Some(json_str)) = shared.persistence.get("policies", &old_user_id) {
                 if let Ok(ps) = serde_json::from_str::<PolicyState>(&json_str) {
                     if ps.recovery_id == recovery_id {
-                        preserved = ps.spending_history.clone();
                         let _ = shared.persistence.delete("policies", &old_user_id);
                         let _ = shared
                             .persistence
@@ -447,10 +445,7 @@ fn step3_finalize_server_key(
                 }
             }
         }
-        preserved
-    } else {
-        Vec::new()
-    };
+    }
 
     let normal_policy = NormalPolicy {
         id: "normal policies".to_string(),
@@ -463,9 +458,7 @@ fn step3_finalize_server_key(
         user_signing_identifier_hex,
         server_dkg_secret_hex: Some(server_dkg_secret_hex),
         normal_policy,
-        protected_policies: HashMap::new(),
         evtxo_policies: HashMap::new(),
-        spending_history: preserved_history,
     };
 
     persist_policy(shared, &policy_user_id, &policy_state)?;

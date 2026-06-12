@@ -12,7 +12,6 @@ import 'package:app_core/client.dart';
 import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:app_core/enclave/manifest.dart' as manifest;
 import 'package:app_core/hardware_signer.dart';
-import 'package:app_core/policy.dart';
 import 'package:app_core/software_signer.dart';
 
 import '../usb/usb_hardware_signer.dart';
@@ -68,8 +67,6 @@ class MpcService extends ChangeNotifier {
   BigInt _balance = BigInt.zero;
   BigInt get balance => _balance;
   List<TransactionSummary> get transactions => _wallet?.transactions ?? [];
-  ProtectedPolicy? get activePolicy => _client?.activeSpendingPolicy;
-  List<ProtectedPolicy> get policies => _client?.spendingPolicies ?? [];
 
   // --- Ark state ---
   GetArkInfoResponse? _arkInfo;
@@ -736,11 +733,9 @@ class MpcService extends ChangeNotifier {
     return txid;
   }
 
-  Future<String> sendArk(String recipientArkAddress, int amountSats,
-      {String? policyId, String? pin}) async {
+  Future<String> sendArk(String recipientArkAddress, int amountSats) async {
     if (_client == null) throw StateError("Client not initialized");
-    final arkTxid = await _client!.sendVtxo(recipientArkAddress, amountSats,
-        policyId: policyId, pin: pin);
+    final arkTxid = await _client!.sendVtxo(recipientArkAddress, amountSats);
     await refreshVtxos();
     return arkTxid;
   }

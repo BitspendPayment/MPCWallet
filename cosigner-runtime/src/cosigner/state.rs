@@ -96,9 +96,6 @@ pub struct CosignerState {
     // round completes, then drains and fulfils.
     pub pending_sign_step1: Vec<oneshot::Sender<Result<SignStep1Response, Status>>>,
     pub pending_sign_step2: Vec<oneshot::Sender<Result<SignStep2Response, Status>>>,
-    pub pending_refresh_step1: Vec<oneshot::Sender<Result<RefreshStep1Response, Status>>>,
-    pub pending_refresh_step2: Vec<oneshot::Sender<Result<RefreshStep2Response, Status>>>,
-    pub pending_refresh_step3: Vec<oneshot::Sender<Result<RefreshStep3Response, Status>>>,
 }
 
 impl CosignerState {
@@ -115,9 +112,6 @@ impl CosignerState {
             device_tokens: Vec::new(),
             pending_sign_step1: Vec::new(),
             pending_sign_step2: Vec::new(),
-            pending_refresh_step1: Vec::new(),
-            pending_refresh_step2: Vec::new(),
-            pending_refresh_step3: Vec::new(),
         }
     }
 
@@ -133,8 +127,8 @@ impl CosignerState {
 
     /// Drain every `pending_*` rendezvous queue, fulfilling each parked
     /// reply with `Err(Status::internal(msg))`. Called from the actor's
-    /// panic-recovery path so multi-party callers (sign, refresh) get a
-    /// definitive error instead of hanging on a reply that will never come.
+    /// panic-recovery path so multi-party callers (sign) get a definitive error
+    /// instead of hanging on a reply that will never come.
     pub fn drain_pending_replies_with_err(&mut self, msg: &str) {
         fn drain<T>(pool: &mut Vec<oneshot::Sender<Result<T, Status>>>, msg: &str) {
             for tx in pool.drain(..) {
@@ -143,9 +137,6 @@ impl CosignerState {
         }
         drain(&mut self.pending_sign_step1, msg);
         drain(&mut self.pending_sign_step2, msg);
-        drain(&mut self.pending_refresh_step1, msg);
-        drain(&mut self.pending_refresh_step2, msg);
-        drain(&mut self.pending_refresh_step3, msg);
     }
 }
 
@@ -167,23 +158,14 @@ mod tests {
         // pool drains, not just the first one.
         let (tx_s1, rx_s1) = oneshot::channel::<Result<SignStep1Response, Status>>();
         let (tx_s2, rx_s2) = oneshot::channel::<Result<SignStep2Response, Status>>();
-        let (tx_r1, rx_r1) = oneshot::channel::<Result<RefreshStep1Response, Status>>();
-        let (tx_r2, rx_r2) = oneshot::channel::<Result<RefreshStep2Response, Status>>();
-        let (tx_r3, rx_r3) = oneshot::channel::<Result<RefreshStep3Response, Status>>();
         state.pending_sign_step1.push(tx_s1);
         state.pending_sign_step2.push(tx_s2);
-        state.pending_refresh_step1.push(tx_r1);
-        state.pending_refresh_step2.push(tx_r2);
-        state.pending_refresh_step3.push(tx_r3);
 
         state.drain_pending_replies_with_err("test panic");
 
         // All pools emptied.
         assert!(state.pending_sign_step1.is_empty());
         assert!(state.pending_sign_step2.is_empty());
-        assert!(state.pending_refresh_step1.is_empty());
-        assert!(state.pending_refresh_step2.is_empty());
-        assert!(state.pending_refresh_step3.is_empty());
 
         // Every parked receiver resolves with the expected error.
         // (Each oneshot is monomorphic in its response type, so we can't
@@ -198,9 +180,6 @@ mod tests {
         }
         assert_drained!(rx_s1);
         assert_drained!(rx_s2);
-        assert_drained!(rx_r1);
-        assert_drained!(rx_r2);
-        assert_drained!(rx_r3);
     }
 
     #[test]

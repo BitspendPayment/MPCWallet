@@ -509,6 +509,72 @@ pub extern "C" fn threshold_dkg_reshare_part1(
     }
 }
 
+/// eVTXO reshare finalizer for a DEALER (e.g. the author): combine this dealer's
+/// own dealing (`r2_secret` handle) with the peer dealers' round1 packages and the
+/// shares dealt to this dealer, plus the old share, into the new `V′` key package +
+/// PKP. Mirrors `dkg_reshare_part3` in the threshold crate. `min_signers` is taken
+/// from the handle, so it is not a parameter here.
+#[no_mangle]
+pub extern "C" fn threshold_dkg_reshare_part3(
+    r2_secret_handle: *mut c_void,
+    round1_pkgs_json: *const c_char,
+    round2_pkgs_json: *const c_char,
+    old_pkp_json: *const c_char,
+    old_kp_json: *const c_char,
+    receiver_ids_json: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let r2_secret = unsafe {
+            super::handles::borrow_handle::<Round2SecretPackage>(r2_secret_handle)
+        }
+        .ok_or("null r2_secret_handle")?;
+
+        let r1_str = read_cstr(round1_pkgs_json).ok_or("null round1_pkgs_json")?;
+        let r2_str = read_cstr(round2_pkgs_json).ok_or("null round2_pkgs_json")?;
+        let old_pkp_str = read_cstr(old_pkp_json).ok_or("null old_pkp_json")?;
+        let old_kp_str = read_cstr(old_kp_json).ok_or("null old_kp_json")?;
+
+        let round1_pkgs = parse_round1_pkgs_json(&r1_str)?;
+        let round2_pkgs = parse_round2_pkgs_json(&r2_str)?;
+        let old_pkp = threshold::keys::PublicKeyPackage::from_json(&old_pkp_str)
+            .map_err(|e| format!("bad old PKP: {e}"))?;
+        let old_kp = threshold::keys::KeyPackage::from_json(&old_kp_str)
+            .map_err(|e| format!("bad old KP: {e}"))?;
+
+        let receiver_ids = if receiver_ids_json.is_null() {
+            Vec::new()
+        } else {
+            let ids_str = read_cstr(receiver_ids_json).ok_or("bad receiver_ids_json")?;
+            if ids_str.is_empty() || ids_str == "[]" {
+                Vec::new()
+            } else {
+                parse_identifier_list_json(&ids_str)?
+            }
+        };
+
+        let (kp, pkp) = dkg::dkg_reshare_part3(
+            r2_secret,
+            &round1_pkgs,
+            &round2_pkgs,
+            &old_pkp,
+            &old_kp,
+            &receiver_ids,
+        )
+        .map_err(|e| format!("dkg_reshare_part3 failed: {e}"))?;
+
+        let result = serde_json::json!({
+            "key_package": serde_json::from_str::<serde_json::Value>(&kp.to_json()).unwrap_or_default(),
+            "public_key_package": serde_json::from_str::<serde_json::Value>(&pkp.to_json()).unwrap_or_default(),
+        });
+        Ok(result.to_string())
+    })();
+
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
 /// eVTXO reshare finalizer for a pure receiver (the wallet): combine the dealers'
 /// shares with the old share into a new 2-of-2 `V′` key package + PKP. Mirrors
 /// `dkg_reshare_part3_receive` in the threshold crate.

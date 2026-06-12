@@ -254,6 +254,16 @@ void main() {
     // 2-of-2 key INSIDE the cooperative multisig leaf — these are different.
     final qEvtxo = Uint8List.fromList(evtxo.scriptPubkey.sublist(2));
     final vPrimeXonly = _xonlyOf(evtxo.publicKeyPackage);
+
+    // V′ MUST differ from V: createEvtxoKey runs a real 2-of-2 reshare
+    // (V′ = V + Δ_author + Δ_cosigner), not the old one-shot V′ == V register.
+    final vXonly = _xonlyOf(alice.getPublicKeyPackage()!);
+    expect(BytesUtils.toHexString(vPrimeXonly),
+        isNot(equals(BytesUtils.toHexString(vXonly))),
+        reason: 'V′ must differ from V — createEvtxoKey must run a real reshare');
+    print('   V  x-only: ${BytesUtils.toHexString(vXonly)}');
+    print('   V′ x-only: ${BytesUtils.toHexString(vPrimeXonly)}');
+
     final evtxoArkAddr =
         arkEvtxoArkAddress(serverPk: serverPk, qEvtxo: qEvtxo, network: arkInfo.network);
     print('2. eVTXO key created; ark address=$evtxoArkAddr');

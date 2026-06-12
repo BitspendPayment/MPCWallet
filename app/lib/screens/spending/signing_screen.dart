@@ -28,61 +28,6 @@ class _SigningScreenState extends State<SigningScreen> {
     _startSigning();
   }
 
-  Future<String?> _showPinDialog() async {
-    String pin = '';
-    return await showDialog<String>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: Colors.grey[900],
-        title: Text('Policy Triggered',
-            style: GoogleFonts.inter(color: Colors.white)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.shield, size: 48, color: Colors.amber),
-            const SizedBox(height: 16),
-            Text(
-              'This transaction exceeds your spending policy threshold. Enter your PIN to authorize.',
-              style: GoogleFonts.inter(color: Colors.white70),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('signingPinField'),
-              obscureText: true,
-              keyboardType: TextInputType.number,
-              maxLength: 6,
-              onChanged: (v) => pin = v,
-              style: const TextStyle(color: Colors.white, letterSpacing: 8),
-              textAlign: TextAlign.center,
-              decoration: const InputDecoration(
-                labelText: '6-digit PIN',
-                counterText: '',
-                border: OutlineInputBorder(),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(null),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            key: const Key('signingAuthorizeBtn'),
-            onPressed: () {
-              if (pin.length == 6 && RegExp(r'^\d{6}$').hasMatch(pin)) {
-                Navigator.of(context).pop(pin);
-              }
-            },
-            child: const Text('Authorize'),
-          ),
-        ],
-      ),
-    );
-  }
-
   void _startSigning() async {
     if (_isArk) {
       await _startArkSend();
@@ -141,50 +86,13 @@ class _SigningScreenState extends State<SigningScreen> {
         amountSats: amount,
       );
 
-      // Step 1: Sign — check if policy is triggered
       setState(() {
         _currentStep = 1;
-        _statusText = 'Checking spending policy...';
-      });
-
-      String? pin;
-      String? policyId;
-
-      try {
-        final resolvedPolicyId = await arkWallet.getPolicyId(unsigned);
-        if (resolvedPolicyId.isNotEmpty) {
-          setState(() {
-            _statusText = 'Policy triggered — PIN required';
-          });
-
-          if (!mounted) return;
-          pin = await _showPinDialog();
-          if (pin == null || pin.isEmpty) {
-            unsigned.dispose();
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Signing cancelled')),
-              );
-              context.pop();
-            }
-            return;
-          }
-          policyId = resolvedPolicyId;
-        }
-      } catch (e) {
-        debugPrint("getPolicyId failed: $e — proceeding without policy");
-      }
-
-      setState(() {
         _statusText = 'Signing with your Key Share...';
       });
       await Future.delayed(const Duration(milliseconds: 300));
 
-      final signed = await arkWallet.signTransaction(
-        unsigned,
-        pin: pin,
-        policyId: policyId,
-      );
+      final signed = await arkWallet.signTransaction(unsigned);
 
       // Step 2: Submit
       setState(() {
@@ -289,49 +197,13 @@ class _SigningScreenState extends State<SigningScreen> {
         feeRate: 1,
       );
 
-      // Step 1: Sign — check if policy is triggered
       setState(() {
         _currentStep = 1;
-        _statusText = 'Checking spending policy...';
-      });
-
-      String? pin;
-      String? policyId;
-
-      try {
-        final resolvedPolicyId = await wallet.getPolicyId(unsigned);
-        if (resolvedPolicyId.isNotEmpty) {
-          setState(() {
-            _statusText = 'Policy triggered — PIN required';
-          });
-
-          if (!mounted) return;
-          pin = await _showPinDialog();
-          if (pin == null || pin.isEmpty) {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Signing cancelled')),
-              );
-              context.pop();
-            }
-            return;
-          }
-          policyId = resolvedPolicyId;
-        }
-      } catch (e) {
-        debugPrint("getPolicyId failed: $e — proceeding without policy");
-      }
-
-      setState(() {
         _statusText = 'Signing with your Key Share...';
       });
       await Future.delayed(const Duration(milliseconds: 300));
 
-      final txHex = await wallet.signTransaction(
-        unsigned,
-        pin: pin,
-        policyId: policyId,
-      );
+      final txHex = await wallet.signTransaction(unsigned);
 
       // Step 2: Broadcast
       setState(() {

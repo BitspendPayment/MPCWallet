@@ -68,14 +68,6 @@ pub fn routes(state: AppState) -> Router {
         // Signing
         .route("/u/{user_id}/sign/step1", post(sign_step1))
         .route("/u/{user_id}/sign/step2", post(sign_step2))
-        // Refresh
-        .route("/u/{user_id}/refresh/step1", post(refresh_step1))
-        .route("/u/{user_id}/refresh/step2", post(refresh_step2))
-        .route("/u/{user_id}/refresh/step3", post(refresh_step3))
-        // Policy
-        .route("/u/{user_id}/policy/get-id", post(get_policy_id))
-        .route("/u/{user_id}/policy/update", post(update_policy))
-        .route("/u/{user_id}/policy/delete", post(delete_policy))
         // Transactions
         .route("/u/{user_id}/tx/broadcast", post(broadcast_transaction))
         .route("/u/{user_id}/tx/history", post(fetch_history))
@@ -306,8 +298,11 @@ async fn evtxo_keygen_step1(
         exit_delay: i64_field(&body, "exit_delay") as u32,
     };
     match coord.step1(&user_id, req).await {
-        // One-shot register: return the eVTXO spk (hex, per the REST convention).
+        // Reshare: return both dealers' round1 packages (id_hex -> JSON) so the
+        // author can run dkg_part2. One-shot register (V′ == V) leaves the map
+        // empty and returns the eVTXO spk (hex, per the REST convention).
         Ok(resp) => Ok(Json(json!({
+            "round1_packages": resp.round1_packages,
             "evtxo_script_pubkey": to_hex(&resp.evtxo_script_pubkey),
         }))),
         Err(status) => Err(status_to_response(status)),
@@ -427,104 +422,6 @@ async fn sign_step2(
         }))),
         Err(status) => Err(status_to_response(status)),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Refresh
-// ---------------------------------------------------------------------------
-
-#[tracing::instrument(skip_all, name = "rest::refresh_step1", fields(user_id = %user_id))]
-async fn refresh_step1(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, RefreshStep1, wallet_proto::RefreshStep1Request {
-        user_id: user_id_bytes(&user_id),
-        round1_package: str_field(&body, "round1_package"),
-        threshold_amount: i64_field(&body, "threshold_amount"),
-        interval: i64_field(&body, "interval"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
-
-#[tracing::instrument(skip_all, name = "rest::refresh_step2", fields(user_id = %user_id))]
-async fn refresh_step2(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, RefreshStep2, wallet_proto::RefreshStep2Request {
-        user_id: user_id_bytes(&user_id),
-        round1_package: str_field(&body, "round1_package"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
-
-#[tracing::instrument(skip_all, name = "rest::refresh_step3", fields(user_id = %user_id))]
-async fn refresh_step3(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, RefreshStep3, wallet_proto::RefreshStep3Request {
-        user_id: user_id_bytes(&user_id),
-        round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// Policy
-// ---------------------------------------------------------------------------
-
-#[tracing::instrument(skip_all, name = "rest::get_policy_id", fields(user_id = %user_id))]
-async fn get_policy_id(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, GetPolicyId, wallet_proto::GetPolicyIdRequest {
-        user_id: user_id_bytes(&user_id),
-        tx_message: hex_field(&body, "tx_message"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
-
-#[tracing::instrument(skip_all, name = "rest::update_policy", fields(user_id = %user_id))]
-async fn update_policy(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, UpdatePolicy, wallet_proto::UpdatePolicyRequest {
-        user_id: user_id_bytes(&user_id),
-        policy_id: str_field(&body, "policy_id"),
-        threshold_sats: i64_field(&body, "threshold_sats"),
-        interval_seconds: i64_field(&body, "interval_seconds"),
-        frost_signature_r: hex_field(&body, "frost_signature_r"),
-        frost_signature_z: hex_field(&body, "frost_signature_z"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
-}
-
-#[tracing::instrument(skip_all, name = "rest::delete_policy", fields(user_id = %user_id))]
-async fn delete_policy(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(user_id): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, user_id, DeletePolicy, wallet_proto::DeletePolicyRequest {
-        user_id: user_id_bytes(&user_id),
-        policy_id: str_field(&body, "policy_id"),
-        frost_signature_r: hex_field(&body, "frost_signature_r"),
-        frost_signature_z: hex_field(&body, "frost_signature_z"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +572,6 @@ async fn send_vtxo(
             "script_path_spend": r.script_path_spend,
             "ark_txid": r.ark_txid,
             "error_message": r.error_message,
-            "policy_id": r.policy_id,
         }))),
         Err(status) => Err(status_to_response(status)),
     }

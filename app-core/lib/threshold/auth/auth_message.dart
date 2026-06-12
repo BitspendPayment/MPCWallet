@@ -17,16 +17,9 @@ class AuthMessage {
   /// Operation types for different RPC calls
   static const String opSignStep1 = 'SIGN_STEP1';
   static const String opSignStep2 = 'SIGN_STEP2';
-  static const String opRefreshStep1 = 'REFRESH_STEP1';
-  static const String opRefreshStep2 = 'REFRESH_STEP2';
-  static const String opRefreshStep3 = 'REFRESH_STEP3';
-  static const String opCreatePolicy = 'CREATE_POLICY';
-  static const String opGetPolicyId = 'GET_POLICY_ID';
   static const String opFetchHistory = 'FETCH_HISTORY';
   static const String opFetchRecentTxs = 'FETCH_RECENT_TXS';
   static const String opSubscribeHistory = 'SUBSCRIBE_HISTORY';
-  static const String opUpdatePolicy = 'UPDATE_POLICY';
-  static const String opDeletePolicy = 'DELETE_POLICY';
   static const String opGetArkInfo = 'GET_ARK_INFO';
   static const String opGetArkAddress = 'GET_ARK_ADDRESS';
   static const String opGetBoardingAddress = 'GET_BOARDING_ADDRESS';
@@ -118,35 +111,4 @@ class TimestampValidationException extends AuthenticationException {
 /// Exception thrown when signature verification fails
 class SignatureVerificationException extends AuthenticationException {
   SignatureVerificationException(String message) : super(message, code: 'SIGNATURE_INVALID');
-}
-
-/// Message builder for recovery-authenticated operations (FROST-signed).
-///
-/// These messages are signed using client-only 2-of-3 FROST threshold
-/// signing (both signing + recovery key packages), proving control
-/// of both keys. The server verifies using the group public key.
-class RecoveryAuthMessage {
-  static const String protocolVersion = 'MPC_WALLET_RECOVERY_V1';
-
-  static Uint8List buildUpdatePolicyMessage({
-    required String policyId,
-    required int thresholdSats,
-    required int intervalSeconds,
-    required int timestampMs,
-    required String userIdHex,
-  }) {
-    final canonical =
-        '$protocolVersion:UPDATE_POLICY:$policyId:$thresholdSats:$intervalSeconds:$timestampMs:$userIdHex';
-    return Uint8List.fromList(sha256.convert(utf8.encode(canonical)).bytes);
-  }
-
-  static Uint8List buildDeletePolicyMessage({
-    required String policyId,
-    required int timestampMs,
-    required String userIdHex,
-  }) {
-    final canonical =
-        '$protocolVersion:DELETE_POLICY:$policyId:$timestampMs:$userIdHex';
-    return Uint8List.fromList(sha256.convert(utf8.encode(canonical)).bytes);
-  }
 }

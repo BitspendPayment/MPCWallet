@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
-import 'package:fixnum/fixnum.dart';
 import 'package:e2e/mock_fcm_server.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:hive/hive.dart';
@@ -627,53 +626,19 @@ void main() {
     expect(totalReceived, equals(sendAmount + sendAmount2),
         reason: 'Sum of receive amounts should match total sent');
 
-    // 10. Create spending policy (limit 10k sats)
-    print('10. Creating spending policy (limit 10,000 sats)');
-    const pin = '123456';
-    final limit = Int64(10000);
-    final interval = Duration(hours: 1);
-    await alice.createSpendingPolicy(interval, limit, pin);
-    print('   Policy created');
-
-    // 11. Send 20k sats WITHOUT PIN — should fail (policy triggered)
-    print('11. Send 20k WITHOUT PIN (expect failure)');
+    // 10. Third send (20k sats) — exercises spending down the change VTXO
+    print('10. Alice sends 20k to Bob');
     final sendAmount3 = 20000;
-    bool failedWithoutPin = false;
-    try {
-      final unsigned3 = await aliceArkWallet.createTransaction(
-        destination: bobArkAddress,
-        amountSats: sendAmount3,
-      );
-      final signed3 = await aliceArkWallet.signTransaction(unsigned3);
-      await aliceArkWallet.submit(signed3);
-    } catch (e) {
-      print('   Expected failure: $e');
-      failedWithoutPin = true;
-    }
-    expect(failedWithoutPin, isTrue,
-        reason: 'Should fail without PIN when policy is triggered');
-
-    // 12. Send 20k sats WITH PIN — should succeed
-    print('12. Send 20k WITH PIN');
     final unsigned4 = await aliceArkWallet.createTransaction(
       destination: bobArkAddress,
       amountSats: sendAmount3,
     );
-    final policyId = await aliceArkWallet.getPolicyId(unsigned4);
-    print('   policyId: $policyId');
-    expect(policyId, isNotEmpty,
-        reason: 'Policy should be triggered for 20k > 10k limit');
-    final signed4 = await aliceArkWallet.signTransaction(
-      unsigned4,
-      policyId: policyId,
-      pin: pin,
-    );
-    print('   Signed with PIN');
+    final signed4 = await aliceArkWallet.signTransaction(unsigned4);
     final arkTxid4 = await aliceArkWallet.submit(signed4);
     print('   Send ark_txid: $arkTxid4');
     expect(arkTxid4, isNotEmpty);
 
-    // 12b. Verify final balances
+    // 10b. Verify final balances
     final aliceFinal = await alice.listVtxos();
     final totalSent = sendAmount + sendAmount2 + sendAmount3;
     print(
@@ -692,13 +657,6 @@ void main() {
     print('   Bob final: balance=$bobFinalBalance');
     expect(bobFinalBalance, equals(totalSent),
         reason: 'Bob should have received $totalSent sats total');
-
-    // 13. The protected policy was created + enforced above (the PIN send).
-    //     Policy *management* (delete/update) is deferred in the 2-of-2 migration:
-    //     it still authorizes via the removed recovery signer (see issue #48).
-    final policy = alice.activeSpendingPolicy;
-    expect(policy, isNotNull,
-        reason: 'PIN-protected policy should have been created + enforced');
 
     print('Full Ark E2E flow complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
@@ -834,8 +792,7 @@ void main() {
   //   * VTXOs reload (`load_user_vtxos`) before the vtxo_stream catches up
   //   * Ark transaction history reloads (`load_user_ark_history`) — the
   //     previously-gone-on-restart entries we just wired up
-  //   * Policy is still discoverable via `ensure_policy_loaded` (existing
-  //     code path; this test guards against regressions)
+  //   * Per-user RPCs (getArkAddress) work again after rehydration
   test('Ark: cosigner-runtime restart preserves rehydrated state', () async {
     print('1. Alice DKG');
     final alice = createClient(storageId: "alice");
@@ -926,11 +883,11 @@ void main() {
         reason:
             'ark_tx_history should be rehydrated from sled after restart — without the new load_user_ark_history path this set would be empty');
 
-    print('7. Sanity: post-restart RPCs work (policy still loads)');
+    print('7. Sanity: post-restart per-user RPCs work');
     final addr = await alice.getArkAddress();
     expect(addr, isNotEmpty,
         reason:
-            'getArkAddress requires the policy to be loadable post-restart via ensure_policy_loaded');
+            'getArkAddress should succeed once the user actor is rehydrated post-restart');
 
     print('Restart-survival test complete!');
   }, timeout: Timeout(Duration(minutes: 4)));

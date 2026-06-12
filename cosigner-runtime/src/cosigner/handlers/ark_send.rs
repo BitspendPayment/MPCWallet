@@ -161,21 +161,6 @@ pub fn send_vtxo(
             )
             .map_err(|e| Status::internal(format!("SendSession::build: {e}")))?;
 
-            // Policy evaluation against current policy state (already loaded by
-            // get_user_xonly_pubkey).
-            let send_policy_id = user
-                .policy_state
-                .as_ref()
-                .and_then(|ps| {
-                    parsers::evaluate_policy_for_amount(ps, req.amount as i64)
-                })
-                .unwrap_or_default();
-            if !send_policy_id.is_empty() {
-                tracing::info!(
-                    "[{user_id_hex}] SendVtxo: policy triggered: {send_policy_id}"
-                );
-            }
-
             state.send_session = Some((session, change_exit_delay));
             Ok(SendVtxoResponse {
                 status: send_vtxo_response::Status::SigningRequired as i32,
@@ -183,7 +168,6 @@ pub fn send_vtxo(
                 script_path_spend: true,
                 ark_txid: String::new(),
                 error_message: String::new(),
-                policy_id: send_policy_id,
             })
         }
 
@@ -247,7 +231,6 @@ pub fn send_vtxo(
                 script_path_spend: false,
                 ark_txid,
                 error_message: String::new(),
-                policy_id: String::new(),
             })
         }
 

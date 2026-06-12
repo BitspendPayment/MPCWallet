@@ -149,9 +149,15 @@ class RestWalletApi implements WalletApi {
       'server_pk': _hex(r.serverPk),
       'exit_delay': r.exitDelay,
     });
-    // One-shot register (2-of-2): the response carries the eVTXO scriptPubKey (hex).
-    return EvtxoKeygenStep1Response()
+    // Reshare: the response carries both dealers' round1 packages (id_hex -> JSON)
+    // for dkg_part2. One-shot register (V′ == V) leaves the map empty and carries
+    // the eVTXO scriptPubKey (hex).
+    final result = EvtxoKeygenStep1Response()
       ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
+    result.round1Packages
+        .addAll((resp['round1_packages'] as Map<String, dynamic>? ?? {})
+            .map((k, v) => MapEntry(k, v.toString())));
+    return result;
   }
 
   @override
@@ -227,102 +233,6 @@ class RestWalletApi implements WalletApi {
     return SignStep2Response()
       ..rPoint = _unhex(resp['r_point'] as String?)
       ..zScalar = _unhex(resp['z_scalar'] as String?);
-  }
-
-  // -------------------------------------------------------------------------
-  // Refresh
-  // -------------------------------------------------------------------------
-
-  @override
-  Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step1', {
-      'user_id': _hex(r.userId),
-      'round1_package': r.round1Package,
-      'threshold_amount': r.thresholdAmount.toInt(),
-      'interval': r.interval.toInt(),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    final result = RefreshStep1Response()
-      ..policyId = resp['policy_id'] as String? ?? ''
-      ..startTime = Int64(resp['start_time'] as int? ?? 0);
-    result.round1Packages
-        .addAll((resp['round1_packages'] as Map<String, dynamic>? ?? {})
-            .map((k, v) => MapEntry(k, v.toString())));
-    return result;
-  }
-
-  @override
-  Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step2', {
-      'user_id': _hex(r.userId),
-      'round1_package': r.round1Package,
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return RefreshStep2Response()
-      ..allRound1Packages
-          .addAll((resp['all_round1_packages'] as Map<String, dynamic>? ?? {})
-              .map((k, v) => MapEntry(k, v.toString())));
-  }
-
-  @override
-  Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/refresh/step3', {
-      'user_id': _hex(r.userId),
-      'round2_packages_for_others':
-          r.round2PackagesForOthers.map((k, v) => MapEntry(k, v)),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return RefreshStep3Response()
-      ..round2PackagesForMe
-          .addAll((resp['round2_packages_for_me'] as Map<String, dynamic>? ?? {})
-              .map((k, v) => MapEntry(k, v.toString())));
-  }
-
-  // -------------------------------------------------------------------------
-  // Policy
-  // -------------------------------------------------------------------------
-
-  @override
-  Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/policy/get-id', {
-      'user_id': _hex(r.userId),
-      'tx_message': _hex(r.txMessage),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return GetPolicyIdResponse()
-      ..policyId = resp['policy_id'] as String? ?? '';
-  }
-
-  @override
-  Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/policy/update', {
-      'user_id': _hex(r.userId),
-      'policy_id': r.policyId,
-      'threshold_sats': r.thresholdSats.toInt(),
-      'interval_seconds': r.intervalSeconds.toInt(),
-      'frost_signature_r': _hex(r.frostSignatureR),
-      'frost_signature_z': _hex(r.frostSignatureZ),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return UpdatePolicyResponse()
-      ..success = resp['success'] as bool? ?? false;
-  }
-
-  @override
-  Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/policy/delete', {
-      'user_id': _hex(r.userId),
-      'policy_id': r.policyId,
-      'frost_signature_r': _hex(r.frostSignatureR),
-      'frost_signature_z': _hex(r.frostSignatureZ),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return DeletePolicyResponse()
-      ..success = resp['success'] as bool? ?? false;
   }
 
   // -------------------------------------------------------------------------
@@ -482,8 +392,7 @@ class RestWalletApi implements WalletApi {
           SendVtxoResponse_Status.SIGNING_REQUIRED
       ..scriptPathSpend = resp['script_path_spend'] as bool? ?? false
       ..arkTxid = resp['ark_txid'] as String? ?? ''
-      ..errorMessage = resp['error_message'] as String? ?? ''
-      ..policyId = resp['policy_id'] as String? ?? '';
+      ..errorMessage = resp['error_message'] as String? ?? '';
     for (final m in (resp['messages_to_sign'] as List? ?? [])) {
       result.messagesToSign.add(_unhex(m as String?));
     }

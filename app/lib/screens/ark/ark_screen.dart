@@ -524,7 +524,6 @@ class ArkScreen extends StatelessWidget {
       onTap: (index) {
         if (index == 0) context.go('/');
         if (index == 2) context.push('/spending/send');
-        if (index == 3) context.push('/policies');
       },
       items: const [
         BottomNavigationBarItem(
@@ -541,11 +540,6 @@ class ArkScreen extends StatelessWidget {
           icon: Icon(Icons.send_outlined),
           activeIcon: Icon(Icons.send),
           label: 'Send',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.shield_outlined),
-          activeIcon: Icon(Icons.shield),
-          label: 'Policies',
         ),
       ],
     );

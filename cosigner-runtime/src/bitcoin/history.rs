@@ -53,7 +53,7 @@ impl BitcoinHistoryService {
             .collect())
     }
 
-    /// Fetch UTXOs for a user across all policies.
+    /// Fetch UTXOs for a user's normal policy.
     /// Returns list of (tx_hash, vout, amount_sats) tuples.
     pub async fn get_utxos(
         &self,
@@ -65,12 +65,6 @@ impl BitcoinHistoryService {
         // Normal policy
         let pkp_json = &policy_state.normal_policy.public_key_package_json;
         all_utxos.extend(self.fetch_utxos_for_policy(pkp_json, &wasm_tweaked_pubkey_hex_fn).await?);
-
-        // Protected policies
-        for policy in policy_state.protected_policies.values() {
-            let pkp_json = &policy.public_key_package_json;
-            all_utxos.extend(self.fetch_utxos_for_policy(pkp_json, &wasm_tweaked_pubkey_hex_fn).await?);
-        }
 
         Ok(all_utxos)
     }

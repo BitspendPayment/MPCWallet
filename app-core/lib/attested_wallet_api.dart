@@ -80,12 +80,6 @@ class AttestedWalletApi implements WalletApi {
   @override Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request r) => _inner.evtxoKeygenStep3(r);
   @override Future<SignStep1Response> signStep1(SignStep1Request r) => _inner.signStep1(r);
   @override Future<SignStep2Response> signStep2(SignStep2Request r) => _inner.signStep2(r);
-  @override Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) => _inner.refreshStep1(r);
-  @override Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) => _inner.refreshStep2(r);
-  @override Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) => _inner.refreshStep3(r);
-  @override Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) => _inner.getPolicyId(r);
-  @override Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) => _inner.updatePolicy(r);
-  @override Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) => _inner.deletePolicy(r);
   @override Future<BroadcastTransactionResponse> broadcastTransaction(BroadcastTransactionRequest r) => _inner.broadcastTransaction(r);
   @override Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) => _inner.fetchHistory(r);
   @override Future<FetchRecentTransactionsResponse> fetchRecentTransactions(FetchRecentTransactionsRequest r) => _inner.fetchRecentTransactions(r);

@@ -18,16 +18,6 @@ service MPCWallet {
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
   rpc SignStep2 (SignStep2Request) returns (SignStep2Response);
 
-  // Refresh
-  rpc RefreshStep1 (RefreshStep1Request) returns (RefreshStep1Response);
-  rpc RefreshStep2 (RefreshStep2Request) returns (RefreshStep2Response);
-  rpc RefreshStep3 (RefreshStep3Request) returns (RefreshStep3Response);
-
-  // Policy
-  rpc GetPolicyId (GetPolicyIdRequest) returns (GetPolicyIdResponse);
-  rpc UpdatePolicy (UpdatePolicyRequest) returns (UpdatePolicyResponse);
-  rpc DeletePolicy (DeletePolicyRequest) returns (DeletePolicyResponse);
-
   // Broadcast
   rpc BroadcastTransaction (BroadcastTransactionRequest) returns (BroadcastTransactionResponse);
 
@@ -149,83 +139,6 @@ message SignStep2Response {
    bytes z_scalar = 2;
 }
 
-// Refresh Messages
-
-message RefreshStep1Request {
-  bytes user_id = 1;
-  string round1_package = 3; // JSON
-  int64 threshold_amount = 4;
-  int64 interval = 5;
-  bytes signature = 6; // Schnorr signature over auth message for authentication
-  int64 timestamp_ms = 7; // Unix timestamp in milliseconds for replay protection
-}
-
-message RefreshStep1Response {
-  map<string, string> round1_packages = 1;
-  string policy_id = 2;
-  int64 start_time = 3;
-}
-
-message RefreshStep2Request {
-  bytes user_id = 1;
-  // In DKG Step 2 we sent round1_package again, but strict state management
-  // might not need it if session is locked. We will mirror DKG for consistency.
-  string round1_package = 3;
-  bytes signature = 4; // Schnorr signature over auth message for authentication
-  int64 timestamp_ms = 5; // Unix timestamp in milliseconds for replay protection
-}
-
-message RefreshStep2Response {
-   map<string, string> all_round1_packages = 1;
-}
-
-message RefreshStep3Request {
-   bytes user_id = 1;
-   map<string, string> round2_packages_for_others = 3;
-   bytes signature = 4; // Schnorr signature over auth message for authentication
-   int64 timestamp_ms = 5; // Unix timestamp in milliseconds for replay protection
-}
-
-message RefreshStep3Response {
-    map<string, string> round2_packages_for_me = 1;
-}
-
-message GetPolicyIdRequest {
-    bytes user_id = 1;
-    bytes tx_message = 2; // Transaction bytes
-    bytes signature = 3; // Schnorr signature over auth message for authentication
-    int64 timestamp_ms = 4; // Unix timestamp in milliseconds for replay protection
-}
-
-message GetPolicyIdResponse {
-    string policy_id = 1;
-}
-
-message UpdatePolicyRequest {
-    bytes user_id = 1;
-    string policy_id = 2;
-    int64 threshold_sats = 3;
-    int64 interval_seconds = 4;
-    bytes frost_signature_r = 5;
-    bytes frost_signature_z = 6;
-    int64 timestamp_ms = 7;
-}
-
-message UpdatePolicyResponse {
-    bool success = 1;
-}
-
-message DeletePolicyRequest {
-    bytes user_id = 1;
-    string policy_id = 2;
-    bytes frost_signature_r = 3;
-    bytes frost_signature_z = 4;
-    int64 timestamp_ms = 5;
-}
-
-message DeletePolicyResponse {
-    bool success = 1;
-}
 
 message BroadcastTransactionRequest {
     bytes user_id = 1;
@@ -405,8 +318,6 @@ message SendVtxoResponse {
     string ark_txid = 4;
     // Error message when ERROR
     string error_message = 5;
-    // Policy ID if a spending policy is triggered (client must provide PIN)
-    string policy_id = 6;
 }
 
 message RedeemVtxoRequest {

@@ -5,7 +5,6 @@ import 'dart:typed_data';
 import 'package:app_core/policy.dart';
 import 'package:app_core/auth_helper.dart';
 import 'package:app_core/ark/ark_send.dart';
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:app_core/wallet_api.dart';
 import 'package:app_core/grpc_wallet_api.dart';
@@ -18,7 +17,6 @@ import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:app_core/threshold/frost/signing.dart' as frost;
 import 'package:app_core/threshold/frost/commitment.dart' as frost_comm;
 import 'package:protocol/protocol.dart';
-import 'package:crypto/crypto.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:hive/hive.dart';
 import 'dart:io';
@@ -61,7 +59,6 @@ class MpcClient {
   ClientAuthHelper? _authHelper;
 
   SpendingPolicy? _normalPolicy;
-  Map<String, ProtectedPolicy> _protectedPolicies;
 
   RecoveryPolicy? _recoveryPolicy;
 
@@ -111,8 +108,7 @@ class MpcClient {
   })  : _stub = GrpcWalletApi(channel),
         _maxSigners = maxSigners,
         _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _hardwareSigner = hardwareSigner {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -131,8 +127,7 @@ class MpcClient {
   })  : _stub = RestWalletApi(baseUrl, httpClient: httpClient),
         _maxSigners = maxSigners,
         _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _hardwareSigner = hardwareSigner {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -176,8 +171,7 @@ class MpcClient {
   })  : _stub = stub,
         _maxSigners = maxSigners,
         _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _hardwareSigner = hardwareSigner {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -218,14 +212,6 @@ class MpcClient {
 
   // Real 2-of-2: a completed DKG yields the normal policy; there is no recovery policy.
   bool get isInitialized => _normalPolicy != null;
-
-  bool get hasSpendingPolicy => _protectedPolicies.isNotEmpty;
-
-  ProtectedPolicy? get activeSpendingPolicy =>
-      _protectedPolicies.isNotEmpty ? _protectedPolicies.values.last : null;
-
-  List<ProtectedPolicy> get spendingPolicies =>
-      _protectedPolicies.values.toList();
 
   /// Restores client state from persistence.
   /// [debugState] can be provided to inject state for testing (bypassing store).
@@ -271,14 +257,6 @@ class MpcClient {
           Map<String, dynamic>.from(state['recoveryPolicy']));
     }
 
-    if (state['protectedPolicies'] != null) {
-      final pp = Map<String, dynamic>.from(state['protectedPolicies'] as Map);
-      pp.forEach((k, v) {
-        _protectedPolicies[k] =
-            ProtectedPolicy.fromJson(Map<String, dynamic>.from(v as Map));
-      });
-    }
-
     return true;
   }
 
@@ -295,10 +273,6 @@ class MpcClient {
     }
     if (_recoveryPolicy != null) {
       state['recoveryPolicy'] = _recoveryPolicy!.toJson();
-    }
-    if (_protectedPolicies.isNotEmpty) {
-      state['protectedPolicies'] =
-          _protectedPolicies.map((k, v) => MapEntry(k, v.toJson()));
     }
     await _store.saveClientState(state);
   }
@@ -521,9 +495,6 @@ class MpcClient {
         keyPackage: recoveryKeyPkg,
         publicKeyPackage: pubKeyPkg);
 
-    // Clear protected policies (verifying shares changed, old keys invalid)
-    _protectedPolicies.clear();
-
     _authHelper = ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
 
     await _saveState();
@@ -539,14 +510,16 @@ class MpcClient {
     return _normalPolicy?.publicKeyPackage;
   }
 
-  // --- REFRESH ---
+  // --- eVTXO KEY RESHARE ---
 
-  /// Register a contract eVTXO that reuses the main 2-of-2 key V — no reshare. In a
-  /// real 2-of-2 the cosigner is already mandatory for every V signature, so the
-  /// contract gate is unbypassable without a separate key. One register call: the
-  /// cosigner validates `sha256(contractWasm)==contractId`, stores the wasm, derives
-  /// the eVTXO spk from V + the ASP `serverPk`/`exitDelay`, and registers it.
-  /// Spending the cooperative leaf uses the wallet's main key package (returned).
+  /// Create a contract eVTXO key `V′` via a 2-of-2 RESHARE {author, cosigner}: the
+  /// author (this wallet) and the cosigner each deal a fresh non-zero Δ on top of
+  /// the main key V, yielding `V′ = V + Δ_author + Δ_cosigner` (≠ V) bound to the
+  /// contract. The fresh key can later be re-shared to other participants for a
+  /// multi-user contract. The cosigner validates `sha256(contractWasm)==contractId`,
+  /// stores the wasm, finalizes V′, derives + registers the eVTXO spk from V′ + the
+  /// ASP `serverPk`/`exitDelay`. Returns the spk plus the author's V′ key package +
+  /// the V′ PKP (used to spend the contract's cooperative leaf).
   Future<
       ({
         Uint8List scriptPubkey,
@@ -561,187 +534,87 @@ class MpcClient {
     if (!isInitialized || _userId == null) {
       throw StateError('Client not initialized (DKG not run).');
     }
+
+    final oldKp = _normalPolicy!.keyPackage;
+    final oldPkp = _normalPolicy!.publicKeyPackage;
+    final authorId = oldKp.identifier;
     final ts = Int64(DateTime.now().millisecondsSinceEpoch);
-    final resp = await _stub.evtxoKeygenStep1(EvtxoKeygenStep1Request()
+
+    // 1. Author deals a fresh non-zero Δ_author under its EXISTING identifier.
+    final (r1Secret, r1Pkg) = threshold.dkgResharePart1(authorId, 2, 2);
+
+    // Step 1 — send the author's round1 (dealer) + the contract/ASP params. The
+    // cosigner self-deals Δ_cosigner and returns both dealers' round1 packages.
+    final step1Resp = await _stub.evtxoKeygenStep1(EvtxoKeygenStep1Request()
       ..userId = _userId!
+      ..identifier = authorId.serialize()
+      ..round1Package = jsonEncode(r1Pkg.toJson())
       ..contractId = contractId
       ..contractWasm = contractWasm
       ..serverPk = serverPk
       ..exitDelay = exitDelay
       ..signature = Uint8List(0) // eVTXO-keygen path is unauthenticated for now
       ..timestampMs = ts);
-    return (
-      scriptPubkey: Uint8List.fromList(resp.evtxoScriptPubkey),
-      keyPackage: _normalPolicy!.keyPackage,
-      publicKeyPackage: _normalPolicy!.publicKeyPackage,
-    );
-  }
 
-  Future<void> createSpendingPolicy(
-      Duration interval, Int64 thresholdAmount, String pin) async {
-    if (!isInitialized) {
-      throw StateError("Client not initialized (DKG not run).");
-    }
-
-    final seed = sha256.convert(utf8.encode(pin)).bytes;
-
-    // Part 1: Generate Refresh Secrets
-    // We use 2-party refresh (Client + Server) for Policy Creation.
-    final refreshTotalParties = 2;
-    final refreshThreshold = 2; // 2-of-2
-
-    if (_userId == null) {
-      throw StateError("Signing secret is null, cannot proceed with refresh.");
-    }
-
-    final signingIdentifier = _normalPolicy!.keyPackage.identifier;
-
-    final (r1Sec1, r1Pub1) = threshold.dkgRefreshPart1(
-        signingIdentifier, refreshTotalParties, refreshThreshold,
-        seed: seed);
-
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot proceed with refresh.");
-    }
-
-    // Step 1: Exchange
-    final auth1 = _authHelper!.signForRefreshStep1();
-    final req1 = RefreshStep1Request()
-      ..userId = _userId!
-      ..round1Package = jsonEncode(r1Pub1.toJson())
-      ..interval = Int64(interval.inSeconds)
-      ..thresholdAmount = thresholdAmount
-      ..signature = auth1.signature
-      ..timestampMs = auth1.timestampMs;
-
-    final step1Resp = await _stub.refreshStep1(req1);
-
-    // Step 2: Shares
-    final auth2 = _authHelper!.signForRefreshStep2();
-    final req2_1 = RefreshStep2Request()
-      ..userId = _userId!
-      ..signature = auth2.signature
-      ..timestampMs = auth2.timestampMs;
-
-    await _stub.refreshStep2(req2_1);
-
-    // Parse R1 packages (includes server's)
-    final round1PkgsMap1 = <threshold.Identifier, threshold.Round1Package>{};
-
+    // The cosigner's round1 package (the other dealer).
+    final round1Pkgs = <threshold.Identifier, threshold.Round1Package>{};
     step1Resp.round1Packages.forEach((k, v) {
-      final id_temp = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      if (id_temp != signingIdentifier) round1PkgsMap1[id_temp] = pkg;
+      if (v.isEmpty) return;
+      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
+      if (id == authorId) return; // skip our own
+      round1Pkgs[id] = threshold.Round1Package.fromJson(jsonDecode(v));
     });
 
-    // Compute shares
-    final (r2Sec1, sharesFrom1) =
-        threshold.dkgRefreshPart2(r1Sec1, round1PkgsMap1);
+    // Author computes its round2 share for the cosigner.
+    final (r2Secret, sharesFromAuthor) =
+        threshold.dkgPart2(r1Secret, round1Pkgs);
 
-    // Step 3: Finalize
-    final auth3 = _authHelper!.signForRefreshStep3();
-    final req3_1 = RefreshStep3Request()
+    // Step 2 — trigger the cosigner to compute its round2 share for the author.
+    await _stub.evtxoKeygenStep2(EvtxoKeygenStep2Request()
       ..userId = _userId!
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFrom1))
-      ..signature = auth3.signature
-      ..timestampMs = auth3.timestampMs;
+      ..identifier = authorId.serialize()
+      ..signature = Uint8List(0)
+      ..timestampMs = ts);
 
-    final step3Resp1 = await _stub.refreshStep3(req3_1);
+    // Step 3 — send the author's round2 share; the cosigner finalizes V′, registers
+    // the eVTXO, and returns its round2 share for the author + the spk.
+    final step3Resp = await _stub.evtxoKeygenStep3(EvtxoKeygenStep3Request()
+      ..userId = _userId!
+      ..identifier = authorId.serialize()
+      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromAuthor))
+      ..signature = Uint8List(0)
+      ..timestampMs = ts);
 
-    final sharesForMe1 = _parseShares(step3Resp1.round2PackagesForMe);
-
-    final normalKeyPackage1 = _normalPolicy!.keyPackage;
-    final normalPubPackage = _normalPolicy!.publicKeyPackage;
-
-    final (keyPkg1, pubKeyPkg1) = threshold.dkgRefreshPart3(r2Sec1,
-        round1PkgsMap1, sharesForMe1, normalPubPackage, normalKeyPackage1);
-
-    // Compute protected key for Identity 1
-    // myUpdate is evaluatePolynomial(myId, coeffs)
-    final myUpdate =
-        threshold.evaluatePolynomial(signingIdentifier, r1Sec1.coefficients);
-    final newSecret = keyPkg1.secretShare;
-
-    var diff = (newSecret - myUpdate);
-
-    final protectedKeyPkg = threshold.KeyPackage(
-      keyPkg1.identifier,
-      diff, // Cleared
-      keyPkg1.verifyingShare,
-      keyPkg1.verifyingKey,
-      keyPkg1.minSigners,
+    // Author finalizes the reshare → its V′ key package + the V′ PKP. Final
+    // shareholders = both dealers {author, cosigner}.
+    final sharesForAuthor = _parseShares(step3Resp.round2PackagesForMe);
+    final finalIds = <threshold.Identifier>[authorId, ...round1Pkgs.keys];
+    final (evtxoKp, evtxoPkp) = threshold.dkgResharePart3(
+      r2Secret,
+      round1Pkgs,
+      sharesForAuthor,
+      oldPkp,
+      oldKp,
+      finalIds,
     );
 
-    _protectedPolicies[step1Resp.policyId] = ProtectedPolicy(
-      id: step1Resp.policyId,
-      keyPackage: protectedKeyPkg,
-      publicKeyPackage: pubKeyPkg1,
-      startTime:
-          DateTime.fromMillisecondsSinceEpoch(step1Resp.startTime.toInt()),
-      interval: interval,
-      thresholdSats: thresholdAmount.toInt(),
+    return (
+      scriptPubkey: Uint8List.fromList(step3Resp.evtxoScriptPubkey),
+      keyPackage: evtxoKp,
+      publicKeyPackage: evtxoPkp,
     );
-    await _saveState();
   }
+
 
   // --- SIGNING ---
-  Future<String> getPolicyId(Uint8List message) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot get Policy ID.");
-    }
-
-    final auth = _authHelper!.signForGetPolicyId();
-    final response = await _stub.getPolicyId(GetPolicyIdRequest()
-      ..userId = _userId!
-      ..txMessage = message
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-    return response.policyId;
-  }
 
   Future<threshold.Signature> sign(Uint8List message,
-      {String? pin,
-      String? policyId,
-      List<int>? fullTransaction,
-      bool applyTweak = true}) async {
-    var keyPackage = _normalPolicy!.keyPackage;
-    var groupPubKey = _normalPolicy!.publicKeyPackage;
+      {List<int>? fullTransaction, bool applyTweak = true}) async {
+    final keyPackage = _normalPolicy!.keyPackage;
+    final groupPubKey = _normalPolicy!.publicKeyPackage;
 
     if (_userId == null) {
       throw StateError("User ID is null, cannot proceed with signing.");
-    }
-
-    final signingIdentifier = _normalPolicy!.keyPackage.identifier;
-
-    if (policyId != null &&
-        _protectedPolicies.containsKey(policyId) &&
-        pin != null) {
-      final protectedPolicy = _protectedPolicies[policyId];
-
-      final minSigners = 2; // Matched with createSpendingPolicy
-
-      final seed = sha256.convert(utf8.encode(pin)).bytes;
-
-      // Re-run part 1 logic to reliably recover the polynomial
-      final (r1Sec, _) = threshold.dkgRefreshPart1(
-          signingIdentifier, minSigners, minSigners,
-          seed: seed);
-
-      final myUpdate =
-          threshold.evaluatePolynomial(signingIdentifier, r1Sec.coefficients);
-
-      final partialShare = protectedPolicy!.keyPackage.secretShare;
-      final correctedShare = (partialShare + myUpdate);
-
-      keyPackage = threshold.KeyPackage(
-        protectedPolicy.keyPackage.identifier,
-        correctedShare,
-        protectedPolicy.keyPackage.verifyingShare,
-        protectedPolicy.keyPackage.verifyingKey,
-        protectedPolicy.keyPackage.minSigners,
-      );
-
-      groupPubKey = protectedPolicy.publicKeyPackage;
     }
 
     return signWithContext(
@@ -831,136 +704,6 @@ class MpcClient {
     return signature.verify(pubPackage.verifyingKey, message);
   }
 
-  // --- RECOVERY SIGNING (Client-only 2-of-3 FROST) ---
-
-  /// Produces a FROST threshold signature using both client key packages
-  /// (signing + recovery identity) without server participation.
-  /// No taproot tweak is applied — this is for auth, not Bitcoin transactions.
-  ///
-  /// When a hardware signer is configured, the recovery identity's nonce
-  /// generation and signing are delegated to the hardware device.
-  /// FROST sign with both keys: signing identity (local) + recovery identity
-  /// (hardware signer). No taproot tweak — used for auth, not Bitcoin txs.
-  Future<threshold.Signature> _frostSignWithBothKeys(Uint8List message) async {
-    if (!isInitialized) {
-      throw StateError("Client not initialized (DKG not run).");
-    }
-
-    final signer = _requireSigner('_frostSignWithBothKeys');
-    final keyPkg1 = _normalPolicy!.keyPackage;
-    final recoveryId = _recoveryPolicy!.keyPackage.identifier;
-    final groupPubKey = _normalPolicy!.publicKeyPackage;
-
-    // 1. Hardware signer generates nonce for recovery identity
-    final recoveryCommitments = await signer.generateNonce();
-
-    // 2. Generate signing identity nonce locally
-    final nonce1 = frost_comm.newNonce(keyPkg1.secretShare);
-
-    // 3. Build commitments map with both identities
-    final commitmentsMap = <threshold.Identifier, frost_comm.SigningCommitments>{
-      keyPkg1.identifier: nonce1.commitments,
-      recoveryId: recoveryCommitments,
-    };
-
-    // 4. Create signing package
-    final signingPkg = frost_comm.SigningPackage(commitmentsMap, message);
-
-    // 5. Hardware signer produces recovery share (no taproot tweak)
-    final recoveryShareScalar = await signer.sign(
-      message: message,
-      commitments: commitmentsMap,
-      applyTweak: false,
-    );
-
-    // 6. Compute signing identity share locally
-    final share1 = frost.sign(signingPkg, nonce1, keyPkg1);
-
-    // 7. Aggregate both shares
-    final sharesMap = <threshold.Identifier, frost.SignatureShare>{
-      keyPkg1.identifier: share1,
-      recoveryId: frost.SignatureShare(recoveryShareScalar),
-    };
-
-    return frost.aggregate(signingPkg, sharesMap, groupPubKey);
-  }
-
-  // --- POLICY MANAGEMENT ---
-
-  Future<void> updatePolicy(String policyId,
-      {int? thresholdSats, int? intervalSeconds}) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot update policy.");
-    }
-    if (!_protectedPolicies.containsKey(policyId)) {
-      throw StateError("Policy $policyId not found.");
-    }
-
-    final existing = _protectedPolicies[policyId]!;
-    final newThreshold = thresholdSats ?? existing.thresholdSats;
-    final newInterval = intervalSeconds ?? existing.interval.inSeconds;
-    final timestampMs = DateTime.now().millisecondsSinceEpoch;
-
-    final message = threshold.RecoveryAuthMessage.buildUpdatePolicyMessage(
-      policyId: policyId,
-      thresholdSats: newThreshold,
-      intervalSeconds: newInterval,
-      timestampMs: timestampMs,
-      userIdHex: hex.encode(_userId!),
-    );
-
-    final signature = await _frostSignWithBothKeys(message);
-
-    await _stub.updatePolicy(UpdatePolicyRequest()
-      ..userId = _userId!
-      ..policyId = policyId
-      ..thresholdSats = Int64(newThreshold)
-      ..intervalSeconds = Int64(newInterval)
-      ..frostSignatureR = signature.serialize().sublist(0, 32)
-      ..frostSignatureZ = signature.serialize().sublist(32, 64)
-      ..timestampMs = Int64(timestampMs));
-
-    // Update local state
-    _protectedPolicies[policyId] = ProtectedPolicy(
-      id: policyId,
-      keyPackage: existing.keyPackage,
-      publicKeyPackage: existing.publicKeyPackage,
-      startTime: existing.startTime,
-      interval: Duration(seconds: newInterval),
-      thresholdSats: newThreshold,
-    );
-    await _saveState();
-  }
-
-  Future<void> deletePolicy(String policyId) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot delete policy.");
-    }
-    if (!_protectedPolicies.containsKey(policyId)) {
-      throw StateError("Policy $policyId not found.");
-    }
-
-    final timestampMs = DateTime.now().millisecondsSinceEpoch;
-
-    final message = threshold.RecoveryAuthMessage.buildDeletePolicyMessage(
-      policyId: policyId,
-      timestampMs: timestampMs,
-      userIdHex: hex.encode(_userId!),
-    );
-
-    final signature = await _frostSignWithBothKeys(message);
-
-    await _stub.deletePolicy(DeletePolicyRequest()
-      ..userId = _userId!
-      ..policyId = policyId
-      ..frostSignatureR = signature.serialize().sublist(0, 32)
-      ..frostSignatureZ = signature.serialize().sublist(32, 64)
-      ..timestampMs = Int64(timestampMs));
-
-    // Update local state
-    _protectedPolicies.remove(policyId);
-    await _saveState();
-  }
 
   // Helpers
   Map<String, String> _buildSharesMap(
@@ -1060,8 +803,7 @@ class MpcClient {
   /// 2-round flow:
   /// Phase 1: get sighashes (ark tx + checkpoint tx inputs)
   /// Phase 2: send FROST signatures, server submits to ASP + finalizes
-  Future<String> sendVtxo(String recipientArkAddress, int amountSats,
-      {String? policyId, String? pin}) async {
+  Future<String> sendVtxo(String recipientArkAddress, int amountSats) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot send VTXO.");
     }
@@ -1117,15 +859,12 @@ class MpcClient {
     );
 
     try {
-      // 6. FROST sign each sighash via sign() which handles client-side policy
-      //    key correction. Pass real PSBT bytes as fullTransaction so the server
-      //    independently evaluates the same net spend for policy selection.
+      // 6. FROST sign each sighash. Pass real PSBT bytes as fullTransaction so
+      //    the server independently evaluates the same net spend.
       final sigHexes = <String>[];
       for (final sighash in session.sighashes) {
         final sig = await sign(
           sighash,
-          policyId: policyId,
-          pin: pin,
           fullTransaction: session.arkTxBytes,
           applyTweak: false, // script-path spend
         );
@@ -1237,10 +976,7 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // Settling always signs with the normal policy KP. Server-side
-          // SignStep1 forces this when a settle session is active, so
-          // passing pin/policyId here would only cause a key mismatch
-          // and a FROST aggregation failure.
+          // Settling always signs with the normal policy KP.
           final sig = await sign(
             sighashBytes,
             applyTweak: !scriptPath,
@@ -1408,7 +1144,7 @@ class MpcClient {
     }
 
     if (_stub is GrpcWalletApi) {
-      final grpc = _stub as GrpcWalletApi;
+      final grpc = _stub;
       final auth = _authHelper!.signForSubscribeHistory();
       return grpc.subscribeToHistory(SubscribeToHistoryRequest()
         ..userId = _userId!

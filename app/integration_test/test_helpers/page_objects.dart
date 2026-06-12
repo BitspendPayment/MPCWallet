@@ -117,14 +117,6 @@ class HomePage {
     await tester.pump();
   }
 
-  static Future<void> tapPoliciesTab(WidgetTester tester) async {
-    await tester.tap(find.descendant(
-      of: find.byType(BottomNavigationBar),
-      matching: find.text('Policies'),
-    ));
-    await tester.pump();
-  }
-
   /// Tap the 'Home' bottom-nav item. No-op on the Home screen itself; from
   /// the Ark screen it `context.go('/')` (replacing the stack).
   static Future<void> tapHomeTab(WidgetTester tester) async {
@@ -133,65 +125,6 @@ class HomePage {
       matching: find.text('Home'),
     ));
     await tester.pumpAndSettle();
-  }
-}
-
-class PoliciesPage {
-  static Future<void> tapAdd(WidgetTester tester) =>
-      _tapKey(tester, 'addPolicyBtn');
-  static Future<void> tapDelete(WidgetTester tester, {int index = 0}) =>
-      _tapKey(tester, 'deletePolicyBtn_$index');
-  static Future<void> confirmDelete(WidgetTester tester) =>
-      _tapKey(tester, 'confirmDeletePolicyBtn');
-}
-
-class RecoveryPasswordDialog {
-  static Future<void> enterAndOk(WidgetTester tester, String password) async {
-    await _enterText(tester, 'recoveryPasswordField', password);
-    await _dismissKeyboard(tester);
-    await _tapKey(tester, 'recoveryPasswordOkBtn');
-  }
-}
-
-class EditPolicyPage {
-  static Future<void> dragThresholdToMin(WidgetTester tester) async {
-    await tester.drag(
-      find.byKey(const Key('thresholdSlider')),
-      const Offset(-1000, 0),
-    );
-    await tester.pump();
-  }
-
-  /// Pick an interval segment by its visible label, e.g. '30 Sec' or 'Daily'.
-  static Future<void> pickInterval(WidgetTester tester, String label) async {
-    await tester.tap(find.descendant(
-      of: find.byKey(const Key('policyIntervalSelector')),
-      matching: find.text(label),
-    ));
-    await tester.pumpAndSettle();
-  }
-
-  static Future<void> tapSave(WidgetTester tester) =>
-      _tapKey(tester, 'createPolicyBtn');
-
-  static Future<void> enterPinAndAuthorize(
-    WidgetTester tester,
-    String pin,
-  ) async {
-    await _enterText(tester, 'createPolicyPinField', pin);
-    await _dismissKeyboard(tester);
-    await _tapKey(tester, 'createPolicyAuthorizeBtn');
-  }
-}
-
-class SigningPinDialog {
-  static Future<void> enterAndAuthorize(
-    WidgetTester tester,
-    String pin,
-  ) async {
-    await _enterText(tester, 'signingPinField', pin);
-    await _dismissKeyboard(tester);
-    await _tapKey(tester, 'signingAuthorizeBtn');
   }
 }
 
@@ -234,16 +167,6 @@ class ArkBoardPage {
       find.text('Board Now'),
       timeout: timeout,
     );
-  }
-
-  /// Fill the PIN that pops up when an active policy gates boarding.
-  static Future<void> enterBoardingPinAndAuthorize(
-    WidgetTester tester,
-    String pin,
-  ) async {
-    await _enterText(tester, 'boardingPinField', pin);
-    await _dismissKeyboard(tester);
-    await _tapKey(tester, 'boardingAuthorizeBtn');
   }
 }
 

@@ -167,12 +167,5 @@ fn build_tweaked_map(
     let vk = parsers::extract_verifying_key(&tweaked)?;
     map.insert(ps.normal_policy.public_key_package_json.clone(), vk);
 
-    for pp in ps.protected_policies.values() {
-        let tweaked = crypto_ops::pub_key_package_tweak(user, &pp.public_key_package_json, None)
-            .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
-        let vk = parsers::extract_verifying_key(&tweaked)?;
-        map.insert(pp.public_key_package_json.clone(), vk);
-    }
-
     Ok((ps, map))
 }

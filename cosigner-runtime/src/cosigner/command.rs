@@ -14,16 +14,6 @@ pub enum CosignerCommand {
     SignStep1 { req: SignStep1Request, reply: Reply<SignStep1Response> },
     SignStep2 { req: SignStep2Request, reply: Reply<SignStep2Response> },
 
-    // --- Refresh ---
-    RefreshStep1 { req: RefreshStep1Request, reply: Reply<RefreshStep1Response> },
-    RefreshStep2 { req: RefreshStep2Request, reply: Reply<RefreshStep2Response> },
-    RefreshStep3 { req: RefreshStep3Request, reply: Reply<RefreshStep3Response> },
-
-    // --- Policy ---
-    GetPolicyId { req: GetPolicyIdRequest, reply: Reply<GetPolicyIdResponse> },
-    UpdatePolicy { req: UpdatePolicyRequest, reply: Reply<UpdatePolicyResponse> },
-    DeletePolicy { req: DeletePolicyRequest, reply: Reply<DeletePolicyResponse> },
-
     // --- Transactions ---
     BroadcastTransaction { req: BroadcastTransactionRequest, reply: Reply<BroadcastTransactionResponse> },
     FetchHistory { req: FetchHistoryRequest, reply: Reply<FetchHistoryResponse> },

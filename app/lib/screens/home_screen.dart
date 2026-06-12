@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import 'package:app/services/mpc_service.dart';
 import 'package:app/widgets/attestation_status.dart';
 import 'package:intl/intl.dart';
-import 'package:protocol/protocol.dart' as proto;
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -130,7 +129,6 @@ class HomeScreen extends StatelessWidget {
         onTap: (index) {
           if (index == 1) context.go('/ark');
           if (index == 2) context.push('/spending/send');
-          if (index == 3) context.push('/policies');
         },
         items: const [
           BottomNavigationBarItem(
@@ -147,11 +145,6 @@ class HomeScreen extends StatelessWidget {
             icon: Icon(Icons.send_outlined),
             activeIcon: Icon(Icons.send),
             label: 'Send',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.shield_outlined),
-            activeIcon: Icon(Icons.shield),
-            label: 'Policies',
           ),
         ],
       ),

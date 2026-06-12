@@ -8,7 +8,6 @@ import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
-import 'package:fixnum/fixnum.dart';
 
 void main() {
   Process? serverProcess;
@@ -171,7 +170,7 @@ void main() {
     );
   }
 
-  test('Full E2E Regtest Flow with Policies', () async {
+  test('Full E2E Regtest Flow', () async {
     // 1. MPC Setup
     Log.step(1, 'MPC Setup');
     final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
@@ -246,79 +245,18 @@ void main() {
     Log.ok('Broadcast · txid: $tx1Id');
     await btc.generateToAddress(1, minerAddr);
     await waitForUtxoByTxId(wallet, tx1Id);
-
-    // 6. Create Spending Policy
-    Log.step(5, 'Creating Spending Policy (limit: 50,000 sats)');
-    final interval = Duration(hours: 1);
-    const pin = "123456";
-    final limit = Int64(50000);
-
-    await client1.createSpendingPolicy(interval, limit, pin);
-    Log.ok('Spending policy created (PIN-protected).');
-
-    // 7. Attempt Spend exceeding limit (should fail)
-    Log.step(6, 'Attempting Over-Limit Spend (60,000 sats) — expect failure');
-    bool failed = false;
-    try {
-      final dest2 = await btc.getNewAddress();
-      final unsignedTx2 = await wallet.createTransaction(
-          destination: dest2, amount: BigInt.from(60000), feeRate: 1);
-      await wallet.signTransaction(unsignedTx2);
-    } catch (e) {
-      Log.warn('Expected failure caught: $e');
-      failed = true;
-    }
-    expect(failed, isTrue, reason: "Transaction should fail without PIN");
-
-    // 8. Spend with PIN
-    Log.step(7, 'Spending with PIN (60,000 sats)');
-    await waitForUtxoByTxId(wallet, tx1Id);
-
-    final dest3 = await btc.getNewAddress();
-    final unsignedTx2 = await wallet.createTransaction(
-        destination: dest3, amount: BigInt.from(60000), feeRate: 1);
-    final policyId = await wallet.getPolicyId(unsignedTx2);
-    final hexTx2 =
-        await wallet.signTransaction(unsignedTx2, policyId: policyId, pin: pin);
-    final tx2Id = await wallet.broadcast(hexTx2);
-    Log.ok('Broadcast · txid: $tx2Id');
-    await btc.generateToAddress(1, minerAddr);
-
-    await waitForUtxoByTxId(wallet, tx2Id);
     await wallet.sync();
 
     final balance = await wallet.store
         .getUtxos()
         .then((l) => l.fold(BigInt.zero, (s, u) => s + u.utxo.value).toInt());
-    Log.info('Final balance: $balance sats');
+    Log.info('Balance after spend: $balance sats');
 
-    final res = await btc.getRawTransaction(tx2Id);
+    final res = await btc.getRawTransaction(tx1Id);
     expect(res['confirmations'], 1);
 
-    // 9. Delete Spending Policy
-    Log.step(8, 'Deleting Spending Policy');
-    final policy = client1.activeSpendingPolicy;
-    expect(policy, isNotNull, reason: "Should have an active policy to delete");
-    await client1.deletePolicy(policy!.id);
-    expect(client1.hasSpendingPolicy, isFalse,
-        reason: "Policy should be removed after deletion");
-    Log.ok('Policy deleted: ${policy.id}');
-
-    // 10. Verify spend works without PIN after policy deletion
-    Log.step(9, 'Spending without PIN after policy deletion (should succeed)');
-    await waitForUtxoByTxId(wallet, tx2Id);
-    await wallet.sync();
-    final dest5 = await btc.getNewAddress();
-    final unsignedTx4 = await wallet.createTransaction(
-        destination: dest5, amount: BigInt.from(60000), feeRate: 1);
-    final hexTx4 = await wallet.signTransaction(unsignedTx4);
-    final tx4Id = await wallet.broadcast(hexTx4);
-    Log.ok('Broadcast: $tx4Id');
-    await btc.generateToAddress(1, minerAddr);
-    await waitForUtxoByTxId(wallet, tx4Id);
-
-    // 11. Restore wallet (simulate new phone)
-    Log.step(10, 'Restoring Wallet via re-DKG');
+    // 6. Restore wallet (simulate new phone)
+    Log.step(5, 'Restoring Wallet via re-DKG');
     final originalAddress = address;
     final client2 = createClient(signer, storageId: 'restore_e2e');
     await client2.doRestore();
@@ -331,9 +269,9 @@ void main() {
     expect(restoredAddress, equals(originalAddress),
         reason: "Restored wallet must have the same Bitcoin address");
 
-    // 12. Sync restored wallet
+    // 7. Sync restored wallet
     await Future.delayed(Duration(seconds: 2));
-    Log.step(11, 'Syncing Restored Wallet');
+    Log.step(6, 'Syncing Restored Wallet');
     int syncRetries = 30;
     while (syncRetries > 0) {
       try {
@@ -357,8 +295,8 @@ void main() {
         restoredUtxos.fold(BigInt.zero, (s, u) => s + u.utxo.value);
     Log.ok('Restored balance: $restoredBalance sats');
 
-    // 13. Sign with restored wallet
-    Log.step(12, 'Signing Transaction with Restored Wallet');
+    // 8. Sign with restored wallet
+    Log.step(7, 'Signing Transaction with Restored Wallet');
     final dest4 = await btc.getNewAddress();
     final unsignedTx3 = await wallet2.createTransaction(
         destination: dest4, amount: BigInt.from(10000), feeRate: 1);
@@ -374,139 +312,5 @@ void main() {
 
     Log.separator();
     Log.ok('All tests passed.');
-  }, timeout: Timeout(Duration(minutes: 10)));
-
-  test('Policy: Cumulative spending within window', () async {
-    // This test verifies that the policy engine correctly tracks cumulative
-    // spending across multiple transactions within the same time window.
-    //
-    // Bug scenario: 50,000 sat policy limit
-    //   - Spend 20,000 sats → under limit, goes through with normal policy
-    //   - Spend 31,000 sats → cumulative 51,000 > 50,000, SHOULD require PIN
-    //   - Previously the second spend also went through without PIN
-
-    print('=== Policy Cumulative Spending Test ===');
-
-    // 1. Setup fresh client
-    print('1. MPC Setup');
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = createClient(signer, storageId: 'policy_cumulative');
-
-    await client.doDkg();
-    print('   DKG Complete');
-
-    final wallet = MpcBitcoinWallet(client, networkName: 'regtest');
-    await wallet.init();
-    final address = wallet.toAddress();
-    print('   Wallet Address: $address');
-
-    // 2. Fund wallet generously
-    print('2. Funding wallet');
-    final minerAddr = await btc.getNewAddress();
-    // Mine blocks to ensure miner has enough to send
-    await btc.generateToAddress(10, minerAddr);
-
-    final txId = await btc.sendToAddress(address, 0.5); // 50,000,000 sats
-    await btc.generateToAddress(1, minerAddr);
-    print('   Funded with $txId');
-
-    // 3. Sync wallet
-    print('3. Syncing wallet');
-    int retries = 30;
-    while (retries > 0) {
-      await wallet.sync();
-      final utxos = await wallet.store.getUtxos();
-      if (utxos.isNotEmpty) break;
-      print('   Waiting for UTXO... ($retries left)');
-      retries--;
-      if (retries > 0) await Future.delayed(Duration(seconds: 2));
-    }
-    final utxos = await wallet.store.getUtxos();
-    expect(utxos.length, greaterThanOrEqualTo(1));
-    final bal = utxos.fold(BigInt.zero, (s, u) => s + u.utxo.value);
-    print('   Balance: $bal sats');
-
-    // 4. Create spending policy: 50,000 sat limit, 1 hour window
-    print('4. Creating spending policy (50,000 sat limit, 1h window)');
-    const pin = "654321";
-    await client.createSpendingPolicy(Duration(hours: 1), Int64(50000), pin);
-    expect(client.hasSpendingPolicy, isTrue);
-    print('   Policy created');
-
-    // 5. First spend: 20,000 sats — under limit, should succeed without PIN
-    print('5. First spend: 20,000 sats (under limit, no PIN)');
-    final dest1 = await btc.getNewAddress();
-    final unsigned1 = await wallet.createTransaction(
-        destination: dest1, amount: BigInt.from(20000), feeRate: 1);
-    final hex1 = await wallet.signTransaction(unsigned1);
-    final tx1 = await wallet.broadcast(hex1);
-    print('   Broadcast: $tx1');
-    await btc.generateToAddress(1, minerAddr);
-    await waitForUtxoByTxId(wallet, tx1);
-
-    // 6. Second spend: 31,000 sats — cumulative 51,000 > 50,000, should FAIL without PIN
-    print('6. Second spend: 31,000 sats (cumulative 51k > 50k limit, no PIN — expect failure)');
-    await wallet.sync();
-    bool secondSpendFailed = false;
-    try {
-      final dest2 = await btc.getNewAddress();
-      final unsigned2 = await wallet.createTransaction(
-          destination: dest2, amount: BigInt.from(31000), feeRate: 1);
-      await wallet.signTransaction(unsigned2);
-    } catch (e) {
-      print('   Expected failure: $e');
-      secondSpendFailed = true;
-    }
-    expect(secondSpendFailed, isTrue,
-        reason: "Second spend should fail without PIN because cumulative (20k+31k=51k) exceeds 50k limit");
-
-    // 7. Same spend with PIN — should succeed
-    print('7. Second spend: 31,000 sats WITH PIN (should succeed)');
-    final dest3 = await btc.getNewAddress();
-    final unsigned3 = await wallet.createTransaction(
-        destination: dest3, amount: BigInt.from(31000), feeRate: 1);
-    final policyId = await wallet.getPolicyId(unsigned3);
-    final hex3 = await wallet.signTransaction(unsigned3, policyId: policyId, pin: pin);
-    final tx3 = await wallet.broadcast(hex3);
-    print('   Broadcast: $tx3');
-    await btc.generateToAddress(1, minerAddr);
-    await waitForUtxoByTxId(wallet, tx3);
-
-    // 8. Third spend: small amount — cumulative now ~82k, any spend should require PIN
-    print('8. Third spend: 5,000 sats (cumulative ~82k > 50k, no PIN — expect failure)');
-    await wallet.sync();
-    bool thirdSpendFailed = false;
-    try {
-      final dest4 = await btc.getNewAddress();
-      final unsigned4 = await wallet.createTransaction(
-          destination: dest4, amount: BigInt.from(5000), feeRate: 1);
-      await wallet.signTransaction(unsigned4);
-    } catch (e) {
-      print('   Expected failure: $e');
-      thirdSpendFailed = true;
-    }
-    expect(thirdSpendFailed, isTrue,
-        reason: "Any spend should require PIN when cumulative already exceeds limit");
-
-    // 9. Under-limit spend after policy deletion should work
-    print('9. Delete policy, then spend without PIN');
-    final activePolicy = client.activeSpendingPolicy!;
-    await client.deletePolicy(activePolicy.id);
-    expect(client.hasSpendingPolicy, isFalse);
-
-    final dest5 = await btc.getNewAddress();
-    final unsigned5 = await wallet.createTransaction(
-        destination: dest5, amount: BigInt.from(5000), feeRate: 1);
-    final hex5 = await wallet.signTransaction(unsigned5);
-    final tx5 = await wallet.broadcast(hex5);
-    print('   Broadcast: $tx5');
-    await btc.generateToAddress(1, minerAddr);
-
-    await Future.delayed(Duration(seconds: 2));
-    final res = await btc.getRawTransaction(tx5);
-    expect(res['confirmations'], 1);
-
-    print('=== Policy Cumulative Spending Test Complete ===');
   }, timeout: Timeout(Duration(minutes: 10)));
 }

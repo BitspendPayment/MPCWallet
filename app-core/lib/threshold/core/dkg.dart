@@ -722,6 +722,60 @@ PublicKeyPackage pkpFromCommitment(
   }
 }
 
+/// eVTXO reshare finalizer for a DEALER (the author): combine this dealer's own
+/// dealing ([r2Secret] handle) with the peer dealers' [round1Pkgs] and the shares
+/// dealt to this dealer ([round2Pkgs]), plus the old share, into the new 2-of-2
+/// `V′` key package + PKP. `receiverIdentifiers` is the NEW shareholder set
+/// ({author, cosigner}). Mirrors [dkgResharePart3Receive] for the dealing side.
+(KeyPackage, PublicKeyPackage) dkgResharePart3(
+  Round2SecretPackage r2Secret,
+  Map<Identifier, Round1Package> round1Pkgs,
+  Map<Identifier, Round2Package> round2Pkgs,
+  PublicKeyPackage oldPkp,
+  KeyPackage oldKp,
+  List<Identifier> receiverIdentifiers,
+) {
+  final round1Json = _encodeR1PkgsJson(round1Pkgs);
+  final round2Json = _encodeR2PkgsJson(round2Pkgs);
+  final receiverIdsJson = _encodeIdentifierListJson(receiverIdentifiers);
+  final oldPkpJson = jsonEncode(oldPkp.toJson());
+  final oldKpJson = jsonEncode(oldKp.toJson());
+
+  final round1Ptr = round1Json.toNativeUtf8();
+  final round2Ptr = round2Json.toNativeUtf8();
+  final oldPkpPtr = oldPkpJson.toNativeUtf8();
+  final oldKpPtr = oldKpJson.toNativeUtf8();
+  final receiverIdsPtr = receiverIdsJson.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      dkgResharePart3Ffi(
+        r2Secret.handle,
+        round1Ptr,
+        round2Ptr,
+        oldPkpPtr,
+        oldKpPtr,
+        receiverIdsPtr,
+      ),
+    );
+
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final kp = KeyPackage.fromJson(
+      parsed['key_package'] as Map<String, dynamic>,
+    );
+    final pkp = PublicKeyPackage.fromJson(
+      parsed['public_key_package'] as Map<String, dynamic>,
+    );
+
+    return (kp, pkp);
+  } finally {
+    calloc.free(round1Ptr);
+    calloc.free(round2Ptr);
+    calloc.free(oldPkpPtr);
+    calloc.free(oldKpPtr);
+    calloc.free(receiverIdsPtr);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal JSON helpers
 // ---------------------------------------------------------------------------

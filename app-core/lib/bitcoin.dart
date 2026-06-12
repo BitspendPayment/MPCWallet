@@ -318,19 +318,8 @@ class MpcBitcoinWallet {
     return UnsignedTransaction(txPointer, sighashes);
   }
 
-  /// Retrieves the Policy ID for a given UnsignedTransaction by verifying/calculating spend amounts on the server.
-  Future<String> getPolicyId(UnsignedTransaction unsigned) async {
-    final txPointer = unsigned.btcTransaction;
-    final fullTxHex = txPointer.serialize();
-    final fullTxBytes = hex.decode(fullTxHex);
-    return await client.getPolicyId(Uint8List.fromList(fullTxBytes));
-  }
-
   /// Signs an unsigned transaction using the MPC client.
-  /// If [pin] is provided, it attempts to resolve the Policy ID from the server
-  /// (unless [policyId] is explicitly provided) and sign using the protected policy flow.
-  Future<String> signTransaction(UnsignedTransaction unsigned,
-      {String? pin, String? policyId}) async {
+  Future<String> signTransaction(UnsignedTransaction unsigned) async {
     final txPointer = unsigned.btcTransaction;
     final sighashes = unsigned.sighashes;
 
@@ -338,11 +327,8 @@ class MpcBitcoinWallet {
       throw StateError("Sighash count mismatch");
     }
 
-    String? resolvedPolicyId = policyId;
-    List<int>? fullTxBytes;
-
     final fullTxHex = txPointer.serialize();
-    fullTxBytes = hex.decode(fullTxHex);
+    final fullTxBytes = hex.decode(fullTxHex);
 
     // 4. Sign Asynchronously
     final witnesses = <TxWitnessInput>[];
@@ -353,8 +339,6 @@ class MpcBitcoinWallet {
 
       final signature = await client.sign(
         sighashUint8,
-        pin: pin,
-        policyId: resolvedPolicyId,
         fullTransaction: fullTxBytes,
       );
 
@@ -578,8 +562,6 @@ class MpcBitcoinWallet {
   Future<String> signScriptPathTransaction(
     UnsignedScriptPathTransaction unsigned, {
     List<String>? serverSignatures,
-    String? pin,
-    String? policyId,
   }) async {
     final tx = unsigned.btcTransaction;
     final sighashes = unsigned.sighashes;
@@ -604,8 +586,6 @@ class MpcBitcoinWallet {
       // MPC sign without taproot tweak (script-path)
       final signature = await client.sign(
         sighashUint8,
-        pin: pin,
-        policyId: policyId,
         applyTweak: false,
       );
 

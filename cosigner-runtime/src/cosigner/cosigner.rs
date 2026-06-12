@@ -235,76 +235,12 @@ async fn dispatch_one(
             tracing::error!("dispatch_one received Shutdown; expected to be filtered by run_actor");
         }
 
-        // -------- Policy --------
-        CosignerCommand::GetPolicyId { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::policy::get_policy_id
-            );
-        }
-        CosignerCommand::UpdatePolicy { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::policy::update_policy
-            );
-        }
-        CosignerCommand::DeletePolicy { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::policy::delete_policy
-            );
-        }
-
         // -------- Signing --------
         CosignerCommand::SignStep1 { req, reply } => {
             dispatch!(user, state, shared, req, reply, handlers::sign::sign_step1);
         }
         CosignerCommand::SignStep2 { req, reply } => {
             dispatch!(user, state, shared, req, reply, handlers::sign::sign_step2);
-        }
-
-        // -------- Refresh --------
-        CosignerCommand::RefreshStep1 { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::refresh::refresh_step1
-            );
-        }
-        CosignerCommand::RefreshStep2 { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::refresh::refresh_step2
-            );
-        }
-        CosignerCommand::RefreshStep3 { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::refresh::refresh_step3
-            );
         }
 
         // -------- Transactions --------

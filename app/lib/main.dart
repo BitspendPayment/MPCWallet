@@ -14,8 +14,6 @@ import 'screens/settings/backup_settings_screen.dart';
 import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
-import 'screens/policies/policies_screen.dart';
-import 'screens/policies/edit_policy_screen.dart';
 import 'screens/receive_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/ark/ark_screen.dart';
@@ -164,17 +162,6 @@ GoRoute(
     GoRoute(
       path: '/ark/board',
       builder: (context, state) => const ArkBoardScreen(),
-    ),
-    GoRoute(
-      path: '/policies',
-      builder: (context, state) => const PoliciesScreen(),
-    ),
-    GoRoute(
-      path: '/policies/edit',
-      builder: (context, state) {
-        final extras = state.extra as Map<String, dynamic>?;
-        return EditPolicyScreen(extras: extras);
-      },
     ),
   ],
 );

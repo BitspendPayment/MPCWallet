@@ -119,26 +119,15 @@ class MpcArkWallet {
     );
   }
 
-  /// Evaluates spending policy using the real PSBT bytes — the server is
-  /// responsible for computing the spent amount correctly so a compromised
-  /// client cannot under-report and bypass the threshold.
-  Future<String> getPolicyId(UnsignedArkTransaction unsigned) async {
-    return await client.getPolicyId(unsigned.arkTxBytes);
-  }
-
   /// FROST-signs each sighash and inserts signatures into the PSBTs.
   Future<SignedArkTransaction> signTransaction(
-    UnsignedArkTransaction unsigned, {
-    String? pin,
-    String? policyId,
-  }) async {
+    UnsignedArkTransaction unsigned,
+  ) async {
     try {
       final sigHexes = <String>[];
       for (final sighash in unsigned.sighashes) {
         final sig = await client.sign(
           sighash,
-          policyId: policyId,
-          pin: pin,
           fullTransaction: unsigned.arkTxBytes,
           applyTweak: false,
         );
