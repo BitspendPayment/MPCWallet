@@ -10,7 +10,7 @@ use tonic::Status;
 
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::wasm::CosignerInstance;
+use crate::cosigner::cosigner::CosignerInstance;
 use crate::shared::SharedServices;
 
 use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};

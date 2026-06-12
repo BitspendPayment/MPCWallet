@@ -10,7 +10,7 @@ use crate::shared::SharedServices;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::wasm::CosignerInstance;
+use crate::cosigner::cosigner::CosignerInstance;
 
 use super::helpers::{
     auth_check, calculate_spent_amount, ensure_policy_loaded, persist_policy, timestamp_check,

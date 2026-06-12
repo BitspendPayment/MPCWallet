@@ -12,10 +12,10 @@ use tonic::Status;
 use wasmtime::component::{Component, Linker};
 use wasmtime::Engine;
 
-use crate::cosigner::wasm::{CosignerInstance, CosignerWasiView, ThresholdWorld};
+use crate::cosigner::cosigner::{CosignerInstance, CosignerWasiView, ThresholdWorld};
 use crate::shared::SharedServices;
 
-use super::actor::run_actor;
+use super::cosigner::run_actor;
 use super::command::CosignerCommand;
 use super::handle::{CosignerHandle, OwnedHandle};
 use super::state::CosignerState;

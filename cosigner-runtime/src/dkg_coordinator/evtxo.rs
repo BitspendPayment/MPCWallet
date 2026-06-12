@@ -23,12 +23,15 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 use parking_lot::Mutex;
+use rand::rngs::OsRng;
+use rand::Rng;
 use tokio::sync::oneshot;
 use tokio::time::{interval, MissedTickBehavior};
 use tonic::Status;
 
 use threshold::dkg;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
+use threshold::random;
 
 use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
@@ -46,8 +49,8 @@ use super::session::DkgSession;
 
 const EVICTION_TICK: Duration = Duration::from_secs(30);
 const EVICT_MSG: &str = "evtxo-keygen session evicted: restart from step1";
-const TOTAL_PARTICIPANTS: usize = 3; // cosigner + hardware (dealers) + wallet (receiver)
-const THRESHOLD_COUNT: usize = 2; // resulting key is 2-of-2 {wallet, cosigner}
+const TOTAL_PARTICIPANTS: usize = 2; // author + cosigner — both dealers + final shareholders
+const THRESHOLD_COUNT: usize = 2; // resulting key is 2-of-2 {author, cosigner}
 
 pub struct EvtxoKeygenCoordinator {
     sessions: DashMap<String, Arc<Mutex<DkgSession>>>,
@@ -178,7 +181,106 @@ fn step1(
     reply: Reply<EvtxoKeygenStep1Response>,
 ) {
     sess.last_touch = Instant::now();
-    let _ = reply.send(register_evtxo(shared, &req));
+
+    // Two modes, distinguished by whether the author deals a round1 package:
+    //  - empty round1 -> one-shot register; the eVTXO reuses the main key V
+    //    (V′ == V), single-user (the cosigner is already mandatory for every V
+    //    signature, so the gate is unbypassable).
+    //  - non-empty    -> a 2-of-2 RESHARE {author, cosigner} into a fresh
+    //    V′ = V + Δ_author + Δ_cosigner bound to the contract, so the key can
+    //    later be re-shared to other participants (multi-user contracts).
+    if req.round1_package.is_empty() {
+        let _ = reply.send(register_evtxo(shared, &req));
+        return;
+    }
+
+    let user_id_hex = parsers::user_id_hex(&req.user_id);
+    let identifier_hex = hex::encode(&req.identifier);
+    tracing::info!("[{user_id_hex}] EvtxoKeygenStep1 (reshare) from {identifier_hex}");
+
+    // Capture reshare context (contract + ASP params); validated at finalize.
+    if !req.contract_id.is_empty() {
+        sess.reshare_contract_id = req.contract_id.clone();
+    }
+    if !req.contract_wasm.is_empty() {
+        sess.reshare_contract_wasm = req.contract_wasm.clone();
+    }
+    if !req.server_pk.is_empty() {
+        sess.reshare_server_pk = req.server_pk.clone();
+    }
+    if req.exit_delay != 0 {
+        sess.reshare_exit_delay = req.exit_delay;
+    }
+
+    // The author is a dealer (it deals its own non-zero Δ). Both dealers are the
+    // final shareholders (resolved at finalize), so it is NOT a passive receiver:
+    // it stays out of `receiver_identifiers`, which feeds dkg_part2's passive
+    // receiver list — empty for a 2-party reshare.
+    sess.round1_packages
+        .insert(identifier_hex, req.round1_package.clone());
+
+    // The cosigner self-deals its own Δ (first caller only).
+    if sess.round1_secret.is_none() {
+        if let Err(e) = step1_cosigner_deal(sess, shared, &user_id_hex) {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    }
+
+    // Both dealers present (author + cosigner) -> round complete. (Both deal, so
+    // `round1_packages` holds both; gate on it rather than `total_participants`,
+    // which double-counts the author since it is also a receiver.)
+    if sess.round1_packages.len() >= TOTAL_PARTICIPANTS {
+        let response = EvtxoKeygenStep1Response {
+            round1_packages: sess.round1_packages.clone(),
+            evtxo_script_pubkey: Vec::new(), // spk is derived at step3
+        };
+        for s in sess.pending_evtxo_step1.drain(..) {
+            let _ = s.send(Ok(response.clone()));
+        }
+        let _ = reply.send(Ok(response));
+    } else {
+        sess.pending_evtxo_step1.push(reply);
+    }
+}
+
+/// The cosigner reshares from its EXISTING share under its EXISTING identifier:
+/// it deals a fresh NON-zero polynomial Δ_cosigner so the finalized key is
+/// `V′ = V + Δ`. Stashes the old key package + the reshare context the finalizer
+/// needs. First caller only (guarded by `round1_secret.is_none()`).
+fn step1_cosigner_deal(
+    sess: &mut DkgSession,
+    shared: &SharedServices,
+    user_id_hex: &str,
+) -> Result<(), Status> {
+    let policy = load_policy(shared, user_id_hex)?;
+    let old_kp_json = policy.normal_policy.key_package_json.clone();
+    let old_pkp_json = policy.normal_policy.public_key_package_json.clone();
+    let cosigner_id_hex = parsers::extract_identifier(&old_kp_json)?;
+    let cosigner_id = conv::parse_identifier_hex(&cosigner_id_hex)?;
+
+    let mut rng = OsRng;
+    let secret = random::mod_n_random(&mut rng);
+    let mut seed = [0u8; 32];
+    rng.fill(&mut seed);
+    let coefficients = random::generate_coefficients_seeded(THRESHOLD_COUNT - 1, &seed);
+    let (r1_secret, r1_pub) = dkg::dkg_reshare_part1(
+        &cosigner_id,
+        TOTAL_PARTICIPANTS,
+        THRESHOLD_COUNT,
+        &secret,
+        &coefficients,
+        &mut rng,
+    )
+    .map_err(|e| Status::internal(format!("dkg_reshare_part1: {e}")))?;
+
+    // For the reshare, `server_id_hex` holds the cosigner's EXISTING identifier.
+    sess.server_id_hex = cosigner_id_hex.clone();
+    sess.round1_packages.insert(cosigner_id_hex, r1_pub.to_json());
+    sess.round1_secret = Some(r1_secret);
+    sess.reshare_old_kp_json = old_kp_json;
+    sess.reshare_old_pkp_json = old_pkp_json;
+    Ok(())
 }
 
 /// One-shot eVTXO registration for a real 2-of-2: the eVTXO reuses the main key V
@@ -371,7 +473,6 @@ fn step3(
 /// Returns the registered scriptPubKey.
 fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<u8>, Status> {
     let cosigner_id_hex = sess.server_id_hex.clone();
-    let cosigner_id = conv::parse_identifier_hex(&cosigner_id_hex)?;
 
     let old_kp = KeyPackage::from_json(&sess.reshare_old_kp_json)
         .map_err(|e| Status::internal(format!("old kp: {e}")))?;
@@ -386,9 +487,14 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
         .take()
         .ok_or_else(|| Status::internal("round2 secret missing"))?;
 
-    // Final shareholders = passive receivers (wallet) + the cosigner.
-    let mut final_ids = conv::parse_identifier_list_json(&sess.receiver_ids_json())?;
-    final_ids.push(cosigner_id);
+    // Final shareholders = both dealers (author + cosigner). In the 2-party
+    // reshare both deal and both hold V′, so the shareholder set is exactly the
+    // dealers' identifiers — there are no excluded dealers.
+    let final_ids: Vec<_> = sess
+        .round1_packages
+        .keys()
+        .map(|h| conv::parse_identifier_hex(h))
+        .collect::<Result<_, _>>()?;
 
     let (kp, pkp) = dkg::dkg_reshare_part3(
         &r2_secret,

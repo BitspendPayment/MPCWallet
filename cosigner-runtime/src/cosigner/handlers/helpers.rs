@@ -8,12 +8,19 @@ use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
 use crate::cosigner::state::CosignerState;
-use crate::cosigner::wasm::CosignerInstance;
+use crate::cosigner::cosigner::CosignerInstance;
 use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 
 const NONCE_CACHE_CAP: usize = 10_000;
+
+/// Persistence tree mapping a GroupID (hex group key) → JSON array of the
+/// verifying shares authorized to sign for that group. A normal 2-of-2 wallet
+/// authenticates by its single verifying share via `auth_check`; a contract
+/// cosigner (group key `V′`) accepts any of its participants' shares, looked up
+/// here and checked by `auth_check_group`.
+const GROUP_AUTH_TREE: &str = "group_auth_idx";
 
 /// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature
 /// against the URL `user_id` (owner pubkey) via the actor's WASM session.
@@ -80,6 +87,64 @@ pub fn timestamp_check(
     }
     state.note_nonce(timestamp_ms, NONCE_CACHE_CAP);
     Ok(())
+}
+
+/// Whether `claimed_share_hex` is one of the group's authorized verifying shares.
+pub fn is_authorized_share(authorized_shares: &[String], claimed_share_hex: &str) -> bool {
+    authorized_shares.iter().any(|s| s == claimed_share_hex)
+}
+
+/// Group auth: the request is signed by ONE of the group's authorized verifying
+/// shares (any participant of a contract cosigner). Verifies the BIP-340
+/// signature against `claimed_share` AND asserts it is in `authorized_shares`.
+/// Each signer signs as herself — the auth message binds her own share, which is
+/// both the pubkey the signature is checked against and the identity in the
+/// canonical message, so this reduces to the per-key `auth_check`.
+pub fn auth_check_group(
+    user: &mut CosignerInstance,
+    state: &mut CosignerState,
+    claimed_share_bytes: &[u8],
+    authorized_shares: &[String],
+    signature: &[u8],
+    timestamp_ms: i64,
+    operation: &str,
+) -> Result<(), Status> {
+    let claimed_hex = hex::encode(claimed_share_bytes);
+    if !is_authorized_share(authorized_shares, &claimed_hex) {
+        tracing::warn!("[{claimed_hex}] not an authorized signer for {operation}");
+        return Err(Status::unauthenticated("signer not authorized for this group"));
+    }
+    auth_check(
+        user,
+        state,
+        claimed_share_bytes,
+        signature,
+        timestamp_ms,
+        operation,
+    )
+}
+
+/// Read a group's authorized verifying shares (hex) from `group_auth_idx`.
+/// Empty when the group is unknown or the row is corrupt.
+pub fn load_group_auth(persistence: &dyn KvStore, group_id_hex: &str) -> Vec<String> {
+    match persistence.get(GROUP_AUTH_TREE, group_id_hex) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Persist a group's authorized verifying shares (hex) under `group_auth_idx`.
+/// Used at contract-cosigner creation to register the participant roster.
+pub fn persist_group_auth(
+    persistence: &dyn KvStore,
+    group_id_hex: &str,
+    shares: &[String],
+) -> Result<(), Status> {
+    let json = serde_json::to_string(shares)
+        .map_err(|e| Status::internal(format!("encode group_auth: {e}")))?;
+    persistence
+        .put(GROUP_AUTH_TREE, group_id_hex, &json)
+        .map_err(|e| Status::internal(format!("persist group_auth: {e}")))
 }
 
 /// Load policy state from persistence into the user instance if not present.
@@ -424,4 +489,19 @@ pub fn calculate_spent_amount(
     )
     .map_err(|e| Status::internal(format!("tx parse: {e}")))?;
     Ok(spent)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_authorized_share;
+
+    #[test]
+    fn authorized_share_membership() {
+        let roster = vec!["aa".to_string(), "bb".to_string()];
+        assert!(is_authorized_share(&roster, "aa"));
+        assert!(is_authorized_share(&roster, "bb"));
+        assert!(!is_authorized_share(&roster, "cc"));
+        // Empty roster authorizes nobody.
+        assert!(!is_authorized_share(&[], "aa"));
+    }
 }

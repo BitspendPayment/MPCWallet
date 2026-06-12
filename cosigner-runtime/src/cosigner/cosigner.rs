@@ -1,15 +1,14 @@
-//! User actor: a tokio task that owns one user's `CosignerInstance` + `CosignerState`
-//! and processes commands serially. Per-command WASM work runs inside
-//! `spawn_blocking` so the actor task stays light — millions of idle actors fit
-//! in memory; only currently-executing WASM consumes a blocking-pool thread.
+//! Per-user cosigner: the WASM instance that holds the threshold-crypto state,
+//! plus the tokio actor that owns it and drives it.
 //!
-//! `CosignerInstance` and `CosignerState` live behind `Arc<parking_lot::Mutex<>>`
-//! so the panic-recovery path in `run_actor` (Gap 2 from issue #30) can replace
-//! a wedged WASM instance without losing user state. Single-writer per actor
-//! means lock contention is effectively zero — the mutex is there as a panic-
-//! safe ownership swap, not for concurrent access. `parking_lot::Mutex` is
-//! preferred over `std::sync::Mutex` because it doesn't poison on panic; the
-//! recovery path explicitly reseats `*user.lock()` to a fresh instance.
+//! `CosignerInstance` keeps all threshold state in WASM linear memory (only
+//! persistent host state — policy, UTXOs — is mirrored on the host). Each user
+//! has exactly one instance; `run_actor` is a tokio task that owns it + its
+//! `CosignerState` and processes commands serially. Per-command WASM work runs
+//! inside `spawn_blocking`, so an idle actor is just memory, not a thread. The
+//! instance + state live behind `Arc<parking_lot::Mutex<>>` so the panic-recovery
+//! path in `run_actor` can reseat a wedged WASM instance without losing user
+//! state (`parking_lot` doesn't poison on panic, so the recovery reseat is clean).
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -20,14 +19,67 @@ use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tonic::Status;
+use wasmtime::component::ResourceAny;
+use wasmtime::Store;
+use wasmtime_wasi::{ResourceTable, WasiCtx, WasiView};
 
-use crate::cosigner::wasm::CosignerInstance;
+use crate::policy::{PolicyState, UtxoState};
 use crate::shared::SharedServices;
 
 use super::command::CosignerCommand;
 use super::handlers;
 use super::registry::CosignerRegistry;
 use super::state::{CosignerState, DeviceToken};
+
+wasmtime::component::bindgen!({
+    path: "wit/world.wit",
+    world: "threshold-world",
+    async: false,
+});
+
+pub struct CosignerWasiView {
+    table: ResourceTable,
+    ctx: WasiCtx,
+}
+
+impl CosignerWasiView {
+    pub fn new(table: ResourceTable, ctx: WasiCtx) -> Self {
+        Self { table, ctx }
+    }
+}
+
+impl WasiView for CosignerWasiView {
+    fn table(&mut self) -> &mut ResourceTable {
+        &mut self.table
+    }
+    fn ctx(&mut self) -> &mut WasiCtx {
+        &mut self.ctx
+    }
+}
+
+/// Per-cosigner WASM instance. All threshold-crypto state lives in WASM
+/// linear memory as `ResourceAny` handles; only persistent host state
+/// (policy, UTXOs) is mirrored on the host.
+pub struct CosignerInstance {
+    pub store: Store<CosignerWasiView>,
+    pub bindings: ThresholdWorld,
+
+    pub session: Option<ResourceAny>,
+    /// Round1 secret handle, lives between refresh steps.
+    pub round1_secret: Option<ResourceAny>,
+    /// Round2 secret handle, lives between refresh steps.
+    pub round2_secret: Option<ResourceAny>,
+    /// Signing nonce handle, lives between sign step1 and step2.
+    pub signing_nonce: Option<ResourceAny>,
+    pub signing_session: Option<ResourceAny>,
+    pub refresh_session: Option<ResourceAny>,
+
+    /// True when the current signing session uses script-path (no tweak).
+    pub script_path_spend: bool,
+
+    pub policy_state: Option<PolicyState>,
+    pub utxo_state: Option<UtxoState>,
+}
 
 fn now_secs() -> i64 {
     SystemTime::now()

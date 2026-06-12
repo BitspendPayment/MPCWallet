@@ -1536,3 +1536,100 @@ fn test_evtxo_reshare_wallet_cosigner_can_sign() {
         .verify(&new_pkp.verifying_key, msg)
         .expect("V' (2-of-2 wallet+cosigner) signature must verify");
 }
+
+/// 2-party reshare (the multi-user contract-eVTXO key derivation): {author,
+/// cosigner} both deal a fresh non-zero Δ AND both finalize via the dealer
+/// finalizer, under their EXISTING identifiers, with NO passive receiver →
+/// `V′ = V + Δ_author + Δ_cosigner`. This is the topology Phase 1 of the
+/// multi-user-eVTXO work uses (the old ceremony had a 3rd hardware dealer).
+fn run_reshare_2party(
+    old_kps: &[KeyPackage], // [author, cosigner]
+    old_pkp: &PublicKeyPackage,
+) -> (KeyPackage, KeyPackage, PublicKeyPackage) {
+    let mut rng = OsRng;
+    let a_id = old_kps[0].identifier.clone();
+    let c_id = old_kps[1].identifier.clone();
+    let receivers = [a_id.clone(), c_id.clone()];
+
+    // Round 1: both deal a fresh NON-zero Δ under their EXISTING identifiers.
+    let (a_r1s, a_r1p) = dkg::dkg_reshare_part1(
+        &a_id, 2, 2, &random_scalar(&mut rng), &[random_scalar(&mut rng)], &mut rng,
+    )
+    .unwrap();
+    let (c_r1s, c_r1p) = dkg::dkg_reshare_part1(
+        &c_id, 2, 2, &random_scalar(&mut rng), &[random_scalar(&mut rng)], &mut rng,
+    )
+    .unwrap();
+
+    // Round 2: each deals a share for the OTHER dealer; no passive receivers
+    // (round1_pkgs.len()=1 + receivers passed to part2=0 == max_signers-1=1).
+    let a_others: BTreeMap<_, _> = [(c_id.clone(), c_r1p.clone())].into_iter().collect();
+    let (a_r2s, a_shares) = dkg::dkg_part2(&a_r1s, &a_others, &[]).unwrap();
+    let c_others: BTreeMap<_, _> = [(a_id.clone(), a_r1p.clone())].into_iter().collect();
+    let (c_r2s, c_shares) = dkg::dkg_part2(&c_r1s, &c_others, &[]).unwrap();
+
+    // Round 3: both finalize via the dealer finalizer (peer share + self + old).
+    let a_round1: BTreeMap<_, _> = [(c_id.clone(), c_r1p.clone())].into_iter().collect();
+    let a_round2: BTreeMap<_, _> =
+        [(c_id.clone(), c_shares.get(&a_id).unwrap().clone())].into_iter().collect();
+    let (a_new_kp, a_pkp) =
+        dkg::dkg_reshare_part3(&a_r2s, &a_round1, &a_round2, old_pkp, &old_kps[0], &receivers)
+            .unwrap();
+
+    let c_round1: BTreeMap<_, _> = [(a_id.clone(), a_r1p.clone())].into_iter().collect();
+    let c_round2: BTreeMap<_, _> =
+        [(a_id.clone(), a_shares.get(&c_id).unwrap().clone())].into_iter().collect();
+    let (c_new_kp, c_pkp) =
+        dkg::dkg_reshare_part3(&c_r2s, &c_round1, &c_round2, old_pkp, &old_kps[1], &receivers)
+            .unwrap();
+
+    assert!(
+        point::points_equal(&a_pkp.verifying_key.point, &c_pkp.verifying_key.point),
+        "author and cosigner disagree on V′"
+    );
+    (a_new_kp, c_new_kp, a_pkp)
+}
+
+#[test]
+fn test_evtxo_reshare_2party_new_key() {
+    let (old_kps, old_pkp) = run_full_dkg(2, 2); // existing 2-of-2 of V
+    let (a_kp, c_kp, new_pkp) = run_reshare_2party(&old_kps, &old_pkp);
+
+    // V′ is a fresh key (non-zero delta), holding exactly {author, cosigner}.
+    assert!(
+        !point::points_equal(&new_pkp.verifying_key.point, &old_pkp.verifying_key.point),
+        "V′ must differ from V"
+    );
+    assert_eq!(new_pkp.verifying_shares.len(), 2);
+    assert!(new_pkp.verifying_shares.contains_key(&old_kps[0].identifier));
+    assert!(new_pkp.verifying_shares.contains_key(&old_kps[1].identifier));
+    assert!(new_pkp.verifying_key.has_even_y());
+    assert!(point::points_equal(&a_kp.verifying_share, &point::base_mul(&a_kp.secret_share)));
+    assert!(point::points_equal(&c_kp.verifying_share, &point::base_mul(&c_kp.secret_share)));
+}
+
+#[test]
+fn test_evtxo_reshare_2party_can_sign() {
+    let (old_kps, old_pkp) = run_full_dkg(2, 2);
+    let (a_kp, c_kp, new_pkp) = run_reshare_2party(&old_kps, &old_pkp);
+    let msg = b"contract evtxo V-prime cooperative spend";
+
+    let mut rng = OsRng;
+    let mut nonces = BTreeMap::new();
+    let mut commitments = BTreeMap::new();
+    for kp in [&a_kp, &c_kp] {
+        let nonce = new_nonce(&mut rng, &kp.secret_share);
+        commitments.insert(kp.identifier.clone(), nonce.commitments.clone());
+        nonces.insert(kp.identifier.clone(), nonce);
+    }
+    let signing_package = SigningPackage::new(commitments, msg.to_vec());
+    let mut shares = BTreeMap::new();
+    for kp in [&a_kp, &c_kp] {
+        let nonce = nonces.get(&kp.identifier).unwrap();
+        shares.insert(kp.identifier.clone(), sign(&signing_package, nonce, kp).unwrap());
+    }
+    let signature = aggregate(&signing_package, &shares, &new_pkp).unwrap();
+    signature
+        .verify(&new_pkp.verifying_key, msg)
+        .expect("V′ (2-of-2 author+cosigner) signature must verify");
+}

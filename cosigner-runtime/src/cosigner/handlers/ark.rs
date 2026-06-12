@@ -17,7 +17,7 @@ use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::wasm::CosignerInstance;
+use crate::cosigner::cosigner::CosignerInstance;
 
 use super::helpers::{auth_check, get_user_xonly_pubkey};
 
