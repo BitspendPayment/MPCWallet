@@ -105,6 +105,11 @@ message SignStep1Request {
   bytes full_transaction = 6;
   int64 timestamp_ms = 7; // Unix timestamp in milliseconds for replay protection
   bool script_path_spend = 8; // If true, skip taproot tweak (script-path signing)
+  // For a contract eVTXO spend: user_id routes to the contract actor (GroupID=V′),
+  // and claimed_share is the spending recipient's own verifying share (the cosigner
+  // authenticates it via auth_check_group + selects recipient_shares[claimed_share]).
+  // Empty for a normal wallet (claimed share = user_id).
+  bytes claimed_share = 9;
 }
 
 
@@ -123,6 +128,8 @@ message SignStep2Request {
    bytes signature_share = 3;
    bytes signature = 4; // Schnorr signature over auth message for authentication
    int64 timestamp_ms = 5; // Unix timestamp in milliseconds for replay protection
+   // Contract eVTXO spend: the recipient's own verifying share (see SignStep1Request).
+   bytes claimed_share = 6;
 }
 
 message UtxoInfo {

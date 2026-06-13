@@ -364,8 +364,17 @@ async fn sign_step1(
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Routing is by the URL path (`user_id`). For a contract eVTXO spend the path is
+    // the contract actor V′ and `claimed_share` is the spending recipient — set
+    // `req.user_id` to it so the actor authenticates + selects the recipient's share.
+    let claimed_share = hex_field(&body, "claimed_share");
+    let req_user_id = if claimed_share.is_empty() {
+        user_id_bytes(&user_id)
+    } else {
+        claimed_share.clone()
+    };
     let req = wallet_proto::SignStep1Request {
-        user_id: user_id_bytes(&user_id),
+        user_id: req_user_id,
         hiding_commitment: hex_field(&body, "hiding_commitment"),
         binding_commitment: hex_field(&body, "binding_commitment"),
         message_to_sign: hex_field(&body, "message_to_sign"),
@@ -373,6 +382,7 @@ async fn sign_step1(
         full_transaction: hex_field(&body, "full_transaction"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         script_path_spend: bool_field(&body, "script_path_spend"),
+        claimed_share,
     };
     match reg
         .dispatch(&user_id, move |reply| CosignerCommand::SignStep1 { req, reply })
@@ -406,11 +416,18 @@ async fn sign_step2(
     Path(user_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let claimed_share = hex_field(&body, "claimed_share");
+    let req_user_id = if claimed_share.is_empty() {
+        user_id_bytes(&user_id)
+    } else {
+        claimed_share.clone()
+    };
     let req = wallet_proto::SignStep2Request {
-        user_id: user_id_bytes(&user_id),
+        user_id: req_user_id,
         signature_share: hex_field(&body, "signature_share"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
+        claimed_share,
     };
     match reg
         .dispatch(&user_id, move |reply| CosignerCommand::SignStep2 { req, reply })

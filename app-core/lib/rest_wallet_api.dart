@@ -208,6 +208,8 @@ class RestWalletApi implements WalletApi {
       'full_transaction': _hex(r.fullTransaction),
       'timestamp_ms': r.timestampMs.toInt(),
       'script_path_spend': r.scriptPathSpend,
+      // Contract eVTXO spend: route by user_id (=V′), authenticate the recipient.
+      'claimed_share': _hex(r.claimedShare),
     });
     final result = SignStep1Response()
       ..messageToSign = _unhex(resp['message_to_sign'] as String?)
@@ -229,6 +231,7 @@ class RestWalletApi implements WalletApi {
       'signature_share': _hex(r.signatureShare),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
+      'claimed_share': _hex(r.claimedShare),
     });
     return SignStep2Response()
       ..rPoint = _unhex(resp['r_point'] as String?)

@@ -402,6 +402,7 @@ class SignStep1Request extends $pb.GeneratedMessage {
     $core.List<$core.int>? fullTransaction,
     $fixnum.Int64? timestampMs,
     $core.bool? scriptPathSpend,
+    $core.List<$core.int>? claimedShare,
   }) {
     final $result = create();
     if (userId != null) {
@@ -428,6 +429,9 @@ class SignStep1Request extends $pb.GeneratedMessage {
     if (scriptPathSpend != null) {
       $result.scriptPathSpend = scriptPathSpend;
     }
+    if (claimedShare != null) {
+      $result.claimedShare = claimedShare;
+    }
     return $result;
   }
   SignStep1Request._() : super();
@@ -443,6 +447,7 @@ class SignStep1Request extends $pb.GeneratedMessage {
     ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'fullTransaction', $pb.PbFieldType.OY)
     ..aInt64(7, _omitFieldNames ? '' : 'timestampMs')
     ..aOB(8, _omitFieldNames ? '' : 'scriptPathSpend')
+    ..a<$core.List<$core.int>>(9, _omitFieldNames ? '' : 'claimedShare', $pb.PbFieldType.OY)
     ..hasRequiredFields = false
   ;
 
@@ -538,6 +543,19 @@ class SignStep1Request extends $pb.GeneratedMessage {
   $core.bool hasScriptPathSpend() => $_has(7);
   @$pb.TagNumber(8)
   void clearScriptPathSpend() => clearField(8);
+
+  /// For a contract eVTXO spend: user_id routes to the contract actor (GroupID=V′),
+  /// and claimed_share is the spending recipient's own verifying share (the cosigner
+  /// authenticates it via auth_check_group + selects recipient_shares[claimed_share]).
+  /// Empty for a normal wallet (claimed share = user_id).
+  @$pb.TagNumber(9)
+  $core.List<$core.int> get claimedShare => $_getN(8);
+  @$pb.TagNumber(9)
+  set claimedShare($core.List<$core.int> v) { $_setBytes(8, v); }
+  @$pb.TagNumber(9)
+  $core.bool hasClaimedShare() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearClaimedShare() => clearField(9);
 }
 
 class SignStep1Response_Commitment extends $pb.GeneratedMessage {
@@ -682,6 +700,7 @@ class SignStep2Request extends $pb.GeneratedMessage {
     $core.List<$core.int>? signatureShare,
     $core.List<$core.int>? signature,
     $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? claimedShare,
   }) {
     final $result = create();
     if (userId != null) {
@@ -696,6 +715,9 @@ class SignStep2Request extends $pb.GeneratedMessage {
     if (timestampMs != null) {
       $result.timestampMs = timestampMs;
     }
+    if (claimedShare != null) {
+      $result.claimedShare = claimedShare;
+    }
     return $result;
   }
   SignStep2Request._() : super();
@@ -707,6 +729,7 @@ class SignStep2Request extends $pb.GeneratedMessage {
     ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'signatureShare', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
     ..aInt64(5, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'claimedShare', $pb.PbFieldType.OY)
     ..hasRequiredFields = false
   ;
 
@@ -766,6 +789,16 @@ class SignStep2Request extends $pb.GeneratedMessage {
   $core.bool hasTimestampMs() => $_has(3);
   @$pb.TagNumber(5)
   void clearTimestampMs() => clearField(5);
+
+  /// Contract eVTXO spend: the recipient's own verifying share (see SignStep1Request).
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get claimedShare => $_getN(4);
+  @$pb.TagNumber(6)
+  set claimedShare($core.List<$core.int> v) { $_setBytes(4, v); }
+  @$pb.TagNumber(6)
+  $core.bool hasClaimedShare() => $_has(4);
+  @$pb.TagNumber(6)
+  void clearClaimedShare() => clearField(6);
 }
 
 class UtxoInfo extends $pb.GeneratedMessage {

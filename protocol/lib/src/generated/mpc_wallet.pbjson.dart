@@ -165,6 +165,7 @@ const SignStep1Request$json = {
     {'1': 'full_transaction', '3': 6, '4': 1, '5': 12, '10': 'fullTransaction'},
     {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
     {'1': 'script_path_spend', '3': 8, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+    {'1': 'claimed_share', '3': 9, '4': 1, '5': 12, '10': 'claimedShare'},
   ],
 };
 
@@ -175,7 +176,8 @@ final $typed_data.Uint8List signStep1RequestDescriptor = $convert.base64Decode(
     'AyABKAxSEWJpbmRpbmdDb21taXRtZW50EiYKD21lc3NhZ2VfdG9fc2lnbhgEIAEoDFINbWVzc2'
     'FnZVRvU2lnbhIcCglzaWduYXR1cmUYBSABKAxSCXNpZ25hdHVyZRIpChBmdWxsX3RyYW5zYWN0'
     'aW9uGAYgASgMUg9mdWxsVHJhbnNhY3Rpb24SIQoMdGltZXN0YW1wX21zGAcgASgDUgt0aW1lc3'
-    'RhbXBNcxIqChFzY3JpcHRfcGF0aF9zcGVuZBgIIAEoCFIPc2NyaXB0UGF0aFNwZW5k');
+    'RhbXBNcxIqChFzY3JpcHRfcGF0aF9zcGVuZBgIIAEoCFIPc2NyaXB0UGF0aFNwZW5kEiMKDWNs'
+    'YWltZWRfc2hhcmUYCSABKAxSDGNsYWltZWRTaGFyZQ==');
 
 @$core.Deprecated('Use signStep1ResponseDescriptor instead')
 const SignStep1Response$json = {
@@ -225,6 +227,7 @@ const SignStep2Request$json = {
     {'1': 'signature_share', '3': 3, '4': 1, '5': 12, '10': 'signatureShare'},
     {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
     {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'claimed_share', '3': 6, '4': 1, '5': 12, '10': 'claimedShare'},
   ],
 };
 
@@ -232,7 +235,8 @@ const SignStep2Request$json = {
 final $typed_data.Uint8List signStep2RequestDescriptor = $convert.base64Decode(
     'ChBTaWduU3RlcDJSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBInCg9zaWduYXR1cm'
     'Vfc2hhcmUYAyABKAxSDnNpZ25hdHVyZVNoYXJlEhwKCXNpZ25hdHVyZRgEIAEoDFIJc2lnbmF0'
-    'dXJlEiEKDHRpbWVzdGFtcF9tcxgFIAEoA1ILdGltZXN0YW1wTXM=');
+    'dXJlEiEKDHRpbWVzdGFtcF9tcxgFIAEoA1ILdGltZXN0YW1wTXMSIwoNY2xhaW1lZF9zaGFyZR'
+    'gGIAEoDFIMY2xhaW1lZFNoYXJl');
 
 @$core.Deprecated('Use utxoInfoDescriptor instead')
 const UtxoInfo$json = {

@@ -632,6 +632,7 @@ class MpcClient {
     threshold.PublicKeyPackage groupPubKey,
     List<int>? fullTransaction, {
     bool applyTweak = true,
+    Uint8List? contractGroupId,
   }) async {
     final nonce = frost_comm.newNonce(keyPkg.secretShare);
 
@@ -639,10 +640,19 @@ class MpcClient {
       throw StateError("User ID is null, cannot proceed with signing.");
     }
 
+    // For a contract eVTXO spend: route to the contract actor (GroupID = V′) but
+    // authenticate as ourselves — claimed_share = our verifying share, and the auth
+    // signature still binds our own user id (the cosigner verifies it via
+    // auth_check_group + selects our recipient counter-share). Normal sign: route to
+    // our own actor, no claimed share.
+    final routeId = contractGroupId ?? _userId!;
+    final claimedShare = contractGroupId != null ? _userId! : Uint8List(0);
+
     // 2. Step 1: Commitments
     final auth1 = _authHelper!.signForSignStep1();
     final req = SignStep1Request()
-      ..userId = _userId!
+      ..userId = routeId
+      ..claimedShare = claimedShare
       ..hidingCommitment =
           threshold.elemSerializeCompressed(nonce.commitments.hiding)
       ..bindingCommitment =
@@ -688,7 +698,8 @@ class MpcClient {
     // 4. Send Share & Get Result
     final auth2 = _authHelper!.signForSignStep2();
     final signStep2Resp = await _stub.signStep2(SignStep2Request()
-      ..userId = _userId!
+      ..userId = routeId
+      ..claimedShare = claimedShare
       ..signatureShare = threshold.bigIntToBytes(sigShare.s)
       ..signature = auth2.signature
       ..timestampMs = auth2.timestampMs);

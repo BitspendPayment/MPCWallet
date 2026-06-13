@@ -50,6 +50,26 @@ pub fn extract_identifier(kp_json: &str) -> Result<String, Status> {
         .ok_or_else(|| Status::internal("missing identifier in key package"))
 }
 
+/// The recipient's signing identifier `id_i` = the entry of a 2-entry `V′` PKP whose
+/// id is NOT the cosigner's. Used by a contract actor to insert the recipient's FROST
+/// commitment/share at its real `V′` identifier (the author's existing V identifier,
+/// or a refreshed participant's derived id) — which is generally NOT `derive(user_id)`.
+pub fn extract_recipient_identifier(
+    pkp_json: &str,
+    cosigner_id_hex: &str,
+) -> Result<String, Status> {
+    let v: serde_json::Value = serde_json::from_str(pkp_json)
+        .map_err(|e| Status::internal(format!("bad public key package JSON: {e}")))?;
+    let shares = v["verifyingShares"]
+        .as_object()
+        .ok_or_else(|| Status::internal("missing verifyingShares in PKP"))?;
+    shares
+        .keys()
+        .find(|k| k.as_str() != cosigner_id_hex)
+        .cloned()
+        .ok_or_else(|| Status::internal("no recipient identifier in V′ PKP"))
+}
+
 pub fn extract_verifying_key(pkp_json: &str) -> Result<String, Status> {
     let v: serde_json::Value = serde_json::from_str(pkp_json)
         .map_err(|e| Status::internal(format!("bad public key package JSON: {e}")))?;
