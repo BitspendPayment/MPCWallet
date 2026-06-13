@@ -447,13 +447,20 @@ fn step3_finalize_server_key(
         }
     }
 
+    // The actor's cosigner id = the GROUP KEY `V` (the 2-of-2 {wallet, cosigner}
+    // key). Policies + per-user data are keyed under it, unifying a normal wallet
+    // with a contract (a contract is the same shape keyed by `V′`). The wallet is the
+    // sole MEMBER; it addresses by its verifying share (`policy_user_id`) and resolves
+    // to this actor via `policy_owner_idx`.
+    let group_key = parsers::extract_verifying_key(&pkp_json)?;
+
     let normal_policy = NormalPolicy {
         id: "normal policies".to_string(),
         key_package_json: kp_json,
         public_key_package_json: pkp_json,
     };
     let policy_state: PolicyState = PolicyState {
-        user_id: policy_user_id.clone(),
+        cosigner_id: group_key.clone(),
         recovery_id,
         user_signing_identifier_hex,
         server_dkg_secret_hex: Some(server_dkg_secret_hex),
@@ -462,29 +469,31 @@ fn step3_finalize_server_key(
         is_contract: false,
     };
 
-    persist_policy(shared, &policy_user_id, &policy_state)?;
+    // Persist under the group key (pass it directly — `policy_owner_idx` isn't written
+    // for it yet, so the resolver in `persist_policy` would no-op anyway).
+    persist_policy(shared, &group_key, &policy_state)?;
 
-    // `user_id_hex` at DKG time is the hardware signer's FROST verifying key
-    // (the client uses it as a temporary session label — DKG endpoints are
-    // unauthenticated). After DKG, the canonical identity is the wallet's
-    // FROST verifying-share (`policy_user_id`), which `auth_check` validates
-    // signatures against; that's why policies are keyed under it. The HW
-    // verifying key is also recorded as `recovery_id` (see persist_policy),
-    // so a client may still address the wallet using it — most importantly
-    // during recovery flows where the HW signer reasserts its identity.
-    // This index translates HW_VK → FROST share so `ensure_policy_loaded`
-    // can resolve those requests to the canonical policy.
-    if policy_user_id != user_id_hex {
-        shared
-            .persistence
-            .put("policy_owner_idx", user_id_hex, &policy_user_id)
-            .map_err(|e| {
-                tracing::error!("persist policy_owner_idx/{user_id_hex} failed: {e}");
-                Status::internal(format!("persist policy_owner_idx failed: {e}"))
-            })?;
+    // Register the wallet member in the group, and map both its verifying share and
+    // the DKG-time HW verifying key (recovery addressing) → the group key, so client
+    // requests addressed by either resolve to this `V`-keyed actor.
+    crate::cosigner::handlers::helpers::persist_group_auth(
+        shared.persistence.as_ref(),
+        &group_key,
+        &[policy_user_id.clone()],
+    )?;
+    for member_id in [policy_user_id.as_str(), user_id_hex] {
+        if member_id != group_key {
+            shared
+                .persistence
+                .put("policy_owner_idx", member_id, &group_key)
+                .map_err(|e| {
+                    tracing::error!("persist policy_owner_idx/{member_id} failed: {e}");
+                    Status::internal(format!("persist policy_owner_idx failed: {e}"))
+                })?;
+        }
     }
 
-    tracing::info!("[{user_id_hex}] DKG Complete");
+    tracing::info!("[{user_id_hex}] DKG Complete; cosigner_id (group key)={group_key}");
     Ok(())
 }
 

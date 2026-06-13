@@ -616,7 +616,7 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     let mut contract_evtxo_policies = HashMap::new();
     contract_evtxo_policies.insert(spk_hex, evtxo_policy);
     let contract_policy = PolicyState {
-        user_id: v_prime_group_id.clone(),
+        cosigner_id: v_prime_group_id.clone(),
         recovery_id: String::new(),
         user_signing_identifier_hex: None,
         server_dkg_secret_hex: None,

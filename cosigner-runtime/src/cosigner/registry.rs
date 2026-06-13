@@ -87,6 +87,18 @@ impl CosignerRegistry {
     /// Get the existing actor handle for `user_id`, or spawn a new one.
     /// Cheap fast path when the actor already exists (DashMap read).
     pub fn get_or_spawn(self: &Arc<Self>, user_id: &str) -> Result<CosignerHandle, Status> {
+        // Actors are keyed by their GROUP KEY (cosigner_id). A request addressed by a
+        // member's verifying share resolves to the group's actor via `policy_owner_idx`,
+        // so every member of a group shares one actor (one for a normal wallet, many
+        // for a contract). `CosignerState.cosigner_id` is then this canonical id.
+        let canonical = self
+            .shared
+            .persistence
+            .get("policy_owner_idx", user_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| user_id.to_string());
+        let user_id = canonical.as_str();
         if let Some(entry) = self.actors.get(user_id) {
             return Ok(entry.handle.clone());
         }

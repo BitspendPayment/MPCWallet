@@ -15,6 +15,16 @@ pub fn persist_policy(
     user_id_hex: &str,
     policy: &PolicyState,
 ) -> Result<(), Status> {
+    // Policies are keyed by the GROUP KEY (cosigner_id). If a member's verifying
+    // share is passed, resolve it to its group key via `policy_owner_idx` so updates
+    // land on the canonical row instead of forking a divergent one.
+    let key = shared
+        .persistence
+        .get("policy_owner_idx", user_id_hex)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| user_id_hex.to_string());
+    let user_id_hex = key.as_str();
     let json = serde_json::to_string(policy)
         .map_err(|e| Status::internal(format!("serialization error: {e}")))?;
     shared

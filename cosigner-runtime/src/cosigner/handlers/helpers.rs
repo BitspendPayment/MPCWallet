@@ -266,12 +266,24 @@ pub fn get_user_ark_keys(
     Ok((xonly, dkg_secret))
 }
 
+/// Resolve an addressing id (a member's verifying share) to its GROUP KEY
+/// (`cosigner_id`) via `policy_owner_idx`, so all of a group's per-user data is keyed
+/// by the one group key. Identity for a group key, or any id with no index entry.
+pub fn group_key_of(persistence: &dyn KvStore, id: &str) -> String {
+    persistence
+        .get("policy_owner_idx", id)
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| id.to_string())
+}
+
 /// Persist a user's VTXO list (best-effort; logs and ignores errors).
 pub fn save_user_vtxos(
     persistence: &dyn KvStore,
     user_id_hex: &str,
     vtxos: &[crate::cosigner::state::VtxoEntry],
 ) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     if let Ok(json) = serde_json::to_string(vtxos) {
         if let Err(e) = persistence.put("vtxo_store", user_id_hex, &json) {
             tracing::warn!("persist vtxo_store/{user_id_hex} failed: {e}");
@@ -285,6 +297,7 @@ pub fn save_user_device_tokens(
     user_id_hex: &str,
     tokens: &[crate::cosigner::state::DeviceToken],
 ) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     if let Ok(json) = serde_json::to_string(tokens) {
         if let Err(e) = persistence.put("device_tokens", user_id_hex, &json) {
             tracing::warn!("persist device_tokens/{user_id_hex} failed: {e}");
@@ -298,6 +311,7 @@ pub fn save_user_ark_history(
     user_id_hex: &str,
     entries: &[crate::cosigner::types::ArkTxEntry],
 ) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     if let Ok(json) = serde_json::to_string(entries) {
         if let Err(e) = persistence.put("ark_tx_history", user_id_hex, &json) {
             tracing::warn!("persist ark_tx_history/{user_id_hex} failed: {e}");
@@ -312,6 +326,7 @@ pub fn load_user_ark_history(
     persistence: &dyn KvStore,
     user_id_hex: &str,
 ) -> Vec<crate::cosigner::types::ArkTxEntry> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     match persistence.get("ark_tx_history", user_id_hex) {
         Ok(Some(json)) => match serde_json::from_str(&json) {
             Ok(entries) => entries,
@@ -331,6 +346,7 @@ pub fn load_user_vtxos(
     persistence: &dyn KvStore,
     user_id_hex: &str,
 ) -> Vec<crate::cosigner::state::VtxoEntry> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     match persistence.get("vtxo_store", user_id_hex) {
         Ok(Some(json)) => match serde_json::from_str(&json) {
             Ok(vtxos) => vtxos,
@@ -350,6 +366,7 @@ pub fn load_user_device_tokens(
     persistence: &dyn KvStore,
     user_id_hex: &str,
 ) -> Vec<crate::cosigner::state::DeviceToken> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     match persistence.get("device_tokens", user_id_hex) {
         Ok(Some(json)) => match serde_json::from_str(&json) {
             Ok(tokens) => tokens,
@@ -370,6 +387,7 @@ pub fn save_user_delegate(
     user_id_hex: &str,
     record: &crate::cosigner::state::PersistedDelegateRecord,
 ) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     match serde_json::to_string(record) {
         Ok(json) => {
             if let Err(e) = persistence.put("delegate_sessions", user_id_hex, &json) {
@@ -389,6 +407,7 @@ pub fn load_user_delegate(
     persistence: &dyn KvStore,
     user_id_hex: &str,
 ) -> Option<crate::cosigner::state::PersistedDelegateRecord> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     match persistence.get("delegate_sessions", user_id_hex) {
         Ok(Some(json)) => match serde_json::from_str(&json) {
             Ok(record) => Some(record),
@@ -406,6 +425,7 @@ pub fn load_user_delegate(
 /// otherwise the next actor spawn would rehydrate a stale intent that no
 /// longer matches `state.vtxos`.
 pub fn delete_user_delegate(persistence: &dyn KvStore, user_id_hex: &str) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
     if let Err(e) = persistence.delete("delegate_sessions", user_id_hex) {
         tracing::warn!("delete delegate_sessions/{user_id_hex} failed: {e}");
     }

@@ -4,7 +4,11 @@ use std::collections::HashMap;
 /// Per-user policy state. Mirrors `PolicyState` from `server/lib/state.dart`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyState {
-    pub user_id: String,
+    /// This group's cosigner id (hex) = the GROUP KEY: `V` for a normal 2-of-2
+    /// wallet, `V′` for a contract. Policies are keyed under it; clients addressing
+    /// by a member's verifying share resolve here via `policy_owner_idx`.
+    #[serde(alias = "user_id")]
+    pub cosigner_id: String,
     /// Recovery ID: hex of HW signer's verifying key (for wallet restore lookup).
     pub recovery_id: String,
     /// The wallet's DKG identifier (may differ from Identifier::derive(userId)
