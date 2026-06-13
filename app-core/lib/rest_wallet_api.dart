@@ -193,6 +193,60 @@ class RestWalletApi implements WalletApi {
       ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
   }
 
+  @override
+  Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest r) async {
+    // Routes to the contract actor V′ (URL), authenticates the author (body user_id).
+    final resp =
+        await _post('/api/u/${_hex(r.contractGroupId)}/evtxo/onboard', {
+      'user_id': _hex(r.userId),
+      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
+      'recipient_vk': _hex(r.recipientVk),
+      'a_at_cosigner': _hex(r.aAtCosigner),
+      'a_at_participant_point': _hex(r.aAtParticipantPoint),
+      'ecies_a_at_participant': _hex(r.eciesAAtParticipant),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+      'contract_group_id': _hex(r.contractGroupId),
+    });
+    return EvtxoOnboardResponse()..ok = resp['ok'] as bool? ?? false;
+  }
+
+  @override
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+      EvtxoPendingSharesRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/pending-shares', {
+      'user_id': _hex(r.userId),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+    });
+    final result = EvtxoPendingSharesResponse();
+    for (final s in (resp['shares'] as List? ?? [])) {
+      final m = s as Map<String, dynamic>;
+      result.shares.add(PendingContractShare()
+        ..evtxoScriptPubkey = _unhex(m['evtxo_script_pubkey'] as String?)
+        ..contractGroupId = _unhex(m['contract_group_id'] as String?)
+        ..contractId = _unhex(m['contract_id'] as String?)
+        ..eciesHalfAuthor = _unhex(m['ecies_half_author'] as String?)
+        ..eciesHalfCosigner = _unhex(m['ecies_half_cosigner'] as String?)
+        ..publicKeyPackageJson = m['public_key_package_json'] as String? ?? ''
+        ..exitDelay = (m['exit_delay'] as num?)?.toInt() ?? 0
+        ..serverPk = _unhex(m['server_pk'] as String?)
+        ..ownerPk = _unhex(m['owner_pk'] as String?));
+    }
+    return result;
+  }
+
+  @override
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/ack-share', {
+      'user_id': _hex(r.userId),
+      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+    });
+    return EvtxoAckShareResponse()..ok = resp['ok'] as bool? ?? false;
+  }
+
   // -------------------------------------------------------------------------
   // Signing
   // -------------------------------------------------------------------------

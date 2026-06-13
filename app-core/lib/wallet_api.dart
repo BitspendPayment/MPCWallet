@@ -17,6 +17,11 @@ abstract class WalletApi {
   Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request request);
   Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request request);
 
+  // Multi-user contract onboarding
+  Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest request);
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(EvtxoPendingSharesRequest request);
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest request);
+
   // Signing
   Future<SignStep1Response> signStep1(SignStep1Request request);
   Future<SignStep2Response> signStep2(SignStep2Request request);

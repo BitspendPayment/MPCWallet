@@ -57,6 +57,39 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
+  /// Auth signature for EvtxoOnboard (author onboards a participant to a contract).
+  AuthSignature signForEvtxoOnboard() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoOnboard,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for EvtxoPendingShares (participant fetches held shares).
+  AuthSignature signForEvtxoPending() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoPending,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for EvtxoAckShare (participant clears a picked-up share).
+  AuthSignature signForEvtxoAck() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoAck,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
   /// Creates an authentication signature for FetchHistory.
   AuthSignature signForFetchHistory() {
     final timestamp = currentTimestamp;

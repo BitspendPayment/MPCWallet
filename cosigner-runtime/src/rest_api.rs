@@ -65,6 +65,9 @@ pub fn routes(state: AppState) -> Router {
         .route("/u/{user_id}/evtxo-keygen/step1", post(evtxo_keygen_step1))
         .route("/u/{user_id}/evtxo-keygen/step2", post(evtxo_keygen_step2))
         .route("/u/{user_id}/evtxo-keygen/step3", post(evtxo_keygen_step3))
+        .route("/u/{user_id}/evtxo/onboard", post(evtxo_onboard))
+        .route("/u/{user_id}/evtxo/pending-shares", post(evtxo_pending_shares))
+        .route("/u/{user_id}/evtxo/ack-share", post(evtxo_ack_share))
         // Signing
         .route("/u/{user_id}/sign/step1", post(sign_step1))
         .route("/u/{user_id}/sign/step2", post(sign_step2))
@@ -437,6 +440,100 @@ async fn sign_step2(
             "r_point": to_hex(&r.r_point),
             "z_scalar": to_hex(&r.z_scalar),
         }))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Multi-user contract onboarding
+// ---------------------------------------------------------------------------
+
+/// Author onboards a participant. URL path = the contract actor (V′); body `user_id`
+/// = the author (the claimed group member).
+#[tracing::instrument(skip_all, name = "rest::evtxo_onboard", fields(group = %user_id))]
+async fn evtxo_onboard(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoOnboardRequest {
+        user_id: hex_field(&body, "user_id"),
+        evtxo_script_pubkey: hex_field(&body, "evtxo_script_pubkey"),
+        recipient_vk: hex_field(&body, "recipient_vk"),
+        a_at_cosigner: hex_field(&body, "a_at_cosigner"),
+        a_at_participant_point: hex_field(&body, "a_at_participant_point"),
+        ecies_a_at_participant: hex_field(&body, "ecies_a_at_participant"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+        // Routing is by the URL path (the contract actor V′); this field is only the
+        // client-side routing hint and is unused server-side.
+        contract_group_id: hex_field(&body, "contract_group_id"),
+    };
+    match reg
+        .dispatch(&user_id, move |reply| CosignerCommand::EvtxoOnboard { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({ "ok": r.ok }))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_pending_shares", fields(user_id = %user_id))]
+async fn evtxo_pending_shares(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoPendingSharesRequest {
+        user_id: user_id_bytes(&user_id),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    match reg
+        .dispatch(&user_id, move |reply| CosignerCommand::EvtxoPendingShares { req, reply })
+        .await
+    {
+        Ok(r) => {
+            let shares: Vec<Value> = r
+                .shares
+                .iter()
+                .map(|s| {
+                    json!({
+                        "evtxo_script_pubkey": to_hex(&s.evtxo_script_pubkey),
+                        "contract_group_id": to_hex(&s.contract_group_id),
+                        "contract_id": to_hex(&s.contract_id),
+                        "ecies_half_author": to_hex(&s.ecies_half_author),
+                        "ecies_half_cosigner": to_hex(&s.ecies_half_cosigner),
+                        "public_key_package_json": s.public_key_package_json,
+                        "exit_delay": s.exit_delay,
+                        "server_pk": to_hex(&s.server_pk),
+                        "owner_pk": to_hex(&s.owner_pk),
+                    })
+                })
+                .collect();
+            Ok(Json(json!({ "shares": shares })))
+        }
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_ack_share", fields(user_id = %user_id))]
+async fn evtxo_ack_share(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(user_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let req = wallet_proto::EvtxoAckShareRequest {
+        user_id: user_id_bytes(&user_id),
+        evtxo_script_pubkey: hex_field(&body, "evtxo_script_pubkey"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    match reg
+        .dispatch(&user_id, move |reply| CosignerCommand::EvtxoAckShare { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({ "ok": r.ok }))),
         Err(status) => Err(status_to_response(status)),
     }
 }

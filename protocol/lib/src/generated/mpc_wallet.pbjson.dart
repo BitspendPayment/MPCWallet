@@ -1076,3 +1076,125 @@ final $typed_data.Uint8List evtxoKeygenStep3ResponseDescriptor = $convert.base64
     'dWJrZXkaRgoYUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBX'
     'ZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
 
+@$core.Deprecated('Use evtxoOnboardRequestDescriptor instead')
+const EvtxoOnboardRequest$json = {
+  '1': 'EvtxoOnboardRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {'1': 'recipient_vk', '3': 3, '4': 1, '5': 12, '10': 'recipientVk'},
+    {'1': 'a_at_cosigner', '3': 4, '4': 1, '5': 12, '10': 'aAtCosigner'},
+    {'1': 'a_at_participant_point', '3': 5, '4': 1, '5': 12, '10': 'aAtParticipantPoint'},
+    {'1': 'ecies_a_at_participant', '3': 6, '4': 1, '5': 12, '10': 'eciesAAtParticipant'},
+    {'1': 'signature', '3': 7, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 8, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'contract_group_id', '3': 9, '4': 1, '5': 12, '10': 'contractGroupId'},
+  ],
+};
+
+/// Descriptor for `EvtxoOnboardRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoOnboardRequestDescriptor = $convert.base64Decode(
+    'ChNFdnR4b09uYm9hcmRSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIuChNldnR4b1'
+    '9zY3JpcHRfcHVia2V5GAIgASgMUhFldnR4b1NjcmlwdFB1YmtleRIhCgxyZWNpcGllbnRfdmsY'
+    'AyABKAxSC3JlY2lwaWVudFZrEiIKDWFfYXRfY29zaWduZXIYBCABKAxSC2FBdENvc2lnbmVyEj'
+    'MKFmFfYXRfcGFydGljaXBhbnRfcG9pbnQYBSABKAxSE2FBdFBhcnRpY2lwYW50UG9pbnQSMwoW'
+    'ZWNpZXNfYV9hdF9wYXJ0aWNpcGFudBgGIAEoDFITZWNpZXNBQXRQYXJ0aWNpcGFudBIcCglzaW'
+    'duYXR1cmUYByABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYCCABKANSC3RpbWVzdGFt'
+    'cE1zEioKEWNvbnRyYWN0X2dyb3VwX2lkGAkgASgMUg9jb250cmFjdEdyb3VwSWQ=');
+
+@$core.Deprecated('Use evtxoOnboardResponseDescriptor instead')
+const EvtxoOnboardResponse$json = {
+  '1': 'EvtxoOnboardResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `EvtxoOnboardResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoOnboardResponseDescriptor = $convert.base64Decode(
+    'ChRFdnR4b09uYm9hcmRSZXNwb25zZRIOCgJvaxgBIAEoCFICb2s=');
+
+@$core.Deprecated('Use evtxoPendingSharesRequestDescriptor instead')
+const EvtxoPendingSharesRequest$json = {
+  '1': 'EvtxoPendingSharesRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `EvtxoPendingSharesRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoPendingSharesRequestDescriptor = $convert.base64Decode(
+    'ChlFdnR4b1BlbmRpbmdTaGFyZXNSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
+    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
+    'dGFtcE1z');
+
+@$core.Deprecated('Use evtxoPendingSharesResponseDescriptor instead')
+const EvtxoPendingSharesResponse$json = {
+  '1': 'EvtxoPendingSharesResponse',
+  '2': [
+    {'1': 'shares', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.PendingContractShare', '10': 'shares'},
+  ],
+};
+
+/// Descriptor for `EvtxoPendingSharesResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoPendingSharesResponseDescriptor = $convert.base64Decode(
+    'ChpFdnR4b1BlbmRpbmdTaGFyZXNSZXNwb25zZRI4CgZzaGFyZXMYASADKAsyIC5tcGNfd2FsbG'
+    'V0LlBlbmRpbmdDb250cmFjdFNoYXJlUgZzaGFyZXM=');
+
+@$core.Deprecated('Use pendingContractShareDescriptor instead')
+const PendingContractShare$json = {
+  '1': 'PendingContractShare',
+  '2': [
+    {'1': 'evtxo_script_pubkey', '3': 1, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {'1': 'contract_group_id', '3': 2, '4': 1, '5': 12, '10': 'contractGroupId'},
+    {'1': 'contract_id', '3': 3, '4': 1, '5': 12, '10': 'contractId'},
+    {'1': 'ecies_half_author', '3': 4, '4': 1, '5': 12, '10': 'eciesHalfAuthor'},
+    {'1': 'ecies_half_cosigner', '3': 5, '4': 1, '5': 12, '10': 'eciesHalfCosigner'},
+    {'1': 'public_key_package_json', '3': 6, '4': 1, '5': 9, '10': 'publicKeyPackageJson'},
+    {'1': 'exit_delay', '3': 7, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'server_pk', '3': 8, '4': 1, '5': 12, '10': 'serverPk'},
+    {'1': 'owner_pk', '3': 9, '4': 1, '5': 12, '10': 'ownerPk'},
+  ],
+};
+
+/// Descriptor for `PendingContractShare`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List pendingContractShareDescriptor = $convert.base64Decode(
+    'ChRQZW5kaW5nQ29udHJhY3RTaGFyZRIuChNldnR4b19zY3JpcHRfcHVia2V5GAEgASgMUhFldn'
+    'R4b1NjcmlwdFB1YmtleRIqChFjb250cmFjdF9ncm91cF9pZBgCIAEoDFIPY29udHJhY3RHcm91'
+    'cElkEh8KC2NvbnRyYWN0X2lkGAMgASgMUgpjb250cmFjdElkEioKEWVjaWVzX2hhbGZfYXV0aG'
+    '9yGAQgASgMUg9lY2llc0hhbGZBdXRob3ISLgoTZWNpZXNfaGFsZl9jb3NpZ25lchgFIAEoDFIR'
+    'ZWNpZXNIYWxmQ29zaWduZXISNQoXcHVibGljX2tleV9wYWNrYWdlX2pzb24YBiABKAlSFHB1Ym'
+    'xpY0tleVBhY2thZ2VKc29uEh0KCmV4aXRfZGVsYXkYByABKA1SCWV4aXREZWxheRIbCglzZXJ2'
+    'ZXJfcGsYCCABKAxSCHNlcnZlclBrEhkKCG93bmVyX3BrGAkgASgMUgdvd25lclBr');
+
+@$core.Deprecated('Use evtxoAckShareRequestDescriptor instead')
+const EvtxoAckShareRequest$json = {
+  '1': 'EvtxoAckShareRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `EvtxoAckShareRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoAckShareRequestDescriptor = $convert.base64Decode(
+    'ChRFdnR4b0Fja1NoYXJlUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSLgoTZXZ0eG'
+    '9fc2NyaXB0X3B1YmtleRgCIAEoDFIRZXZ0eG9TY3JpcHRQdWJrZXkSHAoJc2lnbmF0dXJlGAMg'
+    'ASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcw==');
+
+@$core.Deprecated('Use evtxoAckShareResponseDescriptor instead')
+const EvtxoAckShareResponse$json = {
+  '1': 'EvtxoAckShareResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `EvtxoAckShareResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoAckShareResponseDescriptor = $convert.base64Decode(
+    'ChVFdnR4b0Fja1NoYXJlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+

@@ -23,6 +23,9 @@ pub const OP_SETTLE_DELEGATE: &str = "SETTLE_DELEGATE";
 pub const OP_LIST_ARK_TXS: &str = "LIST_ARK_TXS";
 pub const OP_CHECK_BOARDING_BALANCE: &str = "CHECK_BOARDING_BALANCE";
 pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
+pub const OP_EVTXO_ONBOARD: &str = "EVTXO_ONBOARD";
+pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
+pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
 
 /// Build the auth message bytes that should have been signed.
 /// Returns SHA-256 hash of the canonical message (matches Dart client's AuthMessage.messageBytes).

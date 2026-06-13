@@ -360,6 +360,22 @@ async fn dispatch_one(
                 handlers::ark_send::submit_ark_send
             );
         }
+        CosignerCommand::EvtxoOnboard { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::onboard::evtxo_onboard);
+        }
+        CosignerCommand::EvtxoPendingShares { req, reply } => {
+            dispatch!(
+                user,
+                state,
+                shared,
+                req,
+                reply,
+                handlers::onboard::evtxo_pending_shares
+            );
+        }
+        CosignerCommand::EvtxoAckShare { req, reply } => {
+            dispatch!(user, state, shared, req, reply, handlers::onboard::evtxo_ack_share);
+        }
 
         // -------- Push registration --------
         CosignerCommand::RegisterDeviceToken { req, reply } => {

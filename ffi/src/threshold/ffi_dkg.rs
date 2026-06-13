@@ -681,6 +681,59 @@ pub extern "C" fn threshold_refresh_share_to_id(
     }
 }
 
+/// ECIES-encrypt a 32-byte payload (a scalar — a refresh half) to a recipient's
+/// compressed verifying-share pubkey. Returns the 97-byte blob as hex. Used by the
+/// author to encrypt its onboarding half to a participant.
+#[no_mangle]
+pub extern "C" fn threshold_ecies_encrypt(
+    payload_hex: *const c_char,
+    recipient_pubkey_hex: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let payload_s = read_cstr(payload_hex).ok_or("null payload_hex")?;
+        let pk_s = read_cstr(recipient_pubkey_hex).ok_or("null recipient_pubkey_hex")?;
+        let payload: [u8; 32] = hex::decode(&payload_s)?
+            .try_into()
+            .map_err(|_| "payload must be 32 bytes".to_string())?;
+        let pk: [u8; 33] = hex::decode(&pk_s)?
+            .try_into()
+            .map_err(|_| "recipient pubkey must be 33 bytes".to_string())?;
+        let mut rng = OsRng;
+        let blob = threshold::ecies::encrypt(&payload, &pk, &mut rng)
+            .map_err(|e| format!("ecies encrypt: {e:?}"))?;
+        Ok(hex_encode(&blob))
+    })();
+    match result {
+        Ok(d) => FfiResult::ok(&d),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
+/// ECIES-decrypt a 97-byte blob (hex) with the recipient's secret scalar (hex).
+/// Returns the 32-byte payload as hex. Used by a participant to recover its share
+/// halves. Errors on a MAC mismatch (wrong key / tampered blob).
+#[no_mangle]
+pub extern "C" fn threshold_ecies_decrypt(
+    blob_hex: *const c_char,
+    secret_hex: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let blob_s = read_cstr(blob_hex).ok_or("null blob_hex")?;
+        let secret_s = read_cstr(secret_hex).ok_or("null secret_hex")?;
+        let blob: [u8; 97] = hex::decode(&blob_s)?
+            .try_into()
+            .map_err(|_| "blob must be 97 bytes".to_string())?;
+        let secret = parse_scalar_hex(&secret_s)?;
+        let payload = threshold::ecies::decrypt(&blob, &secret)
+            .map_err(|e| format!("ecies decrypt: {e:?}"))?;
+        Ok(hex_encode(&payload))
+    })();
+    match result {
+        Ok(d) => FfiResult::ok(&d),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
 // Re-use hex decode for the module (avoids bringing in hex crate at top level)
 mod hex {
     pub fn decode(s: &str) -> Result<Vec<u8>, String> {

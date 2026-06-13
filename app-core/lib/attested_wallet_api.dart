@@ -78,6 +78,9 @@ class AttestedWalletApi implements WalletApi {
   @override Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request r) => _inner.evtxoKeygenStep1(r);
   @override Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request r) => _inner.evtxoKeygenStep2(r);
   @override Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request r) => _inner.evtxoKeygenStep3(r);
+  @override Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest r) => _inner.evtxoOnboard(r);
+  @override Future<EvtxoPendingSharesResponse> evtxoPendingShares(EvtxoPendingSharesRequest r) => _inner.evtxoPendingShares(r);
+  @override Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) => _inner.evtxoAckShare(r);
   @override Future<SignStep1Response> signStep1(SignStep1Request r) => _inner.signStep1(r);
   @override Future<SignStep2Response> signStep2(SignStep2Request r) => _inner.signStep2(r);
   @override Future<BroadcastTransactionResponse> broadcastTransaction(BroadcastTransactionRequest r) => _inner.broadcastTransaction(r);

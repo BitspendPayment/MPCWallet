@@ -83,6 +83,10 @@ BigInt modNZero() => BigInt.zero;
 
 BigInt modNOne() => BigInt.one;
 
+/// Sum two scalars modulo the secp256k1 group order. Used to combine the author's
+/// and cosigner's refresh halves into a participant's share `P_i`.
+BigInt modNAdd(BigInt a, BigInt b) => (a + b) % _secp256k1N;
+
 /// Serialize a point (given as compressed hex) to compressed bytes.
 /// When called with a compressed hex string, returns the bytes.
 Uint8List elemSerializeCompressed(String compressedHex) {

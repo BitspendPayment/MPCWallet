@@ -31,6 +31,17 @@ class GrpcWalletApi implements WalletApi {
       _stub.evtxoKeygenStep3(r);
 
   @override
+  Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest r) =>
+      _stub.evtxoOnboard(r);
+  @override
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+          EvtxoPendingSharesRequest r) =>
+      _stub.evtxoPendingShares(r);
+  @override
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) =>
+      _stub.evtxoAckShare(r);
+
+  @override
   Future<SignStep1Response> signStep1(SignStep1Request r) => _stub.signStep1(r);
   @override
   Future<SignStep2Response> signStep2(SignStep2Request r) => _stub.signStep2(r);

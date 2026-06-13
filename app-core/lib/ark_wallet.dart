@@ -181,8 +181,11 @@ class MpcArkWallet {
     required Uint8List evtxoPk,
     required int exitDelay,
     Uint8List? contractArgs,
+    String? ownerPkOverride,
   }) async {
-    final ownerPk = client.groupXOnlyPubKey;
+    // The exit-leaf owner is the AUTHOR's V. The author spends with its own group key;
+    // an onboarded participant must pass the author's owner key (from its pickup).
+    final ownerPk = ownerPkOverride ?? client.groupXOnlyPubKey;
     if (ownerPk == null) {
       throw StateError('Group key not available, cannot spend eVTXO.');
     }

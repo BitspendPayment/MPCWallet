@@ -13,6 +13,12 @@ service MPCWallet {
   rpc EvtxoKeygenStep1 (EvtxoKeygenStep1Request) returns (EvtxoKeygenStep1Response);
   rpc EvtxoKeygenStep2 (EvtxoKeygenStep2Request) returns (EvtxoKeygenStep2Response);
   rpc EvtxoKeygenStep3 (EvtxoKeygenStep3Request) returns (EvtxoKeygenStep3Response);
+  // Multi-user contracts: onboard a participant to a contract eVTXO (author submits
+  // its refresh half; cosigner forms the participant's counter-share + holds the
+  // ECIES halves), and the participant picks up + acks its held shares.
+  rpc EvtxoOnboard (EvtxoOnboardRequest) returns (EvtxoOnboardResponse);
+  rpc EvtxoPendingShares (EvtxoPendingSharesRequest) returns (EvtxoPendingSharesResponse);
+  rpc EvtxoAckShare (EvtxoAckShareRequest) returns (EvtxoAckShareResponse);
 
   // Signing
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
@@ -496,4 +502,58 @@ message EvtxoKeygenStep3Response {
   map<string, string> round2_packages_for_me = 1;
   string evtxo_address = 2;        // derived eVTXO address (cosigner-confirmed)
   bytes evtxo_script_pubkey = 3;   // the registered scriptPubKey
+}
+
+// Onboard one participant to a contract eVTXO. Routed to the contract actor
+// (user_id = V′); the author authenticates via auth_check_group. The author has
+// computed its key-preserving refresh half a_i = refresh_share_to_id(...) onto the
+// participant's identifier id_i = derive(recipient_vk); it sends a_i(cosigner_id) as
+// a scalar (so the cosigner can form C_i), a_i(id_i)·G as a point (so the cosigner can
+// form the participant's verifying share P_i·G without learning a_i(id_i)), and
+// ECIES(a_i(id_i)) encrypted to the participant. The cosigner computes its own half
+// b_i, forms C_i + the 2-entry V′ PKP, registers the participant, and holds BOTH
+// ECIES halves in the participant's pickup inbox. Neither side learns P_i.
+message EvtxoOnboardRequest {
+  bytes user_id = 1;                  // the author (claimed share; routes via V′ path)
+  bytes evtxo_script_pubkey = 2;      // the contract eVTXO this participant joins
+  bytes recipient_vk = 3;             // the participant's verifying share (pubkey)
+  bytes a_at_cosigner = 4;            // a_i(cosigner_id) scalar (32B)
+  bytes a_at_participant_point = 5;   // a_i(id_i)·G compressed point (33B)
+  bytes ecies_a_at_participant = 6;   // ECIES(a_i(id_i)) to recipient_vk
+  bytes signature = 7;                // author auth (binds user_id)
+  int64 timestamp_ms = 8;
+  bytes contract_group_id = 9;        // V′ — routes to the contract actor (REST URL)
+}
+message EvtxoOnboardResponse {
+  bool ok = 1;
+}
+
+// Participant fetches contract shares held for it (in its own actor's inbox).
+message EvtxoPendingSharesRequest {
+  bytes user_id = 1;       // the participant (its own actor)
+  bytes signature = 2;
+  int64 timestamp_ms = 3;
+}
+message EvtxoPendingSharesResponse {
+  repeated PendingContractShare shares = 1;
+}
+message PendingContractShare {
+  bytes evtxo_script_pubkey = 1;
+  bytes contract_group_id = 2;          // V′ (the contract actor to address at spend)
+  bytes contract_id = 3;                // sha256(wasm)
+  bytes ecies_half_author = 4;          // ECIES(a_i(id_i))
+  bytes ecies_half_cosigner = 5;        // ECIES(b_i(id_i))
+  string public_key_package_json = 6;   // the 2-entry V′ PKP {id_i, cosigner_id}
+  uint32 exit_delay = 7;
+  bytes server_pk = 8;                  // ASP signer x-only (for the cooperative leaf)
+  bytes owner_pk = 9;                   // exit-leaf owner (author's V, x-only) for the taptree
+}
+message EvtxoAckShareRequest {
+  bytes user_id = 1;                    // the participant
+  bytes evtxo_script_pubkey = 2;        // the share to clear from the inbox
+  bytes signature = 3;
+  int64 timestamp_ms = 4;
+}
+message EvtxoAckShareResponse {
+  bool ok = 1;
 }

@@ -4548,6 +4548,654 @@ class EvtxoKeygenStep3Response extends $pb.GeneratedMessage {
   void clearEvtxoScriptPubkey() => clearField(3);
 }
 
+/// Onboard one participant to a contract eVTXO. Routed to the contract actor
+/// (user_id = V′); the author authenticates via auth_check_group. The author has
+/// computed its key-preserving refresh half a_i = refresh_share_to_id(...) onto the
+/// participant's identifier id_i = derive(recipient_vk); it sends a_i(cosigner_id) as
+/// a scalar (so the cosigner can form C_i), a_i(id_i)·G as a point (so the cosigner can
+/// form the participant's verifying share P_i·G without learning a_i(id_i)), and
+/// ECIES(a_i(id_i)) encrypted to the participant. The cosigner computes its own half
+/// b_i, forms C_i + the 2-entry V′ PKP, registers the participant, and holds BOTH
+/// ECIES halves in the participant's pickup inbox. Neither side learns P_i.
+class EvtxoOnboardRequest extends $pb.GeneratedMessage {
+  factory EvtxoOnboardRequest({
+    $core.List<$core.int>? userId,
+    $core.List<$core.int>? evtxoScriptPubkey,
+    $core.List<$core.int>? recipientVk,
+    $core.List<$core.int>? aAtCosigner,
+    $core.List<$core.int>? aAtParticipantPoint,
+    $core.List<$core.int>? eciesAAtParticipant,
+    $core.List<$core.int>? signature,
+    $fixnum.Int64? timestampMs,
+    $core.List<$core.int>? contractGroupId,
+  }) {
+    final $result = create();
+    if (userId != null) {
+      $result.userId = userId;
+    }
+    if (evtxoScriptPubkey != null) {
+      $result.evtxoScriptPubkey = evtxoScriptPubkey;
+    }
+    if (recipientVk != null) {
+      $result.recipientVk = recipientVk;
+    }
+    if (aAtCosigner != null) {
+      $result.aAtCosigner = aAtCosigner;
+    }
+    if (aAtParticipantPoint != null) {
+      $result.aAtParticipantPoint = aAtParticipantPoint;
+    }
+    if (eciesAAtParticipant != null) {
+      $result.eciesAAtParticipant = eciesAAtParticipant;
+    }
+    if (signature != null) {
+      $result.signature = signature;
+    }
+    if (timestampMs != null) {
+      $result.timestampMs = timestampMs;
+    }
+    if (contractGroupId != null) {
+      $result.contractGroupId = contractGroupId;
+    }
+    return $result;
+  }
+  EvtxoOnboardRequest._() : super();
+  factory EvtxoOnboardRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoOnboardRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoOnboardRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'recipientVk', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'aAtCosigner', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'aAtParticipantPoint', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'eciesAAtParticipant', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(7, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aInt64(8, _omitFieldNames ? '' : 'timestampMs')
+    ..a<$core.List<$core.int>>(9, _omitFieldNames ? '' : 'contractGroupId', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoOnboardRequest clone() => EvtxoOnboardRequest()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoOnboardRequest copyWith(void Function(EvtxoOnboardRequest) updates) => super.copyWith((message) => updates(message as EvtxoOnboardRequest)) as EvtxoOnboardRequest;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoOnboardRequest create() => EvtxoOnboardRequest._();
+  EvtxoOnboardRequest createEmptyInstance() => create();
+  static $pb.PbList<EvtxoOnboardRequest> createRepeated() => $pb.PbList<EvtxoOnboardRequest>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoOnboardRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoOnboardRequest>(create);
+  static EvtxoOnboardRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get userId => $_getN(0);
+  @$pb.TagNumber(1)
+  set userId($core.List<$core.int> v) { $_setBytes(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasUserId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUserId() => clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get evtxoScriptPubkey => $_getN(1);
+  @$pb.TagNumber(2)
+  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasEvtxoScriptPubkey() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEvtxoScriptPubkey() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get recipientVk => $_getN(2);
+  @$pb.TagNumber(3)
+  set recipientVk($core.List<$core.int> v) { $_setBytes(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasRecipientVk() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearRecipientVk() => clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get aAtCosigner => $_getN(3);
+  @$pb.TagNumber(4)
+  set aAtCosigner($core.List<$core.int> v) { $_setBytes(3, v); }
+  @$pb.TagNumber(4)
+  $core.bool hasAAtCosigner() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearAAtCosigner() => clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get aAtParticipantPoint => $_getN(4);
+  @$pb.TagNumber(5)
+  set aAtParticipantPoint($core.List<$core.int> v) { $_setBytes(4, v); }
+  @$pb.TagNumber(5)
+  $core.bool hasAAtParticipantPoint() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearAAtParticipantPoint() => clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.List<$core.int> get eciesAAtParticipant => $_getN(5);
+  @$pb.TagNumber(6)
+  set eciesAAtParticipant($core.List<$core.int> v) { $_setBytes(5, v); }
+  @$pb.TagNumber(6)
+  $core.bool hasEciesAAtParticipant() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearEciesAAtParticipant() => clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.List<$core.int> get signature => $_getN(6);
+  @$pb.TagNumber(7)
+  set signature($core.List<$core.int> v) { $_setBytes(6, v); }
+  @$pb.TagNumber(7)
+  $core.bool hasSignature() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearSignature() => clearField(7);
+
+  @$pb.TagNumber(8)
+  $fixnum.Int64 get timestampMs => $_getI64(7);
+  @$pb.TagNumber(8)
+  set timestampMs($fixnum.Int64 v) { $_setInt64(7, v); }
+  @$pb.TagNumber(8)
+  $core.bool hasTimestampMs() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearTimestampMs() => clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.List<$core.int> get contractGroupId => $_getN(8);
+  @$pb.TagNumber(9)
+  set contractGroupId($core.List<$core.int> v) { $_setBytes(8, v); }
+  @$pb.TagNumber(9)
+  $core.bool hasContractGroupId() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearContractGroupId() => clearField(9);
+}
+
+class EvtxoOnboardResponse extends $pb.GeneratedMessage {
+  factory EvtxoOnboardResponse({
+    $core.bool? ok,
+  }) {
+    final $result = create();
+    if (ok != null) {
+      $result.ok = ok;
+    }
+    return $result;
+  }
+  EvtxoOnboardResponse._() : super();
+  factory EvtxoOnboardResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoOnboardResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoOnboardResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOB(1, _omitFieldNames ? '' : 'ok')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoOnboardResponse clone() => EvtxoOnboardResponse()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoOnboardResponse copyWith(void Function(EvtxoOnboardResponse) updates) => super.copyWith((message) => updates(message as EvtxoOnboardResponse)) as EvtxoOnboardResponse;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoOnboardResponse create() => EvtxoOnboardResponse._();
+  EvtxoOnboardResponse createEmptyInstance() => create();
+  static $pb.PbList<EvtxoOnboardResponse> createRepeated() => $pb.PbList<EvtxoOnboardResponse>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoOnboardResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoOnboardResponse>(create);
+  static EvtxoOnboardResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get ok => $_getBF(0);
+  @$pb.TagNumber(1)
+  set ok($core.bool v) { $_setBool(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasOk() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearOk() => clearField(1);
+}
+
+/// Participant fetches contract shares held for it (in its own actor's inbox).
+class EvtxoPendingSharesRequest extends $pb.GeneratedMessage {
+  factory EvtxoPendingSharesRequest({
+    $core.List<$core.int>? userId,
+    $core.List<$core.int>? signature,
+    $fixnum.Int64? timestampMs,
+  }) {
+    final $result = create();
+    if (userId != null) {
+      $result.userId = userId;
+    }
+    if (signature != null) {
+      $result.signature = signature;
+    }
+    if (timestampMs != null) {
+      $result.timestampMs = timestampMs;
+    }
+    return $result;
+  }
+  EvtxoPendingSharesRequest._() : super();
+  factory EvtxoPendingSharesRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoPendingSharesRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoPendingSharesRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aInt64(3, _omitFieldNames ? '' : 'timestampMs')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoPendingSharesRequest clone() => EvtxoPendingSharesRequest()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoPendingSharesRequest copyWith(void Function(EvtxoPendingSharesRequest) updates) => super.copyWith((message) => updates(message as EvtxoPendingSharesRequest)) as EvtxoPendingSharesRequest;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoPendingSharesRequest create() => EvtxoPendingSharesRequest._();
+  EvtxoPendingSharesRequest createEmptyInstance() => create();
+  static $pb.PbList<EvtxoPendingSharesRequest> createRepeated() => $pb.PbList<EvtxoPendingSharesRequest>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoPendingSharesRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoPendingSharesRequest>(create);
+  static EvtxoPendingSharesRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get userId => $_getN(0);
+  @$pb.TagNumber(1)
+  set userId($core.List<$core.int> v) { $_setBytes(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasUserId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUserId() => clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get signature => $_getN(1);
+  @$pb.TagNumber(2)
+  set signature($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasSignature() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearSignature() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $fixnum.Int64 get timestampMs => $_getI64(2);
+  @$pb.TagNumber(3)
+  set timestampMs($fixnum.Int64 v) { $_setInt64(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasTimestampMs() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearTimestampMs() => clearField(3);
+}
+
+class EvtxoPendingSharesResponse extends $pb.GeneratedMessage {
+  factory EvtxoPendingSharesResponse({
+    $core.Iterable<PendingContractShare>? shares,
+  }) {
+    final $result = create();
+    if (shares != null) {
+      $result.shares.addAll(shares);
+    }
+    return $result;
+  }
+  EvtxoPendingSharesResponse._() : super();
+  factory EvtxoPendingSharesResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoPendingSharesResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoPendingSharesResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..pc<PendingContractShare>(1, _omitFieldNames ? '' : 'shares', $pb.PbFieldType.PM, subBuilder: PendingContractShare.create)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoPendingSharesResponse clone() => EvtxoPendingSharesResponse()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoPendingSharesResponse copyWith(void Function(EvtxoPendingSharesResponse) updates) => super.copyWith((message) => updates(message as EvtxoPendingSharesResponse)) as EvtxoPendingSharesResponse;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoPendingSharesResponse create() => EvtxoPendingSharesResponse._();
+  EvtxoPendingSharesResponse createEmptyInstance() => create();
+  static $pb.PbList<EvtxoPendingSharesResponse> createRepeated() => $pb.PbList<EvtxoPendingSharesResponse>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoPendingSharesResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoPendingSharesResponse>(create);
+  static EvtxoPendingSharesResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<PendingContractShare> get shares => $_getList(0);
+}
+
+class PendingContractShare extends $pb.GeneratedMessage {
+  factory PendingContractShare({
+    $core.List<$core.int>? evtxoScriptPubkey,
+    $core.List<$core.int>? contractGroupId,
+    $core.List<$core.int>? contractId,
+    $core.List<$core.int>? eciesHalfAuthor,
+    $core.List<$core.int>? eciesHalfCosigner,
+    $core.String? publicKeyPackageJson,
+    $core.int? exitDelay,
+    $core.List<$core.int>? serverPk,
+    $core.List<$core.int>? ownerPk,
+  }) {
+    final $result = create();
+    if (evtxoScriptPubkey != null) {
+      $result.evtxoScriptPubkey = evtxoScriptPubkey;
+    }
+    if (contractGroupId != null) {
+      $result.contractGroupId = contractGroupId;
+    }
+    if (contractId != null) {
+      $result.contractId = contractId;
+    }
+    if (eciesHalfAuthor != null) {
+      $result.eciesHalfAuthor = eciesHalfAuthor;
+    }
+    if (eciesHalfCosigner != null) {
+      $result.eciesHalfCosigner = eciesHalfCosigner;
+    }
+    if (publicKeyPackageJson != null) {
+      $result.publicKeyPackageJson = publicKeyPackageJson;
+    }
+    if (exitDelay != null) {
+      $result.exitDelay = exitDelay;
+    }
+    if (serverPk != null) {
+      $result.serverPk = serverPk;
+    }
+    if (ownerPk != null) {
+      $result.ownerPk = ownerPk;
+    }
+    return $result;
+  }
+  PendingContractShare._() : super();
+  factory PendingContractShare.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory PendingContractShare.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PendingContractShare', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'contractGroupId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'contractId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'eciesHalfAuthor', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'eciesHalfCosigner', $pb.PbFieldType.OY)
+    ..aOS(6, _omitFieldNames ? '' : 'publicKeyPackageJson')
+    ..a<$core.int>(7, _omitFieldNames ? '' : 'exitDelay', $pb.PbFieldType.OU3)
+    ..a<$core.List<$core.int>>(8, _omitFieldNames ? '' : 'serverPk', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(9, _omitFieldNames ? '' : 'ownerPk', $pb.PbFieldType.OY)
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  PendingContractShare clone() => PendingContractShare()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  PendingContractShare copyWith(void Function(PendingContractShare) updates) => super.copyWith((message) => updates(message as PendingContractShare)) as PendingContractShare;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static PendingContractShare create() => PendingContractShare._();
+  PendingContractShare createEmptyInstance() => create();
+  static $pb.PbList<PendingContractShare> createRepeated() => $pb.PbList<PendingContractShare>();
+  @$core.pragma('dart2js:noInline')
+  static PendingContractShare getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<PendingContractShare>(create);
+  static PendingContractShare? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get evtxoScriptPubkey => $_getN(0);
+  @$pb.TagNumber(1)
+  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasEvtxoScriptPubkey() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearEvtxoScriptPubkey() => clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get contractGroupId => $_getN(1);
+  @$pb.TagNumber(2)
+  set contractGroupId($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasContractGroupId() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearContractGroupId() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get contractId => $_getN(2);
+  @$pb.TagNumber(3)
+  set contractId($core.List<$core.int> v) { $_setBytes(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasContractId() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearContractId() => clearField(3);
+
+  @$pb.TagNumber(4)
+  $core.List<$core.int> get eciesHalfAuthor => $_getN(3);
+  @$pb.TagNumber(4)
+  set eciesHalfAuthor($core.List<$core.int> v) { $_setBytes(3, v); }
+  @$pb.TagNumber(4)
+  $core.bool hasEciesHalfAuthor() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearEciesHalfAuthor() => clearField(4);
+
+  @$pb.TagNumber(5)
+  $core.List<$core.int> get eciesHalfCosigner => $_getN(4);
+  @$pb.TagNumber(5)
+  set eciesHalfCosigner($core.List<$core.int> v) { $_setBytes(4, v); }
+  @$pb.TagNumber(5)
+  $core.bool hasEciesHalfCosigner() => $_has(4);
+  @$pb.TagNumber(5)
+  void clearEciesHalfCosigner() => clearField(5);
+
+  @$pb.TagNumber(6)
+  $core.String get publicKeyPackageJson => $_getSZ(5);
+  @$pb.TagNumber(6)
+  set publicKeyPackageJson($core.String v) { $_setString(5, v); }
+  @$pb.TagNumber(6)
+  $core.bool hasPublicKeyPackageJson() => $_has(5);
+  @$pb.TagNumber(6)
+  void clearPublicKeyPackageJson() => clearField(6);
+
+  @$pb.TagNumber(7)
+  $core.int get exitDelay => $_getIZ(6);
+  @$pb.TagNumber(7)
+  set exitDelay($core.int v) { $_setUnsignedInt32(6, v); }
+  @$pb.TagNumber(7)
+  $core.bool hasExitDelay() => $_has(6);
+  @$pb.TagNumber(7)
+  void clearExitDelay() => clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.List<$core.int> get serverPk => $_getN(7);
+  @$pb.TagNumber(8)
+  set serverPk($core.List<$core.int> v) { $_setBytes(7, v); }
+  @$pb.TagNumber(8)
+  $core.bool hasServerPk() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearServerPk() => clearField(8);
+
+  @$pb.TagNumber(9)
+  $core.List<$core.int> get ownerPk => $_getN(8);
+  @$pb.TagNumber(9)
+  set ownerPk($core.List<$core.int> v) { $_setBytes(8, v); }
+  @$pb.TagNumber(9)
+  $core.bool hasOwnerPk() => $_has(8);
+  @$pb.TagNumber(9)
+  void clearOwnerPk() => clearField(9);
+}
+
+class EvtxoAckShareRequest extends $pb.GeneratedMessage {
+  factory EvtxoAckShareRequest({
+    $core.List<$core.int>? userId,
+    $core.List<$core.int>? evtxoScriptPubkey,
+    $core.List<$core.int>? signature,
+    $fixnum.Int64? timestampMs,
+  }) {
+    final $result = create();
+    if (userId != null) {
+      $result.userId = userId;
+    }
+    if (evtxoScriptPubkey != null) {
+      $result.evtxoScriptPubkey = evtxoScriptPubkey;
+    }
+    if (signature != null) {
+      $result.signature = signature;
+    }
+    if (timestampMs != null) {
+      $result.timestampMs = timestampMs;
+    }
+    return $result;
+  }
+  EvtxoAckShareRequest._() : super();
+  factory EvtxoAckShareRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoAckShareRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoAckShareRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoAckShareRequest clone() => EvtxoAckShareRequest()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoAckShareRequest copyWith(void Function(EvtxoAckShareRequest) updates) => super.copyWith((message) => updates(message as EvtxoAckShareRequest)) as EvtxoAckShareRequest;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoAckShareRequest create() => EvtxoAckShareRequest._();
+  EvtxoAckShareRequest createEmptyInstance() => create();
+  static $pb.PbList<EvtxoAckShareRequest> createRepeated() => $pb.PbList<EvtxoAckShareRequest>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoAckShareRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoAckShareRequest>(create);
+  static EvtxoAckShareRequest? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.List<$core.int> get userId => $_getN(0);
+  @$pb.TagNumber(1)
+  set userId($core.List<$core.int> v) { $_setBytes(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasUserId() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearUserId() => clearField(1);
+
+  @$pb.TagNumber(2)
+  $core.List<$core.int> get evtxoScriptPubkey => $_getN(1);
+  @$pb.TagNumber(2)
+  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(1, v); }
+  @$pb.TagNumber(2)
+  $core.bool hasEvtxoScriptPubkey() => $_has(1);
+  @$pb.TagNumber(2)
+  void clearEvtxoScriptPubkey() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.List<$core.int> get signature => $_getN(2);
+  @$pb.TagNumber(3)
+  set signature($core.List<$core.int> v) { $_setBytes(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasSignature() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearSignature() => clearField(3);
+
+  @$pb.TagNumber(4)
+  $fixnum.Int64 get timestampMs => $_getI64(3);
+  @$pb.TagNumber(4)
+  set timestampMs($fixnum.Int64 v) { $_setInt64(3, v); }
+  @$pb.TagNumber(4)
+  $core.bool hasTimestampMs() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearTimestampMs() => clearField(4);
+}
+
+class EvtxoAckShareResponse extends $pb.GeneratedMessage {
+  factory EvtxoAckShareResponse({
+    $core.bool? ok,
+  }) {
+    final $result = create();
+    if (ok != null) {
+      $result.ok = ok;
+    }
+    return $result;
+  }
+  EvtxoAckShareResponse._() : super();
+  factory EvtxoAckShareResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EvtxoAckShareResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoAckShareResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOB(1, _omitFieldNames ? '' : 'ok')
+    ..hasRequiredFields = false
+  ;
+
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
+  'Will be removed in next major version')
+  EvtxoAckShareResponse clone() => EvtxoAckShareResponse()..mergeFromMessage(this);
+  @$core.Deprecated(
+  'Using this can add significant overhead to your binary. '
+  'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
+  'Will be removed in next major version')
+  EvtxoAckShareResponse copyWith(void Function(EvtxoAckShareResponse) updates) => super.copyWith((message) => updates(message as EvtxoAckShareResponse)) as EvtxoAckShareResponse;
+
+  $pb.BuilderInfo get info_ => _i;
+
+  @$core.pragma('dart2js:noInline')
+  static EvtxoAckShareResponse create() => EvtxoAckShareResponse._();
+  EvtxoAckShareResponse createEmptyInstance() => create();
+  static $pb.PbList<EvtxoAckShareResponse> createRepeated() => $pb.PbList<EvtxoAckShareResponse>();
+  @$core.pragma('dart2js:noInline')
+  static EvtxoAckShareResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoAckShareResponse>(create);
+  static EvtxoAckShareResponse? _defaultInstance;
+
+  @$pb.TagNumber(1)
+  $core.bool get ok => $_getBF(0);
+  @$pb.TagNumber(1)
+  set ok($core.bool v) { $_setBool(0, v); }
+  @$pb.TagNumber(1)
+  $core.bool hasOk() => $_has(0);
+  @$pb.TagNumber(1)
+  void clearOk() => clearField(1);
+}
+
 
 const _omitFieldNames = $core.bool.fromEnvironment('protobuf.omit_field_names');
 const _omitMessageNames = $core.bool.fromEnvironment('protobuf.omit_message_names');

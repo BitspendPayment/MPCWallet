@@ -45,6 +45,18 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/EvtxoKeygenStep3',
       ($0.EvtxoKeygenStep3Request value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.EvtxoKeygenStep3Response.fromBuffer(value));
+  static final _$evtxoOnboard = $grpc.ClientMethod<$0.EvtxoOnboardRequest, $0.EvtxoOnboardResponse>(
+      '/mpc_wallet.MPCWallet/EvtxoOnboard',
+      ($0.EvtxoOnboardRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.EvtxoOnboardResponse.fromBuffer(value));
+  static final _$evtxoPendingShares = $grpc.ClientMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
+      '/mpc_wallet.MPCWallet/EvtxoPendingShares',
+      ($0.EvtxoPendingSharesRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.EvtxoPendingSharesResponse.fromBuffer(value));
+  static final _$evtxoAckShare = $grpc.ClientMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
+      '/mpc_wallet.MPCWallet/EvtxoAckShare',
+      ($0.EvtxoAckShareRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.EvtxoAckShareResponse.fromBuffer(value));
   static final _$signStep1 = $grpc.ClientMethod<$0.SignStep1Request, $0.SignStep1Response>(
       '/mpc_wallet.MPCWallet/SignStep1',
       ($0.SignStep1Request value) => value.writeToBuffer(),
@@ -150,6 +162,18 @@ class MPCWalletClient extends $grpc.Client {
 
   $grpc.ResponseFuture<$0.EvtxoKeygenStep3Response> evtxoKeygenStep3($0.EvtxoKeygenStep3Request request, {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$evtxoKeygenStep3, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.EvtxoOnboardResponse> evtxoOnboard($0.EvtxoOnboardRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$evtxoOnboard, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.EvtxoPendingSharesResponse> evtxoPendingShares($0.EvtxoPendingSharesRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$evtxoPendingShares, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.EvtxoAckShareResponse> evtxoAckShare($0.EvtxoAckShareRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$evtxoAckShare, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.SignStep1Response> signStep1($0.SignStep1Request request, {$grpc.CallOptions? options}) {
@@ -276,6 +300,27 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.EvtxoKeygenStep3Request.fromBuffer(value),
         ($0.EvtxoKeygenStep3Response value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.EvtxoOnboardRequest, $0.EvtxoOnboardResponse>(
+        'EvtxoOnboard',
+        evtxoOnboard_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.EvtxoOnboardRequest.fromBuffer(value),
+        ($0.EvtxoOnboardResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
+        'EvtxoPendingShares',
+        evtxoPendingShares_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.EvtxoPendingSharesRequest.fromBuffer(value),
+        ($0.EvtxoPendingSharesResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
+        'EvtxoAckShare',
+        evtxoAckShare_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.EvtxoAckShareRequest.fromBuffer(value),
+        ($0.EvtxoAckShareResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.SignStep1Request, $0.SignStep1Response>(
         'SignStep1',
         signStep1_Pre,
@@ -435,6 +480,18 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return evtxoKeygenStep3(call, await request);
   }
 
+  $async.Future<$0.EvtxoOnboardResponse> evtxoOnboard_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoOnboardRequest> request) async {
+    return evtxoOnboard(call, await request);
+  }
+
+  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoPendingSharesRequest> request) async {
+    return evtxoPendingShares(call, await request);
+  }
+
+  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoAckShareRequest> request) async {
+    return evtxoAckShare(call, await request);
+  }
+
   $async.Future<$0.SignStep1Response> signStep1_Pre($grpc.ServiceCall call, $async.Future<$0.SignStep1Request> request) async {
     return signStep1(call, await request);
   }
@@ -517,6 +574,9 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
   $async.Future<$0.EvtxoKeygenStep1Response> evtxoKeygenStep1($grpc.ServiceCall call, $0.EvtxoKeygenStep1Request request);
   $async.Future<$0.EvtxoKeygenStep2Response> evtxoKeygenStep2($grpc.ServiceCall call, $0.EvtxoKeygenStep2Request request);
   $async.Future<$0.EvtxoKeygenStep3Response> evtxoKeygenStep3($grpc.ServiceCall call, $0.EvtxoKeygenStep3Request request);
+  $async.Future<$0.EvtxoOnboardResponse> evtxoOnboard($grpc.ServiceCall call, $0.EvtxoOnboardRequest request);
+  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares($grpc.ServiceCall call, $0.EvtxoPendingSharesRequest request);
+  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare($grpc.ServiceCall call, $0.EvtxoAckShareRequest request);
   $async.Future<$0.SignStep1Response> signStep1($grpc.ServiceCall call, $0.SignStep1Request request);
   $async.Future<$0.SignStep2Response> signStep2($grpc.ServiceCall call, $0.SignStep2Request request);
   $async.Future<$0.BroadcastTransactionResponse> broadcastTransaction($grpc.ServiceCall call, $0.BroadcastTransactionRequest request);

@@ -605,6 +605,116 @@ class MpcClient {
     );
   }
 
+  // --- MULTI-USER CONTRACT ONBOARDING ---
+
+  /// Author onboards [recipientVk] to the contract eVTXO [evtxoScriptPubkey]. Computes
+  /// the author's key-preserving refresh half onto the participant's identifier
+  /// (`id_i = derive(recipientVk)`) and submits it to the contract cosigner, which
+  /// forms the participant's counter-share `C_i` + the 2-entry V′ PKP and holds both
+  /// ECIES halves for the participant to pick up. Neither side learns `P_i`.
+  /// [evtxoKeyPkg]/[evtxoPkp] = the author's V′ share + V′ PKP from [createEvtxoKey].
+  Future<void> onboardParticipant({
+    required Uint8List evtxoScriptPubkey,
+    required Uint8List recipientVk,
+    required threshold.KeyPackage evtxoKeyPkg,
+    required threshold.PublicKeyPackage evtxoPkp,
+  }) async {
+    final authorId = evtxoKeyPkg.identifier;
+    // The cosigner's id is the other entry of the 2-entry V′ PKP.
+    final cosignerId =
+        evtxoPkp.verifyingShares.keys.firstWhere((id) => id != authorId);
+    final idSet = <threshold.Identifier>[authorId, cosignerId];
+    final participantId = threshold.Identifier.derive(recipientVk);
+    final slope = threshold.modNRandom();
+
+    final (aAtP, aAtC) = threshold.refreshShareToId(
+        evtxoKeyPkg, idSet, participantId, cosignerId, slope);
+    final aAtParticipantPoint =
+        Uint8List.fromList(hex.decode(threshold.elemBaseMul(aAtP)));
+    final eciesA = threshold.eciesEncrypt(threshold.bigIntToBytes(aAtP), recipientVk);
+    final vPrime = threshold.elemSerializeCompressed(evtxoPkp.verifyingKey.E);
+
+    final auth = _authHelper!.signForEvtxoOnboard();
+    await _stub.evtxoOnboard(EvtxoOnboardRequest()
+      ..userId = _userId!
+      ..contractGroupId = vPrime
+      ..evtxoScriptPubkey = evtxoScriptPubkey
+      ..recipientVk = recipientVk
+      ..aAtCosigner = threshold.bigIntToBytes(aAtC)
+      ..aAtParticipantPoint = aAtParticipantPoint
+      ..eciesAAtParticipant = eciesA
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
+
+  /// Participant fetches the contract shares held for it, decrypts BOTH ECIES halves
+  /// with its own signing secret, sums them into `P_i`, and returns the spendable
+  /// context per contract eVTXO (the V′ key package + PKP + the taptree parameters).
+  Future<
+      List<
+          ({
+            Uint8List scriptPubkey,
+            Uint8List contractGroupId,
+            Uint8List contractId,
+            int exitDelay,
+            Uint8List ownerPk,
+            threshold.KeyPackage keyPackage,
+            threshold.PublicKeyPackage publicKeyPackage,
+          })>> fetchContractShares() async {
+    if (_userId == null || _signingSecret == null) {
+      throw StateError('Client not initialized.');
+    }
+    final auth = _authHelper!.signForEvtxoPending();
+    final resp = await _stub.evtxoPendingShares(EvtxoPendingSharesRequest()
+      ..userId = _userId!
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+
+    final participantId =
+        threshold.Identifier.derive(Uint8List.fromList(_userId!));
+    final secret = _signingSecret!.scalar;
+    final out = <
+        ({
+          Uint8List scriptPubkey,
+          Uint8List contractGroupId,
+          Uint8List contractId,
+          int exitDelay,
+          Uint8List ownerPk,
+          threshold.KeyPackage keyPackage,
+          threshold.PublicKeyPackage publicKeyPackage,
+        })>[];
+    for (final s in resp.shares) {
+      final aAtP = threshold.bytesToBigInt(threshold.eciesDecrypt(
+          Uint8List.fromList(s.eciesHalfAuthor), secret));
+      final bAtP = threshold.bytesToBigInt(threshold.eciesDecrypt(
+          Uint8List.fromList(s.eciesHalfCosigner), secret));
+      final pI = threshold.modNAdd(aAtP, bAtP);
+      final pkp = threshold.PublicKeyPackage.fromJson(
+          jsonDecode(s.publicKeyPackageJson) as Map<String, dynamic>);
+      final kp = threshold.KeyPackage(
+          participantId, pI, threshold.elemBaseMul(pI), pkp.verifyingKey, 2);
+      out.add((
+        scriptPubkey: Uint8List.fromList(s.evtxoScriptPubkey),
+        contractGroupId: Uint8List.fromList(s.contractGroupId),
+        contractId: Uint8List.fromList(s.contractId),
+        exitDelay: s.exitDelay,
+        ownerPk: Uint8List.fromList(s.ownerPk),
+        keyPackage: kp,
+        publicKeyPackage: pkp,
+      ));
+    }
+    return out;
+  }
+
+  /// Clear a picked-up contract share from the participant's inbox.
+  Future<void> ackContractShare(Uint8List evtxoScriptPubkey) async {
+    final auth = _authHelper!.signForEvtxoAck();
+    await _stub.evtxoAckShare(EvtxoAckShareRequest()
+      ..userId = _userId!
+      ..evtxoScriptPubkey = evtxoScriptPubkey
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
 
   // --- SIGNING ---
 

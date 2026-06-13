@@ -356,8 +356,14 @@ fn register_evtxo(
         spk_hex,
         EvtxoPolicy {
             contract_id_hex: hex::encode(contract_id),
-            evtxo_pk_xonly_hex: v_xonly,
+            evtxo_pk_xonly_hex: v_xonly.clone(),
             recipient_shares,
+            // One-shot V′ == V path: no separate reshare key, so onboarding of extra
+            // participants is not supported here (the reshare path populates these).
+            cosigner_vprime_kp_json: String::new(),
+            author_id_hex: String::new(),
+            exit_delay: req.exit_delay,
+            owner_pk_xonly_hex: v_xonly,
         },
     );
     persist_policy(shared, &user_id_hex, &policy)?;
@@ -566,6 +572,12 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     // the contract cosigner actor. Captured before pkp_json is moved below.
     let v_prime_group_id = parsers::extract_verifying_key(&pkp_json)?;
 
+    // Onboarding inputs (captured before the JSONs move): the cosigner's canonical V′
+    // key package + the author's V′ identifier (the non-cosigner entry of the 2-entry
+    // PKP). `kp` from dkg_reshare_part3 IS the cosigner's V′ key package.
+    let cosigner_vprime_kp_json = kp_json.clone();
+    let author_id_hex = parsers::extract_recipient_identifier(&pkp_json, &cosigner_id_hex)?;
+
     // Build the (single-recipient) EvtxoPolicy: the author keyed by its own user_id.
     // The per-participant refresh (Phase 4) adds further recipients keyed by their
     // own verifying share.
@@ -582,6 +594,10 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
         contract_id_hex: hex::encode(&contract_id),
         evtxo_pk_xonly_hex: evtxo_pk_xonly,
         recipient_shares,
+        cosigner_vprime_kp_json,
+        author_id_hex,
+        exit_delay: sess.reshare_exit_delay,
+        owner_pk_xonly_hex: owner_pk_xonly,
     };
 
     // (a) Author's own policy copy — lets the author spend the eVTXO via its own

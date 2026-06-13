@@ -55,6 +55,25 @@ pub struct EvtxoPolicy {
     /// Per-recipient cosigner counter-shares, keyed by the recipient's verifying
     /// share (hex). F3-isolated: never union the per-recipient PKPs.
     pub recipient_shares: HashMap<String, RecipientCosignerShare>,
+    /// The cosigner's CANONICAL `V′` key package (JSON) — its share `ss_cosigner` at
+    /// `cosigner_id`, fixed across recipients. Used to refresh `v′` onto a new
+    /// participant's identifier during onboarding. (Empty for legacy policies.)
+    #[serde(default)]
+    pub cosigner_vprime_kp_json: String,
+    /// The author's (recipient[0]'s) `V′` identifier hex — the second member of the
+    /// original `{author_id, cosigner_id}` shareholder set, needed for the Lagrange
+    /// coefficient when refreshing onto new participants.
+    #[serde(default)]
+    pub author_id_hex: String,
+    /// The eVTXO's unilateral-exit CSV delay — a participant needs it to rebuild the
+    /// eVTXO spend at pickup time.
+    #[serde(default)]
+    pub exit_delay: u32,
+    /// The eVTXO's exit-leaf owner key (author's V, x-only hex) — a participant needs
+    /// it to reconstruct the taptree (the exit-leaf sibling hash) when spending the
+    /// cooperative leaf.
+    #[serde(default)]
+    pub owner_pk_xonly_hex: String,
 }
 
 /// The cosigner's `V′` counter-share for one recipient. `public_key_package_json`
