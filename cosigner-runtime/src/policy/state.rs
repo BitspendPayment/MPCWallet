@@ -20,6 +20,12 @@ pub struct PolicyState {
     /// a resharing-derived 2-of-2 key V′ to a WASM contract.
     #[serde(default)]
     pub evtxo_policies: HashMap<String, EvtxoPolicy>,
+    /// True for a CONTRACT actor (keyed by GroupID = V′): it has no normal 2-of-2
+    /// wallet (`normal_policy` is a placeholder); it only co-signs eVTXO spends for
+    /// its registered recipients, who authenticate with their own verifying share
+    /// (`auth_check_group` against `group_auth_idx[V′]`) rather than `auth_check`.
+    #[serde(default)]
+    pub is_contract: bool,
 }
 
 /// Normal (default) spending policy.

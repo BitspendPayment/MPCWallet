@@ -34,9 +34,9 @@ use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::random;
 
 use crate::contract;
-use crate::cosigner::handlers::{contract_gate, parsers};
+use crate::cosigner::handlers::{contract_gate, helpers, parsers};
 use crate::policy::store::persist_policy;
-use crate::policy::{EvtxoPolicy, PolicyState, RecipientCosignerShare};
+use crate::policy::{EvtxoPolicy, NormalPolicy, PolicyState, RecipientCosignerShare};
 use crate::shared::SharedServices;
 use crate::wallet_proto::{
     EvtxoKeygenStep1Request, EvtxoKeygenStep1Response, EvtxoKeygenStep2Request,
@@ -562,11 +562,14 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     )?;
     let spk_hex = hex::encode(&spk);
 
-    // Persist the EvtxoPolicy under the user's policy (keyed by eVTXO spk). The
-    // author is the sole recipient for now; the per-participant refresh (Phase 3)
-    // adds further recipients keyed by their own verifying share.
+    // The contract's group id = V′ (compressed verifying-key hex) — the address of
+    // the contract cosigner actor. Captured before pkp_json is moved below.
+    let v_prime_group_id = parsers::extract_verifying_key(&pkp_json)?;
+
+    // Build the (single-recipient) EvtxoPolicy: the author keyed by its own user_id.
+    // The per-participant refresh (Phase 4) adds further recipients keyed by their
+    // own verifying share.
     let user_id_hex = sess.user_id_hex.clone();
-    let mut policy = load_policy(shared, &user_id_hex)?;
     let mut recipient_shares = HashMap::new();
     recipient_shares.insert(
         user_id_hex.clone(),
@@ -575,17 +578,57 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
             public_key_package_json: pkp_json,
         },
     );
-    policy.evtxo_policies.insert(
-        spk_hex,
-        EvtxoPolicy {
-            contract_id_hex: hex::encode(&contract_id),
-            evtxo_pk_xonly_hex: evtxo_pk_xonly,
-            recipient_shares,
-        },
-    );
+    let evtxo_policy = EvtxoPolicy {
+        contract_id_hex: hex::encode(&contract_id),
+        evtxo_pk_xonly_hex: evtxo_pk_xonly,
+        recipient_shares,
+    };
+
+    // (a) Author's own policy copy — lets the author spend the eVTXO via its own
+    // actor today (the single-author path).
+    let mut policy = load_policy(shared, &user_id_hex)?;
+    policy
+        .evtxo_policies
+        .insert(spk_hex.clone(), evtxo_policy.clone());
     persist_policy(shared, &user_id_hex, &policy)?;
 
-    tracing::info!("[{user_id_hex}] EvtxoKeygen complete");
+    // (b) Stand up the CONTRACT cosigner actor, addressable by GroupID = V′. It
+    // spawns lazily on the first `/u/<V′>/` request and rehydrates this policy. Its
+    // `normal_policy` is a placeholder (it has no normal 2-of-2 wallet); recipients
+    // authenticate with their own verifying share via `auth_check_group` against
+    // `group_auth_idx[V′]`.
+    let mut contract_evtxo_policies = HashMap::new();
+    contract_evtxo_policies.insert(spk_hex, evtxo_policy);
+    let contract_policy = PolicyState {
+        user_id: v_prime_group_id.clone(),
+        recovery_id: String::new(),
+        user_signing_identifier_hex: None,
+        server_dkg_secret_hex: None,
+        normal_policy: NormalPolicy {
+            id: String::new(),
+            key_package_json: String::new(),
+            public_key_package_json: String::new(),
+        },
+        evtxo_policies: contract_evtxo_policies,
+        is_contract: true,
+    };
+    let contract_json = serde_json::to_string(&contract_policy)
+        .map_err(|e| Status::internal(format!("serialize contract policy: {e}")))?;
+    shared
+        .persistence
+        .put("policies", &v_prime_group_id, &contract_json)
+        .map_err(|e| Status::internal(format!("persist contract policy: {e}")))?;
+    helpers::persist_group_auth(
+        shared.persistence.as_ref(),
+        &v_prime_group_id,
+        &[user_id_hex.clone()],
+    )?;
+    shared
+        .persistence
+        .put("policy_owner_idx", &v_prime_group_id, &v_prime_group_id)
+        .map_err(|e| Status::internal(format!("persist policy_owner_idx: {e}")))?;
+
+    tracing::info!("[{user_id_hex}] EvtxoKeygen complete; contract actor V′={v_prime_group_id}");
     Ok(spk)
 }
 
