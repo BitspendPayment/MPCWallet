@@ -8,7 +8,7 @@ use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
 use crate::cosigner::state::CosignerState;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;

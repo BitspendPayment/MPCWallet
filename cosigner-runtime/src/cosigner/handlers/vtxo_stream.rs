@@ -6,7 +6,7 @@ use tonic::Status;
 use crate::shared::SharedServices;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 
 use super::helpers::{
     get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos,

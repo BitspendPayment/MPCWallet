@@ -7,7 +7,7 @@ pub mod config;
 pub mod contract;
 pub mod cosigner;
 pub mod crypto_ops;
-pub mod dkg_coordinator;
+pub mod onboarding;
 pub mod fcm_client;
 pub mod persistence;
 pub mod policy;

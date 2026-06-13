@@ -10,7 +10,7 @@ use tonic::Status;
 
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 use crate::shared::SharedServices;
 
 use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};
@@ -70,7 +70,7 @@ pub fn tick_auto_settle(
     );
     // The in-memory record is gone; the sled row must follow whether the
     // drive succeeds or fails (failure → client re-delegates next refresh).
-    let user_id_hex = state.user_id_hex.clone();
+    let user_id_hex = state.cosigner_id.clone();
     super::helpers::delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
 
     let mut session = record.session;

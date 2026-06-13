@@ -8,7 +8,7 @@ use crate::shared::SharedServices;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 
 use super::helpers::{
     auth_check, calculate_spent_amount, ensure_policy_loaded,
@@ -28,7 +28,7 @@ pub fn sign_step1(
 
     // Load the actor's OWN policy (keyed by its spawn id). For a contract actor this
     // is the V′ policy (GroupID), not the spending recipient's wallet.
-    let own_id = state.user_id_hex.clone();
+    let own_id = state.cosigner_id.clone();
     ensure_policy_loaded(
         user,
         shared.persistence.as_ref(),
@@ -276,7 +276,7 @@ pub fn sign_step2(
     // Same auth split as sign_step1: contract actor → auth_check_group for the
     // claimed recipient; normal wallet → auth_check for its owner.
     if policy_state.is_contract {
-        let own_id = state.user_id_hex.clone();
+        let own_id = state.cosigner_id.clone();
         let authorized =
             super::helpers::load_group_auth(shared.persistence.as_ref(), &own_id);
         super::helpers::auth_check_group(

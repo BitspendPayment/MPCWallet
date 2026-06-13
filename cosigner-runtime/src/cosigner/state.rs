@@ -68,10 +68,13 @@ pub struct DeviceToken {
 }
 
 pub struct CosignerState {
-    /// The user this actor belongs to, hex-encoded. Set by the registry at
-    /// spawn time. Used by handlers that don't carry a request payload (e.g.
-    /// `TickAutoSettle`) to scope persistence keys.
-    pub user_id_hex: String,
+    /// This cosigner actor's id (hex), set by the registry at spawn time — the
+    /// GROUP KEY it co-signs for: `V` for a normal 2-of-2 wallet, `V′` for a
+    /// contract. NOT "one user": a contract actor serves many members, each
+    /// authenticated by their own verifying share (see `group_auth_idx` +
+    /// `EvtxoPolicy.recipient_shares`). Handlers use it to scope persistence keys
+    /// and as the group id for `auth_check_group`.
+    pub cosigner_id: String,
 
     /// Schnorr-auth replay cache. Bounded LRU; keyed by `timestamp_ms` since
     /// the auth verifier already binds the signature to (timestamp, op, user).
@@ -99,9 +102,9 @@ pub struct CosignerState {
 }
 
 impl CosignerState {
-    pub fn new(user_id_hex: String) -> Self {
+    pub fn new(cosigner_id: String) -> Self {
         Self {
-            user_id_hex,
+            cosigner_id,
             used_nonces: HashSet::new(),
             settle_session: None,
             delegate_session: None,

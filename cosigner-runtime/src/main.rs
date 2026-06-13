@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, contract, cosigner, dkg_coordinator, fcm_client, persistence, rest_api,
+    bitcoin, config, contract, cosigner, onboarding, fcm_client, persistence, rest_api,
     shared, telemetry, vtxo_stream,
 };
 
@@ -283,7 +283,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TTL. Spawned independently of the per-user registry — the post-DKG
     // actor is lazy-spawned by the first sign/ark/refresh/policy call.
     let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
-    let dkg_coord = dkg_coordinator::DkgCoordinator::new(shared.clone(), dkg_ttl);
+    let dkg_coord = onboarding::DkgCoordinator::new(shared.clone(), dkg_ttl);
     {
         let coord = dkg_coord.clone();
         tokio::spawn(async move {
@@ -292,7 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // eVTXO key-generation (resharing) coordinator — same TTL/eviction model.
-    let evtxo_coord = dkg_coordinator::EvtxoKeygenCoordinator::new(shared.clone(), dkg_ttl);
+    let evtxo_coord = onboarding::EvtxoKeygenCoordinator::new(shared.clone(), dkg_ttl);
     {
         let coord = evtxo_coord.clone();
         tokio::spawn(async move {

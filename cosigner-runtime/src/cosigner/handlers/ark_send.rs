@@ -13,7 +13,7 @@ use crate::cosigner::state::{CosignerState, DelegateRecord, VtxoEntry};
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 
 use super::helpers::{
     auth_check, delete_user_delegate, get_user_ark_keys, get_user_xonly_pubkey, now_secs,

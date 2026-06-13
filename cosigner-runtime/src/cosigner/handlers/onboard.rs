@@ -25,7 +25,7 @@ use threshold::random;
 use threshold::scalar::{scalar_from_bytes, scalar_to_bytes};
 
 use crate::auth::message::{OP_EVTXO_ACK, OP_EVTXO_ONBOARD, OP_EVTXO_PENDING};
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::CosignerState;
 use crate::policy::RecipientCosignerShare;
 use crate::shared::SharedServices;
@@ -89,7 +89,7 @@ pub fn evtxo_onboard(
     shared: &SharedServices,
     req: EvtxoOnboardRequest,
 ) -> Result<EvtxoOnboardResponse, Status> {
-    let own_id = state.user_id_hex.clone(); // V′
+    let own_id = state.cosigner_id.clone(); // V′
     tracing::info!("[{own_id}] EvtxoOnboard recipient={}", hex::encode(&req.recipient_vk));
 
     // Load the contract policy (by the actor's own id) and authenticate the author as

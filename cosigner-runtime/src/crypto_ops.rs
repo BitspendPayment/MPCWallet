@@ -2,8 +2,8 @@
 //! Refactored from `grpc_service.rs` into plain functions (no gRPC trait).
 //! Each function takes a `&mut CosignerInstance` and performs WASM dispatch.
 
-use crate::cosigner::cosigner::CosignerInstance;
-use crate::cosigner::cosigner::exports::component::threshold::types::ThresholdError;
+use crate::cosigner::registry::CosignerInstance;
+use crate::cosigner::registry::exports::component::threshold::types::ThresholdError;
 use wasmtime::component::ResourceAny;
 
 /// Convert a WASM threshold error into a string.

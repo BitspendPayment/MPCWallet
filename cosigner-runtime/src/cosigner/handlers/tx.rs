@@ -9,7 +9,7 @@ use crate::shared::SharedServices;
 use crate::cosigner::state::CosignerState;
 use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::cosigner::CosignerInstance;
+use crate::cosigner::registry::CosignerInstance;
 
 use super::helpers::{auth_check, ensure_policy_loaded};
 

@@ -13,7 +13,7 @@ use tonic::Status;
 
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
-use crate::dkg_coordinator::{DkgCoordinator, EvtxoKeygenCoordinator};
+use crate::onboarding::{DkgCoordinator, EvtxoKeygenCoordinator};
 use crate::wallet_proto::{self};
 
 /// Per-route extractor types pull what they need from this struct via
