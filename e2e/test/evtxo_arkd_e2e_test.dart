@@ -366,36 +366,25 @@ void main() {
         equals(BytesUtils.toHexString(vPrimeXonly)),
         reason: 'Bob V′ PKP must equal the contract V′ (key unchanged by refresh)');
     print('   Bob fetched + decrypted his share; V′ matches.');
-    // DIAGNOSTIC: the exit-leaf owner_pk Bob uses must equal Alice's V x-only, or his
-    // reconstructed eVTXO taptree (and spk) won't match where he minted.
-    print('   Bob ownerPk    : ${BytesUtils.toHexString(bobShare.ownerPk)}');
-    print('   Alice V x-only : ${BytesUtils.toHexString(vXonly)}');
+    // Bob's exit-leaf owner_pk (from his pickup) must equal the author's V x-only, so
+    // his reconstructed eVTXO taptree matches the shared V′ address.
     expect(BytesUtils.toHexString(bobShare.ownerPk), equals(BytesUtils.toHexString(vXonly)),
         reason: "Bob's owner_pk must equal Alice's V x-only");
 
-    // Board + settle Bob so he can mint his own eVTXO.
-    final bobBoarding = await bob.getBoardingAddress();
-    await btc.sendToAddress(bobBoarding, 0.01);
-    await btc.generateToAddress(1, minerAddr);
-    await Future.delayed(Duration(seconds: 5));
-    await settleWithMining(bob);
+    // The eVTXO address is V′-derived and SHARED, so any onboarded recipient can spend
+    // any eVTXO there. Alice mints a fresh 90k eVTXO; Bob spends it with HIS OWN share
+    // (no funds / normal-send needed from Bob — the eVTXO value funds the spend).
+    final mintForBob = await mint(90000);
+    print('7. Alice minted a fresh eVTXO for Bob: $mintForBob:0 (90k)');
 
+    // Bob spends it through the contract actor V′: the cosigner co-signs with C_bob
+    // (gated by the contract) using Bob's own P_bob.
     final bobWallet = MpcArkWallet(bob);
-    final bobMint = await bobWallet
-        .createTransaction(destination: evtxoArkAddr, amountSats: 90000)
-        .then((u) => bobWallet.signTransaction(u))
-        .then((s) => bobWallet.submit(s));
-    await Future.delayed(Duration(seconds: 2));
-    print('7. Bob minted his own eVTXO: $bobMint:0 (90k)');
-
-    // Bob spends his eVTXO through the contract actor V′ — the cosigner co-signs with
-    // C_bob (gated by the contract), using Bob's own P_bob. He passes the author's
-    // owner_pk (from his pickup) to rebuild the taptree.
     final aliceArk = await alice.getArkAddress();
     final bobUnsigned = await bobWallet.createEvtxoSpend(
       destination: aliceArk,
       amountSats: 50000,
-      inputTxid: bobMint,
+      inputTxid: mintForBob,
       inputVout: 0,
       inputAmountSats: 90000,
       contractId: contractId,
@@ -408,9 +397,9 @@ void main() {
         evtxoKeyPkg: bobShare.keyPackage, evtxoPkp: bobShare.publicKeyPackage);
     final bobSpendTxid = await bobWallet.submit(bobSigned);
     expect(bobSpendTxid, isNotEmpty,
-        reason: 'Bob must INDEPENDENTLY spend his contract eVTXO through V′');
+        reason: 'Bob must INDEPENDENTLY spend a contract eVTXO through V′');
     await bob.ackContractShare(evtxo.scriptPubkey);
-    print('8. Bob INDEPENDENTLY spent his eVTXO (cosigner used C_bob), '
+    print('8. Bob INDEPENDENTLY spent the eVTXO (cosigner used C_bob), '
         'ark_txid=$bobSpendTxid');
 
     print('eVTXO-through-arkd E2E complete: arkd co-signed the allow; over-limit + '
