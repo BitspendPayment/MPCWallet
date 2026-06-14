@@ -5,6 +5,7 @@
 
 pub mod crypto_host;
 mod engine;
+pub mod group;
 mod registry;
 
 pub use engine::{

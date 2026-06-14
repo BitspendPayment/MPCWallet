@@ -568,8 +568,9 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     )?;
     let spk_hex = hex::encode(&spk);
 
-    // The contract's group id = V′ (compressed verifying-key hex) — the address of
-    // the contract cosigner actor. Captured before pkp_json is moved below.
+    // The contract's group id = V′ (compressed verifying-key hex) — the address
+    // clients use; the host fans cooperative spends out to each member's dedicated
+    // cosigner. Captured before pkp_json is moved below.
     let v_prime_group_id = parsers::extract_verifying_key(&pkp_json)?;
 
     // Onboarding inputs (captured before the JSONs move): the cosigner's canonical V′
@@ -578,44 +579,41 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
     let cosigner_vprime_kp_json = kp_json.clone();
     let author_id_hex = parsers::extract_recipient_identifier(&pkp_json, &cosigner_id_hex)?;
 
-    // Build the (single-recipient) EvtxoPolicy: the author keyed by its own user_id.
-    // The per-participant refresh (Phase 4) adds further recipients keyed by their
-    // own verifying share.
+    // Build the CONTRACT COSIGNER GROUP (keyed by V′). It owns the cross-party
+    // onboarding context — the cosigner's canonical V′ key package + the eVTXO
+    // taptree params — that cannot belong to any single party.
     let user_id_hex = sess.user_id_hex.clone();
-    let mut recipient_shares = HashMap::new();
-    recipient_shares.insert(
-        user_id_hex.clone(),
-        RecipientCosignerShare {
-            key_package_json: kp_json,
-            public_key_package_json: pkp_json,
-        },
-    );
-    let evtxo_policy = EvtxoPolicy {
+    let mut group = contract::group::ContractCosignerGroup {
+        group_id_hex: v_prime_group_id.clone(),
+        spk_hex: spk_hex.clone(),
         contract_id_hex: hex::encode(&contract_id),
         evtxo_pk_xonly_hex: evtxo_pk_xonly,
-        recipient_shares,
+        owner_pk_xonly_hex: owner_pk_xonly,
+        exit_delay: sess.reshare_exit_delay,
         cosigner_vprime_kp_json,
         author_id_hex,
-        exit_delay: sess.reshare_exit_delay,
-        owner_pk_xonly_hex: owner_pk_xonly,
+        members: Vec::new(),
     };
 
-    // (a) Author's own policy copy — lets the author spend the eVTXO via its own
-    // actor today (the single-author path).
-    let mut policy = load_policy(shared, &user_id_hex)?;
-    policy
-        .evtxo_policies
-        .insert(spk_hex.clone(), evtxo_policy.clone());
-    persist_policy(shared, &user_id_hex, &policy)?;
+    // Register the author as the FIRST member: its own dedicated contract cosigner
+    // `cc_id`, holding only the author's counter-share behind a single-user roster.
+    // The author spends via this cosigner (the host routes `/u/<V′>/` → `cc_id`);
+    // no shared multi-party actor is created.
+    contract::group::register_member(
+        shared.persistence.as_ref(),
+        &mut group,
+        &user_id_hex,
+        &kp_json,
+        &pkp_json,
+    )?;
+    contract::group::save(shared.persistence.as_ref(), &group)?;
 
-    // (b) Stand up the CONTRACT cosigner actor, addressable by GroupID = V′. It
-    // spawns lazily on the first `/u/<V′>/` request and rehydrates this policy. Its
-    // `normal_policy` is a placeholder (it has no normal 2-of-2 wallet); recipients
-    // authenticate with their own verifying share via `auth_check_group` against
-    // `group_auth_idx[V′]`.
-    let mut contract_evtxo_policies = HashMap::new();
-    contract_evtxo_policies.insert(spk_hex, evtxo_policy);
-    let contract_policy = PolicyState {
+    // Stand up the GROUP COORDINATOR actor, addressable by GroupID = V′. It owns
+    // onboarding only (it co-signs no spends) and authenticates ONLY the author —
+    // so it too respects 1 actor ⇔ 1 user. It spawns lazily on the first
+    // `/u/<V′>/evtxo/onboard` request; its `normal_policy` + `evtxo_policies` are
+    // empty placeholders (onboarding reads context from the group record).
+    let coordinator_policy = PolicyState {
         cosigner_id: v_prime_group_id.clone(),
         recovery_id: String::new(),
         user_signing_identifier_hex: None,
@@ -625,15 +623,15 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
             key_package_json: String::new(),
             public_key_package_json: String::new(),
         },
-        evtxo_policies: contract_evtxo_policies,
+        evtxo_policies: HashMap::new(),
         is_contract: true,
     };
-    let contract_json = serde_json::to_string(&contract_policy)
-        .map_err(|e| Status::internal(format!("serialize contract policy: {e}")))?;
+    let coordinator_json = serde_json::to_string(&coordinator_policy)
+        .map_err(|e| Status::internal(format!("serialize coordinator policy: {e}")))?;
     shared
         .persistence
-        .put("policies", &v_prime_group_id, &contract_json)
-        .map_err(|e| Status::internal(format!("persist contract policy: {e}")))?;
+        .put("policies", &v_prime_group_id, &coordinator_json)
+        .map_err(|e| Status::internal(format!("persist coordinator policy: {e}")))?;
     helpers::persist_group_auth(
         shared.persistence.as_ref(),
         &v_prime_group_id,
@@ -644,7 +642,9 @@ fn step3_finalize(sess: &mut DkgSession, shared: &SharedServices) -> Result<Vec<
         .put("policy_owner_idx", &v_prime_group_id, &v_prime_group_id)
         .map_err(|e| Status::internal(format!("persist policy_owner_idx: {e}")))?;
 
-    tracing::info!("[{user_id_hex}] EvtxoKeygen complete; contract actor V′={v_prime_group_id}");
+    tracing::info!(
+        "[{user_id_hex}] EvtxoKeygen complete; contract group V′={v_prime_group_id} (author is member 1)"
+    );
     Ok(spk)
 }
 

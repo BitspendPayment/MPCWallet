@@ -361,6 +361,23 @@ async fn evtxo_keygen_step3(
 // Signing
 // ---------------------------------------------------------------------------
 
+/// Resolve the actor to dispatch a (possibly contract) spend to. A party
+/// addressing a contract cosigner GROUP by `V′` (URL route) with its own
+/// `claimed_share` is fanned out to its dedicated per-party cosigner `cc_id`, so
+/// the spend lands on an isolated single-user actor. All other routes — normal
+/// wallets, and one-shot `V′==V` eVTXOs that aren't groups — are unchanged.
+fn spend_dispatch_route(reg: &CosignerRegistry, route: &str, claimed_share: &[u8]) -> String {
+    if claimed_share.is_empty() {
+        return route.to_string();
+    }
+    crate::contract::group::spend_route(
+        reg.shared().persistence.as_ref(),
+        route,
+        &hex::encode(claimed_share),
+    )
+    .unwrap_or_else(|| route.to_string())
+}
+
 #[tracing::instrument(skip_all, name = "rest::sign_step1", fields(user_id = %user_id))]
 async fn sign_step1(
     State(reg): State<Arc<CosignerRegistry>>,
@@ -376,6 +393,7 @@ async fn sign_step1(
     } else {
         claimed_share.clone()
     };
+    let route = spend_dispatch_route(&reg, &user_id, &claimed_share);
     let req = wallet_proto::SignStep1Request {
         user_id: req_user_id,
         hiding_commitment: hex_field(&body, "hiding_commitment"),
@@ -388,7 +406,7 @@ async fn sign_step1(
         claimed_share,
     };
     match reg
-        .dispatch(&user_id, move |reply| CosignerCommand::SignStep1 { req, reply })
+        .dispatch(&route, move |reply| CosignerCommand::SignStep1 { req, reply })
         .await
     {
         Ok(r) => {
@@ -425,6 +443,7 @@ async fn sign_step2(
     } else {
         claimed_share.clone()
     };
+    let route = spend_dispatch_route(&reg, &user_id, &claimed_share);
     let req = wallet_proto::SignStep2Request {
         user_id: req_user_id,
         signature_share: hex_field(&body, "signature_share"),
@@ -433,7 +452,7 @@ async fn sign_step2(
         claimed_share,
     };
     match reg
-        .dispatch(&user_id, move |reply| CosignerCommand::SignStep2 { req, reply })
+        .dispatch(&route, move |reply| CosignerCommand::SignStep2 { req, reply })
         .await
     {
         Ok(r) => Ok(Json(json!({

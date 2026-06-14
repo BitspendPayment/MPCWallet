@@ -27,16 +27,13 @@ use threshold::scalar::{scalar_from_bytes, scalar_to_bytes};
 use crate::auth::message::{OP_EVTXO_ACK, OP_EVTXO_ONBOARD, OP_EVTXO_PENDING};
 use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::CosignerState;
-use crate::policy::RecipientCosignerShare;
 use crate::shared::SharedServices;
 use crate::wallet_proto::{
     EvtxoAckShareRequest, EvtxoAckShareResponse, EvtxoOnboardRequest, EvtxoOnboardResponse,
     EvtxoPendingSharesRequest, EvtxoPendingSharesResponse, PendingContractShare,
 };
 
-use super::helpers::{
-    auth_check, auth_check_group, ensure_policy_loaded, load_group_auth, persist_group_auth,
-};
+use super::helpers::{auth_check, auth_check_group, ensure_policy_loaded, load_group_auth};
 use super::parsers;
 
 const PENDING_TREE: &str = "pending_contract_shares";
@@ -100,14 +97,17 @@ pub fn evtxo_onboard(
         shared.secret_store.as_ref(),
         &own_id,
     )?;
-    let mut policy = user
+    let is_contract = user
         .policy_state
-        .clone()
-        .ok_or_else(|| Status::not_found("no policy state"))?;
-    if !policy.is_contract {
+        .as_ref()
+        .ok_or_else(|| Status::not_found("no policy state"))?
+        .is_contract;
+    if !is_contract {
         return Err(Status::failed_precondition("not a contract actor"));
     }
-    let mut authorized = load_group_auth(shared.persistence.as_ref(), &own_id);
+    // Onboarding authenticates the AUTHOR (the only entry on the coordinator's
+    // roster) — the group owner who deals refresh halves for new participants.
+    let authorized = load_group_auth(shared.persistence.as_ref(), &own_id);
     auth_check_group(
         user,
         state,
@@ -118,23 +118,25 @@ pub fn evtxo_onboard(
         OP_EVTXO_ONBOARD,
     )?;
 
+    // The cross-party onboarding context lives on the contract GROUP record, not on
+    // any single party's policy.
+    let mut group = crate::contract::group::load(shared.persistence.as_ref(), &own_id)
+        .ok_or_else(|| Status::not_found("no contract group for this actor"))?;
     let spk_hex = hex::encode(&req.evtxo_script_pubkey);
-    let ep = policy
-        .evtxo_policies
-        .get(&spk_hex)
-        .ok_or_else(|| Status::not_found("no such eVTXO on this contract"))?
-        .clone();
-    if ep.cosigner_vprime_kp_json.is_empty() || ep.author_id_hex.is_empty() {
+    if spk_hex != group.spk_hex {
+        return Err(Status::not_found("no such eVTXO on this contract"));
+    }
+    if group.cosigner_vprime_kp_json.is_empty() || group.author_id_hex.is_empty() {
         return Err(Status::failed_precondition(
             "contract does not support onboarding (one-shot V′==V)",
         ));
     }
 
     // The cosigner's canonical V′ key package + the original shareholder id-set.
-    let holder_kp = KeyPackage::from_json(&ep.cosigner_vprime_kp_json)
+    let holder_kp = KeyPackage::from_json(&group.cosigner_vprime_kp_json)
         .map_err(|e| Status::internal(format!("bad cosigner V′ kp: {e}")))?;
     let cosigner_id = holder_kp.identifier.clone();
-    let author_id = parse_id(&ep.author_id_hex)?;
+    let author_id = parse_id(&group.author_id_hex)?;
     let id_set = [author_id, cosigner_id.clone()];
 
     // The participant's V′ identifier id_i = derive(recipient_vk) — must match what the
@@ -174,7 +176,7 @@ pub fn evtxo_onboard(
     // V′ verifying key (even-Y ⇒ compressed prefix 0x02 over the x-only key).
     let mut vprime_bytes = [0u8; 33];
     vprime_bytes[0] = 0x02;
-    let xonly = hex::decode(&ep.evtxo_pk_xonly_hex)
+    let xonly = hex::decode(&group.evtxo_pk_xonly_hex)
         .map_err(|e| Status::internal(format!("bad evtxo_pk_xonly: {e}")))?;
     if xonly.len() != 32 {
         return Err(Status::internal("evtxo_pk_xonly must be 32 bytes"));
@@ -201,32 +203,19 @@ pub fn evtxo_onboard(
     };
     let pkp_json = pkp.to_json();
 
-    // Register the participant on the contract policy (recipient_shares + group auth).
+    // Mint the participant's OWN dedicated contract cosigner `cc_id` (single
+    // recipient share, single-user roster) and add it to the group. No share is
+    // written into a shared actor — the participant gets an isolated cosigner, so
+    // 1 cosigner ⇔ 1 id ⇔ 1 user holds for it too.
     let recipient_vk_hex = hex::encode(&req.recipient_vk);
-    policy
-        .evtxo_policies
-        .get_mut(&spk_hex)
-        .ok_or_else(|| Status::internal("eVTXO vanished"))?
-        .recipient_shares
-        .insert(
-            recipient_vk_hex.clone(),
-            RecipientCosignerShare {
-                key_package_json: c_kp.to_json(),
-                public_key_package_json: pkp_json.clone(),
-            },
-        );
-    let policy_json = serde_json::to_string(&policy)
-        .map_err(|e| Status::internal(format!("encode contract policy: {e}")))?;
-    shared
-        .persistence
-        .put("policies", &own_id, &policy_json)
-        .map_err(|e| Status::internal(format!("persist contract policy: {e}")))?;
-    user.policy_state = Some(policy);
-
-    if !authorized.contains(&recipient_vk_hex) {
-        authorized.push(recipient_vk_hex.clone());
-        persist_group_auth(shared.persistence.as_ref(), &own_id, &authorized)?;
-    }
+    crate::contract::group::register_member(
+        shared.persistence.as_ref(),
+        &mut group,
+        &recipient_vk_hex,
+        &c_kp.to_json(),
+        &pkp_json,
+    )?;
+    crate::contract::group::save(shared.persistence.as_ref(), &group)?;
 
     // ECIES the cosigner's half b@id_i to the participant; hold both halves (the
     // author's + the cosigner's) in the participant's pickup inbox.
@@ -243,12 +232,12 @@ pub fn evtxo_onboard(
     pending.push(PendingShareRecord {
         spk_hex: spk_hex.clone(),
         contract_group_id_hex: own_id.clone(),
-        contract_id_hex: ep.contract_id_hex.clone(),
+        contract_id_hex: group.contract_id_hex.clone(),
         ecies_author_hex: hex::encode(&req.ecies_a_at_participant),
         ecies_cosigner_hex: hex::encode(ecies_cosigner),
         pkp_json,
-        exit_delay: ep.exit_delay,
-        owner_pk_xonly_hex: ep.owner_pk_xonly_hex.clone(),
+        exit_delay: group.exit_delay,
+        owner_pk_xonly_hex: group.owner_pk_xonly_hex.clone(),
     });
     save_pending(shared.persistence.as_ref(), &recipient_vk_hex, &pending)?;
 

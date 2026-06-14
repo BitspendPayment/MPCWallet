@@ -111,9 +111,11 @@ message SignStep1Request {
   bytes full_transaction = 6;
   int64 timestamp_ms = 7; // Unix timestamp in milliseconds for replay protection
   bool script_path_spend = 8; // If true, skip taproot tweak (script-path signing)
-  // For a contract eVTXO spend: user_id routes to the contract actor (GroupID=V′),
-  // and claimed_share is the spending recipient's own verifying share (the cosigner
-  // authenticates it via auth_check_group + selects recipient_shares[claimed_share]).
+  // For a contract eVTXO spend: the URL route is the contract cosigner GROUP (V′)
+  // and claimed_share is the spending recipient's own verifying share. The host
+  // fans this out to the recipient's DEDICATED per-party cosigner (cc_id =
+  // sha256(V′||recipient_vk)) — an isolated single-user actor that holds only this
+  // recipient's counter-share — preserving the 1-cosigner-1-user invariant.
   // Empty for a normal wallet (claimed share = user_id).
   bytes claimed_share = 9;
 }
@@ -505,14 +507,15 @@ message EvtxoKeygenStep3Response {
 }
 
 // Onboard one participant to a contract eVTXO. Routed to the contract actor
-// (user_id = V′); the author authenticates via auth_check_group. The author has
-// computed its key-preserving refresh half a_i = refresh_share_to_id(...) onto the
-// participant's identifier id_i = derive(recipient_vk); it sends a_i(cosigner_id) as
-// a scalar (so the cosigner can form C_i), a_i(id_i)·G as a point (so the cosigner can
+// (user_id = V′); the author (the group owner) authenticates via auth_check_group.
+// The author has computed its key-preserving refresh half a_i = refresh_share_to_id(...)
+// onto the participant's identifier id_i = derive(recipient_vk); it sends a_i(cosigner_id)
+// as a scalar (so the cosigner can form C_i), a_i(id_i)·G as a point (so the cosigner can
 // form the participant's verifying share P_i·G without learning a_i(id_i)), and
 // ECIES(a_i(id_i)) encrypted to the participant. The cosigner computes its own half
-// b_i, forms C_i + the 2-entry V′ PKP, registers the participant, and holds BOTH
-// ECIES halves in the participant's pickup inbox. Neither side learns P_i.
+// b_i, forms C_i + the 2-entry V′ PKP, MINTS the participant's own dedicated per-party
+// cosigner (cc_id) holding only C_i, adds it to the contract cosigner group, and holds
+// BOTH ECIES halves in the participant's pickup inbox. Neither side learns P_i.
 message EvtxoOnboardRequest {
   bytes user_id = 1;                  // the author (claimed share; routes via V′ path)
   bytes evtxo_script_pubkey = 2;      // the contract eVTXO this participant joins
@@ -522,7 +525,7 @@ message EvtxoOnboardRequest {
   bytes ecies_a_at_participant = 6;   // ECIES(a_i(id_i)) to recipient_vk
   bytes signature = 7;                // author auth (binds user_id)
   int64 timestamp_ms = 8;
-  bytes contract_group_id = 9;        // V′ — routes to the contract actor (REST URL)
+  bytes contract_group_id = 9;        // V′ — the contract cosigner group (REST URL route)
 }
 message EvtxoOnboardResponse {
   bool ok = 1;
@@ -539,7 +542,7 @@ message EvtxoPendingSharesResponse {
 }
 message PendingContractShare {
   bytes evtxo_script_pubkey = 1;
-  bytes contract_group_id = 2;          // V′ (the contract actor to address at spend)
+  bytes contract_group_id = 2;          // V′ (the contract cosigner group to address at spend)
   bytes contract_id = 3;                // sha256(wasm)
   bytes ecies_half_author = 4;          // ECIES(a_i(id_i))
   bytes ecies_half_cosigner = 5;        // ECIES(b_i(id_i))
