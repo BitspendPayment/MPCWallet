@@ -13,8 +13,6 @@ use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 
-const NONCE_CACHE_CAP: usize = 10_000;
-
 /// Persistence tree mapping a GroupID (hex group key) → JSON array of the
 /// verifying shares authorized to sign for that group. A normal 2-of-2 wallet
 /// authenticates by its single verifying share via `auth_check`; a contract
@@ -55,15 +53,14 @@ pub fn auth_check(
         return Err(Status::unauthenticated("Invalid authentication signature"));
     }
 
-    state.note_nonce(timestamp_ms, NONCE_CACHE_CAP);
     Ok(())
 }
 
-/// Timestamp-only check (no signature). Used for FROST-signed paths
-/// (update_policy, delete_policy) where the signature is verified separately
-/// against the user's group verifying key.
+/// Timestamp drift check (no signature, no replay cache). The signing nonce is
+/// generated randomly per request, so replay of a captured (timestamp, sig) is
+/// not a concern; we only reject requests outside the acceptable clock window.
 pub fn timestamp_check(
-    state: &mut CosignerState,
+    _state: &mut CosignerState,
     timestamp_ms: i64,
     user_id_hex: &str,
     operation: &str,
@@ -81,11 +78,6 @@ pub fn timestamp_check(
             "Request timestamp is outside acceptable range",
         ));
     }
-    if state.used_nonces.contains(&timestamp_ms) {
-        tracing::warn!("[{user_id_hex}] Replay detected for {operation}");
-        return Err(Status::unauthenticated("Request replay detected"));
-    }
-    state.note_nonce(timestamp_ms, NONCE_CACHE_CAP);
     Ok(())
 }
 

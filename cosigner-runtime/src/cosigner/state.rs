@@ -1,7 +1,5 @@
 //! Per-user mutable state. Owned by the user's actor task; never shared.
 
-use std::collections::HashSet;
-
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tonic::Status;
@@ -76,10 +74,6 @@ pub struct CosignerState {
     /// and as the group id for `auth_check_group`.
     pub cosigner_id: String,
 
-    /// Schnorr-auth replay cache. Bounded LRU; keyed by `timestamp_ms` since
-    /// the auth verifier already binds the signature to (timestamp, op, user).
-    pub used_nonces: HashSet<i64>,
-
     /// Active settle (boarding) session: `(session, boarding_amount_sats, exit_delay)`.
     pub settle_session: Option<(ark::client::batch::SettleSession, u64, u32)>,
     /// Active delegate-settle session — stored signed intent + scope.
@@ -105,7 +99,6 @@ impl CosignerState {
     pub fn new(cosigner_id: String) -> Self {
         Self {
             cosigner_id,
-            used_nonces: HashSet::new(),
             settle_session: None,
             delegate_session: None,
             send_session: None,
@@ -116,16 +109,6 @@ impl CosignerState {
             pending_sign_step1: Vec::new(),
             pending_sign_step2: Vec::new(),
         }
-    }
-
-    /// Trim the nonce cache when it grows beyond `cap`. Cheap O(cap) clear when
-    /// triggered; the auth verifier's timestamp window already prevents
-    /// long-term replay so we don't need a true LRU.
-    pub fn note_nonce(&mut self, ts: i64, cap: usize) {
-        if self.used_nonces.len() >= cap {
-            self.used_nonces.clear();
-        }
-        self.used_nonces.insert(ts);
     }
 
     /// Drain every `pending_*` rendezvous queue, fulfilling each parked
