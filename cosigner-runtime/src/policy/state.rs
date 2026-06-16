@@ -7,10 +7,7 @@ pub struct PolicyState {
     /// This group's cosigner id (hex) = the GROUP KEY: `V` for a normal 2-of-2
     /// wallet, `V′` for a contract. Policies are keyed under it; clients addressing
     /// by a member's verifying share resolve here via `policy_owner_idx`.
-    #[serde(alias = "user_id")]
     pub cosigner_id: String,
-    /// Recovery ID: hex of HW signer's verifying key (for wallet restore lookup).
-    pub recovery_id: String,
     /// The wallet's DKG identifier (may differ from Identifier::derive(userId)
     /// when the wallet is a passive receiver).
     pub user_signing_identifier_hex: Option<String>,
@@ -18,18 +15,14 @@ pub struct PolicyState {
     /// Persisted separately via SecretStore (not included in storage JSON).
     #[serde(skip)]
     pub server_dkg_secret_hex: Option<String>,
-    /// Normal (default) spending policy.
+    /// The user's normal 2-of-2 {user, cosigner} spending key.
     pub normal_policy: NormalPolicy,
-    /// Programmable eVTXO policies, keyed by eVTXO scriptPubKey (hex). Each binds
-    /// a resharing-derived 2-of-2 key V′ to a WASM contract.
+    /// Contracts created by this user, keyed by contract scriptPubKey (hex). Each
+    /// binds a reshared 2-of-2 key V′ to a WASM contract, with the cosigner's
+    /// counter-share for each signing pairing (the user and the always-online
+    /// service).
     #[serde(default)]
-    pub evtxo_policies: HashMap<String, EvtxoPolicy>,
-    /// True for a CONTRACT actor (keyed by GroupID = V′): it has no normal 2-of-2
-    /// wallet (`normal_policy` is a placeholder); it only co-signs eVTXO spends for
-    /// its registered recipients, who authenticate with their own verifying share
-    /// (`auth_check_group` against `group_auth_idx[V′]`) rather than `auth_check`.
-    #[serde(default)]
-    pub is_contract: bool,
+    pub contracts: HashMap<String, ContractPolicy>,
 }
 
 /// Normal (default) spending policy.
@@ -42,52 +35,79 @@ pub struct NormalPolicy {
     pub public_key_package_json: String,
 }
 
-/// A programmable eVTXO policy: a fresh contract key `V′` (derived by resharing)
-/// bound to a WASM contract. Spending the eVTXO's cooperative leaf requires `V′`,
-/// so the cosigner is a mandatory signer and runs `contract_id`'s contract before
-/// co-signing. `V′` is the SAME for every recipient; each recipient_i holds its own
-/// Shamir share `P_i` and the cosigner holds the matching counter-share `C_i`, so
-/// `recipient_shares` maps a recipient's identity (its main verifying share, hex)
-/// to the cosigner's counter-share + the 2-entry `V′` PKP for that recipient.
-/// A single-author contract has exactly one entry (keyed by the author's user_id).
+/// A contract: a fresh contract key `V′` (derived by resharing `V`) bound to a
+/// WASM contract. Spending the cooperative leaf requires `V′`, so the cosigner is
+/// a mandatory signer and runs `contract_id`'s contract before co-signing.
+///
+/// `V′` is a 2-of-2 with TWO signing pairings — the cosigner is the common party,
+/// and the counterparty is either the user or the always-online service:
+///   (user_share + cosigner_shareA)  ||  (service_share + cosigner_shareB)
+/// Each pairing's `CosignerShare` holds the cosigner's counter-share + the 2-entry
+/// `V′` PKP for that pairing. `service_share` is `None` until the service is
+/// onboarded (contract-create step 4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EvtxoPolicy {
+pub struct ContractPolicy {
     /// Contract that governs cooperative spends: hex of sha256(component_wasm).
     pub contract_id_hex: String,
-    /// `V′` x-only public key (the cooperative-leaf key; same for all recipients).
-    pub evtxo_pk_xonly_hex: String,
-    /// Per-recipient cosigner counter-shares, keyed by the recipient's verifying
-    /// share (hex). F3-isolated: never union the per-recipient PKPs.
-    pub recipient_shares: HashMap<String, RecipientCosignerShare>,
-    /// The cosigner's CANONICAL `V′` key package (JSON) — its share `ss_cosigner` at
-    /// `cosigner_id`, fixed across recipients. Used to refresh `v′` onto a new
-    /// participant's identifier during onboarding. (Empty for legacy policies.)
-    #[serde(default)]
+    /// `V′` x-only public key (the cooperative-leaf / contract key).
+    pub contract_pk_xonly_hex: String,
+    /// The cosigner's CANONICAL `V′` key package (JSON) — its share at `cosigner_id`.
+    /// Used to refresh `V′` onto the service pairing.
     pub cosigner_vprime_kp_json: String,
-    /// The author's (recipient[0]'s) `V′` identifier hex — the second member of the
-    /// original `{author_id, cosigner_id}` shareholder set, needed for the Lagrange
-    /// coefficient when refreshing onto new participants.
-    #[serde(default)]
+    /// The user's `V′` identifier hex (the non-cosigner shareholder), needed for the
+    /// Lagrange coefficient when refreshing onto the service.
     pub author_id_hex: String,
-    /// The eVTXO's unilateral-exit CSV delay — a participant needs it to rebuild the
-    /// eVTXO spend at pickup time.
-    #[serde(default)]
+    /// Unilateral-exit CSV delay (the exit leaf).
     pub exit_delay: u32,
-    /// The eVTXO's exit-leaf owner key (author's V, x-only hex) — a participant needs
-    /// it to reconstruct the taptree (the exit-leaf sibling hash) when spending the
-    /// cooperative leaf.
-    #[serde(default)]
+    /// User-supplied exit-leaf owner key (x-only hex), for the taptree.
     pub owner_pk_xonly_hex: String,
+
+    /// The user's verifying share (hex) — the user signing-path identity (pairing A).
+    pub user_vk_hex: String,
+    /// The cosigner's counter-share for the USER pairing (`cosigner_shareA` + PKP_A).
+    pub user_share: CosignerShare,
+    /// The always-online service's verifying key (hex) — the service signing-path
+    /// identity (pairing B).
+    pub service_vk_hex: String,
+    /// The cosigner's counter-share for the SERVICE pairing (`cosigner_shareB` +
+    /// PKP_B). `None` until the service is onboarded.
+    #[serde(default)]
+    pub service_share: Option<CosignerShare>,
 }
 
-/// The cosigner's `V′` counter-share for one recipient. `public_key_package_json`
-/// is the 2-entry PKP `{recipient_id: P_i·G, cosigner_id: C_i·G}` whose group key
-/// is `V′`; `key_package_json` is the cosigner's own `C_i` key package.
+impl ContractPolicy {
+    /// The verifying shares authorized to sign this contract: the user always, and
+    /// the service once it has been onboarded.
+    pub fn authorized_vks(&self) -> Vec<String> {
+        let mut v = vec![self.user_vk_hex.clone()];
+        if self.service_share.is_some() {
+            v.push(self.service_vk_hex.clone());
+        }
+        v
+    }
+
+    /// The cosigner's counter-share for the given recipient verifying share, or
+    /// `None` if it is not an (onboarded) recipient of this contract.
+    pub fn share_for(&self, vk_hex: &str) -> Option<&CosignerShare> {
+        if vk_hex == self.user_vk_hex {
+            Some(&self.user_share)
+        } else if vk_hex == self.service_vk_hex {
+            self.service_share.as_ref()
+        } else {
+            None
+        }
+    }
+}
+
+/// The cosigner's `V′` counter-share for one signing pairing.
+/// `public_key_package_json` is the 2-entry PKP `{recipient_id: P·G, cosigner_id:
+/// C·G}` whose group key is `V′`; `key_package_json` is the cosigner's own `C`
+/// key package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RecipientCosignerShare {
-    /// Cosigner's `V′` counter-share key package (JSON, from the reshare/refresh).
+pub struct CosignerShare {
+    /// Cosigner's `V′` counter-share key package (JSON).
     pub key_package_json: String,
-    /// 2-entry `V′` public key package (JSON) for this recipient.
+    /// 2-entry `V′` public key package (JSON) for this pairing.
     pub public_key_package_json: String,
 }
 

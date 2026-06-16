@@ -12,7 +12,6 @@ pub mod auto_settle;
 pub mod contract_gate;
 pub mod device_token;
 pub mod helpers;
-pub mod onboard;
 pub mod parsers;
 pub mod sign;
 pub mod tx;

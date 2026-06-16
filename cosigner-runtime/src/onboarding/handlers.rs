@@ -46,7 +46,7 @@ use super::session::DkgSession;
 const TOTAL_PARTICIPANTS: usize = 2;
 const THRESHOLD_COUNT: usize = 2;
 
-pub(super) type Reply<T> = oneshot::Sender<Result<T, Status>>;
+pub(crate) type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
 // ============================================================================
 // DKG Step 1
@@ -55,7 +55,7 @@ pub(super) type Reply<T> = oneshot::Sender<Result<T, Status>>;
 #[tracing::instrument(skip_all, name = "dkg::step1", fields(user_id = %parsers::user_id_hex(&req.user_id)))]
 pub fn dkg_step1(
     sess: &mut DkgSession,
-    shared: &SharedServices,
+    _shared: &SharedServices,
     req: DkgStep1Request,
     reply: Reply<DkgStep1Response>,
 ) {
@@ -73,7 +73,7 @@ pub fn dkg_step1(
     // 2) Phase B — server self-init (only the first caller does the work).
     let needs_init = sess.round1_secret.is_none();
     if needs_init {
-        if let Err(e) = step1_server_init(sess, shared, &user_id_hex, req.is_restore) {
+        if let Err(e) = step1_server_init(sess, &user_id_hex) {
             let _ = reply.send(Err(e));
             return;
         }
@@ -117,22 +117,9 @@ fn step1_register(
     Ok(())
 }
 
-fn step1_server_init(
-    sess: &mut DkgSession,
-    shared: &SharedServices,
-    user_id_hex: &str,
-    is_restore: bool,
-) -> Result<(), Status> {
-    let secret_hex = if is_restore {
-        tracing::info!("[{user_id_hex}] Server: Restore — looking up stored DKG secret");
-        let policy = lookup_policy_by_recovery_id(shared, user_id_hex)?
-            .ok_or_else(|| Status::not_found(format!("No policy for recovery ID {user_id_hex}")))?;
-        policy
-            .server_dkg_secret_hex
-            .clone()
-            .ok_or_else(|| Status::internal("Existing policy has no stored DKG secret"))?
-    } else {
-        tracing::info!("[{user_id_hex}] Server: Generating DKG secrets");
+fn step1_server_init(sess: &mut DkgSession, user_id_hex: &str) -> Result<(), Status> {
+    tracing::info!("[{user_id_hex}] Server: Generating DKG secrets");
+    let secret_hex = {
         let mut rng = OsRng;
         hex::encode(scalar_to_bytes(&random::mod_n_random(&mut rng)))
     };
@@ -424,28 +411,6 @@ fn step3_finalize_server_key(
     let user_signing_identifier_hex = Some(wallet_identifier_hex);
 
     let server_dkg_secret_hex = sess.server_internal_secret_hex.clone();
-    let recovery_id = String::new();
-
-    // Restore: if this recovery_id was previously associated with another
-    // user_id, clean up the old policy entries (read straight from sled —
-    // there's no in-memory recovery index).
-    if !recovery_id.is_empty() {
-        if let Ok(Some(old_user_id)) = shared.persistence.get("policy_recovery_idx", &recovery_id) {
-            if let Ok(Some(json_str)) = shared.persistence.get("policies", &old_user_id) {
-                if let Ok(ps) = serde_json::from_str::<PolicyState>(&json_str) {
-                    if ps.recovery_id == recovery_id {
-                        let _ = shared.persistence.delete("policies", &old_user_id);
-                        let _ = shared
-                            .persistence
-                            .delete("policy_recovery_idx", &recovery_id);
-                        let _ = shared
-                            .secret_store
-                            .delete_secret(&format!("dkg-secret.{old_user_id}"));
-                    }
-                }
-            }
-        }
-    }
 
     // The actor's cosigner id = the GROUP KEY `V` (the 2-of-2 {wallet, cosigner}
     // key). Policies + per-user data are keyed under it, unifying a normal wallet
@@ -461,26 +426,18 @@ fn step3_finalize_server_key(
     };
     let policy_state: PolicyState = PolicyState {
         cosigner_id: group_key.clone(),
-        recovery_id,
         user_signing_identifier_hex,
         server_dkg_secret_hex: Some(server_dkg_secret_hex),
         normal_policy,
-        evtxo_policies: HashMap::new(),
-        is_contract: false,
+        contracts: HashMap::new(),
     };
 
     // Persist under the group key (pass it directly — `policy_owner_idx` isn't written
     // for it yet, so the resolver in `persist_policy` would no-op anyway).
     persist_policy(shared, &group_key, &policy_state)?;
 
-    // Register the wallet member in the group, and map both its verifying share and
-    // the DKG-time HW verifying key (recovery addressing) → the group key, so client
-    // requests addressed by either resolve to this `V`-keyed actor.
-    crate::cosigner::handlers::helpers::persist_group_auth(
-        shared.persistence.as_ref(),
-        &group_key,
-        &[policy_user_id.clone()],
-    )?;
+    // Map the wallet's verifying share → the group key, so client requests
+    // addressed by it resolve to this `V`-keyed actor.
     for member_id in [policy_user_id.as_str(), user_id_hex] {
         if member_id != group_key {
             shared
@@ -517,36 +474,13 @@ fn step3_build_response(
 // Helpers
 // ============================================================================
 
-fn lookup_policy_by_recovery_id(
-    shared: &SharedServices,
-    recovery_id_hex: &str,
-) -> Result<Option<PolicyState>, Status> {
-    let user_id = match shared.persistence.get("policy_recovery_idx", recovery_id_hex) {
-        Ok(Some(uid)) => uid,
-        _ => return Ok(None),
-    };
-    let json_str = match shared.persistence.get("policies", &user_id) {
-        Ok(Some(j)) => j,
-        _ => return Ok(None),
-    };
-    let mut ps: PolicyState = serde_json::from_str(&json_str)
-        .map_err(|e| Status::internal(format!("parse policy: {e}")))?;
-    if let Ok(Some(secret)) = shared
-        .secret_store
-        .get_secret(&format!("dkg-secret.{user_id}"))
-    {
-        ps.server_dkg_secret_hex = Some(secret);
-    }
-    Ok(Some(ps))
-}
-
-pub(super) fn drain_with_err<T>(pool: &mut Vec<oneshot::Sender<Result<T, Status>>>, msg: &str) {
+pub(crate) fn drain_with_err<T>(pool: &mut Vec<oneshot::Sender<Result<T, Status>>>, msg: &str) {
     for s in pool.drain(..) {
         let _ = s.send(Err(Status::aborted(msg.to_string())));
     }
 }
 
-pub(super) fn drain_pairs_with_err<K, T>(
+pub(crate) fn drain_pairs_with_err<K, T>(
     pool: &mut Vec<(K, oneshot::Sender<Result<T, Status>>)>,
     msg: &str,
 ) {

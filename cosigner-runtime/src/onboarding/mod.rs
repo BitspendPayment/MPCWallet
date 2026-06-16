@@ -3,11 +3,9 @@
 //! step3 success. The long-lived per-user actor in `CosignerRegistry` is
 //! spawned lazily on the first post-DKG request, never during DKG itself.
 
-mod conv;
+pub(crate) mod conv;
 pub mod coordinator;
-pub mod evtxo;
-mod handlers;
+pub(crate) mod handlers;
 pub mod session;
 
 pub use coordinator::DkgCoordinator;
-pub use evtxo::EvtxoKeygenCoordinator;

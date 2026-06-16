@@ -13,13 +13,6 @@ use crate::crypto_ops;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 
-/// Persistence tree mapping a GroupID (hex group key) → JSON array of the
-/// verifying shares authorized to sign for that group. A normal 2-of-2 wallet
-/// authenticates by its single verifying share via `auth_check`; a contract
-/// cosigner (group key `V′`) accepts any of its participants' shares, looked up
-/// here and checked by `auth_check_group`.
-const GROUP_AUTH_TREE: &str = "group_auth_idx";
-
 /// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature
 /// against the URL `user_id` (owner pubkey) via the actor's WASM session.
 pub fn auth_check(
@@ -116,28 +109,6 @@ pub fn auth_check_group(
     )
 }
 
-/// Read a group's authorized verifying shares (hex) from `group_auth_idx`.
-/// Empty when the group is unknown or the row is corrupt.
-pub fn load_group_auth(persistence: &dyn KvStore, group_id_hex: &str) -> Vec<String> {
-    match persistence.get(GROUP_AUTH_TREE, group_id_hex) {
-        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
-        _ => Vec::new(),
-    }
-}
-
-/// Persist a group's authorized verifying shares (hex) under `group_auth_idx`.
-/// Used at contract-cosigner creation to register the participant roster.
-pub fn persist_group_auth(
-    persistence: &dyn KvStore,
-    group_id_hex: &str,
-    shares: &[String],
-) -> Result<(), Status> {
-    let json = serde_json::to_string(shares)
-        .map_err(|e| Status::internal(format!("encode group_auth: {e}")))?;
-    persistence
-        .put(GROUP_AUTH_TREE, group_id_hex, &json)
-        .map_err(|e| Status::internal(format!("persist group_auth: {e}")))
-}
 
 /// Load policy state from persistence into the user instance if not present.
 ///

@@ -39,7 +39,6 @@ async fn run_participant(
         user_id: user_id.clone(),
         identifier: identifier.clone(),
         round1_package: "{}".to_string(), // Mock
-        is_restore: false,
     };
     let _res1 = client.dkg_step1(req1).await?.into_inner();
 

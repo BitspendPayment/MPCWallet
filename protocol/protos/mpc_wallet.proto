@@ -8,17 +8,20 @@ service MPCWallet {
   rpc DKGStep2 (DKGStep2Request) returns (DKGStep2Response);
   rpc DKGStep3 (DKGStep3Request) returns (DKGStep3Response);
 
-  // eVTXO programmable key generation (resharing: cosigner+hardware deal,
-  // wallet+cosigner receive a new 2-of-2 key V′ bound to a contract).
-  rpc EvtxoKeygenStep1 (EvtxoKeygenStep1Request) returns (EvtxoKeygenStep1Response);
-  rpc EvtxoKeygenStep2 (EvtxoKeygenStep2Request) returns (EvtxoKeygenStep2Response);
-  rpc EvtxoKeygenStep3 (EvtxoKeygenStep3Request) returns (EvtxoKeygenStep3Response);
-  // Multi-user contracts: onboard a participant to a contract eVTXO (author submits
-  // its refresh half; cosigner forms the participant's counter-share + holds the
-  // ECIES halves), and the participant picks up + acks its held shares.
-  rpc EvtxoOnboard (EvtxoOnboardRequest) returns (EvtxoOnboardResponse);
-  rpc EvtxoPendingShares (EvtxoPendingSharesRequest) returns (EvtxoPendingSharesResponse);
-  rpc EvtxoAckShare (EvtxoAckShareRequest) returns (EvtxoAckShareResponse);
+  // Contract creation. Reshare V→V′ between user + cosigner (steps 1-3), then a
+  // single refresh of V′ onto the always-online SERVICE pairing (step 4), giving a
+  // 2-of-2 V′ with two signing pairings: (user + cosigner_shareA) || (service +
+  // cosigner_shareB). No ECIES, no async pickup — the service is always online.
+  rpc ContractCreateStep1 (ContractCreateStep1Request) returns (ContractCreateStep1Response);
+  rpc ContractCreateStep2 (ContractCreateStep2Request) returns (ContractCreateStep2Response);
+  rpc ContractCreateStep3 (ContractCreateStep3Request) returns (ContractCreateStep3Response);
+  rpc ContractCreateStep4 (ContractCreateStep4Request) returns (ContractCreateStep4Response);
+
+  // SERVICE-side API (served by the external contract-signer service, NOT the
+  // cosigner). Both the wallet (role=user, a@service) and the cosigner
+  // (role=cosigner, b@service + context) deliver their refresh halves; the service
+  // sums them into its V′ share. Synchronous, no encryption.
+  rpc AssembleContractShare (AssembleContractShareRequest) returns (AssembleContractShareResponse);
 
   // Signing
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
@@ -73,7 +76,7 @@ message DKGStep1Request {
   bytes user_id = 1;
   bytes identifier = 2;
   string round1_package = 3; // JSON
-  bool is_restore = 4; // If true, server reuses stored DKG secret instead of generating new one
+  reserved 4; // was is_restore (recovery/restore removed)
 }
 
 message DKGStep1Response {
@@ -454,106 +457,95 @@ message RegisterDeviceTokenResponse {
 }
 
 // ---------------------------------------------------------------------------
-// eVTXO key generation (resharing). Authenticated (the main key already exists).
-// Topology mirrors DKG: cosigner + hardware deal; the wallet sends an empty
-// round1 (passive receiver). The resulting 2-of-2 key V′ is held by
-// {wallet, cosigner} only and bound to `contract_id`.
+// Contract creation (reshare V→V′, then refresh onto the service pairing).
+// Authenticated (the user's main key already exists). The result is a 2-of-2 V′
+// with two pairings: (user + cosigner_shareA) || (service + cosigner_shareB),
+// stored as an EvtxoPolicy on the user's own policy. Steps 1-3 are the simple
+// 2-party reshare {user, cosigner}; step 4 carries the user's refresh halves for
+// the always-online service (the user sends a@service DIRECTLY to the service via
+// AssembleContractShare, so only the POINT a@service·G reaches the cosigner).
 // ---------------------------------------------------------------------------
-message EvtxoKeygenStep1Request {
+message ContractCreateStep1Request {
   bytes user_id = 1;
   bytes identifier = 2;
-  string round1_package = 3;   // JSON (empty for the passive wallet receiver)
+  string round1_package = 3;   // user's reshare dealer round1 (dkg_reshare_part1)
   bytes contract_id = 4;       // sha256(component_wasm): the contract bound to V′
   bytes signature = 5;         // Schnorr auth signature
   int64 timestamp_ms = 6;      // replay protection
-  bytes server_pk = 7;         // ASP signer x-only pubkey (for the cooperative leaf)
-  uint32 exit_delay = 8;       // unilateral-exit CSV delay (for the exit leaf)
-  bytes contract_wasm = 9;     // the contract component bytes; the cosigner validates
-                               // sha256(contract_wasm)==contract_id and persists them in
-                               // its own storage (no external registry)
+  bytes server_pk = 7;         // ASP signer x-only pubkey (cooperative leaf)
+  uint32 exit_delay = 8;       // unilateral-exit CSV delay (exit leaf)
+  bytes contract_wasm = 9;     // contract component bytes; cosigner verifies sha256==contract_id
+  bytes owner_pk = 10;         // user-supplied unilateral-exit x-only key (exit leaf)
+  bytes service_vk = 11;       // the always-online service's verifying key (33B)
 }
 
-message EvtxoKeygenStep1Response {
-  map<string, string> round1_packages = 1;   // legacy (reshare); unused in 2-of-2
-  bytes evtxo_script_pubkey = 2;              // 2-of-2: one-shot register returns the spk
+message ContractCreateStep1Response {
+  map<string, string> round1_packages = 1;   // both dealers' reshare round1 packages
 }
 
-message EvtxoKeygenStep2Request {
+message ContractCreateStep2Request {
   bytes user_id = 1;
   bytes identifier = 2;
-  string round1_package = 3;   // JSON
-  bytes signature = 4;
-  int64 timestamp_ms = 5;
-}
-
-message EvtxoKeygenStep2Response {
-  map<string, string> all_round1_packages = 1;
-}
-
-message EvtxoKeygenStep3Request {
-  bytes user_id = 1;
-  bytes identifier = 2;
-  map<string, string> round2_packages_for_others = 3;
-  bytes signature = 4;
-  int64 timestamp_ms = 5;
-}
-
-message EvtxoKeygenStep3Response {
-  map<string, string> round2_packages_for_me = 1;
-  string evtxo_address = 2;        // derived eVTXO address (cosigner-confirmed)
-  bytes evtxo_script_pubkey = 3;   // the registered scriptPubKey
-}
-
-// Onboard one participant to a contract eVTXO. Routed to the contract actor
-// (user_id = V′); the author authenticates via auth_check_group. The author has
-// computed its key-preserving refresh half a_i = refresh_share_to_id(...) onto the
-// participant's identifier id_i = derive(recipient_vk); it sends a_i(cosigner_id) as
-// a scalar (so the cosigner can form C_i), a_i(id_i)·G as a point (so the cosigner can
-// form the participant's verifying share P_i·G without learning a_i(id_i)), and
-// ECIES(a_i(id_i)) encrypted to the participant. The cosigner computes its own half
-// b_i, forms C_i + the 2-entry V′ PKP, registers the participant, and holds BOTH
-// ECIES halves in the participant's pickup inbox. Neither side learns P_i.
-message EvtxoOnboardRequest {
-  bytes user_id = 1;                  // the author (claimed share; routes via V′ path)
-  bytes evtxo_script_pubkey = 2;      // the contract eVTXO this participant joins
-  bytes recipient_vk = 3;             // the participant's verifying share (pubkey)
-  bytes a_at_cosigner = 4;            // a_i(cosigner_id) scalar (32B)
-  bytes a_at_participant_point = 5;   // a_i(id_i)·G compressed point (33B)
-  bytes ecies_a_at_participant = 6;   // ECIES(a_i(id_i)) to recipient_vk
-  bytes signature = 7;                // author auth (binds user_id)
-  int64 timestamp_ms = 8;
-  bytes contract_group_id = 9;        // V′ — routes to the contract actor (REST URL)
-}
-message EvtxoOnboardResponse {
-  bool ok = 1;
-}
-
-// Participant fetches contract shares held for it (in its own actor's inbox).
-message EvtxoPendingSharesRequest {
-  bytes user_id = 1;       // the participant (its own actor)
-  bytes signature = 2;
-  int64 timestamp_ms = 3;
-}
-message EvtxoPendingSharesResponse {
-  repeated PendingContractShare shares = 1;
-}
-message PendingContractShare {
-  bytes evtxo_script_pubkey = 1;
-  bytes contract_group_id = 2;          // V′ (the contract actor to address at spend)
-  bytes contract_id = 3;                // sha256(wasm)
-  bytes ecies_half_author = 4;          // ECIES(a_i(id_i))
-  bytes ecies_half_cosigner = 5;        // ECIES(b_i(id_i))
-  string public_key_package_json = 6;   // the 2-entry V′ PKP {id_i, cosigner_id}
-  uint32 exit_delay = 7;
-  bytes server_pk = 8;                  // ASP signer x-only (for the cooperative leaf)
-  bytes owner_pk = 9;                   // exit-leaf owner (author's V, x-only) for the taptree
-}
-message EvtxoAckShareRequest {
-  bytes user_id = 1;                    // the participant
-  bytes evtxo_script_pubkey = 2;        // the share to clear from the inbox
   bytes signature = 3;
   int64 timestamp_ms = 4;
 }
-message EvtxoAckShareResponse {
+
+message ContractCreateStep2Response {
+  map<string, string> all_round1_packages = 1;
+}
+
+message ContractCreateStep3Request {
+  bytes user_id = 1;
+  bytes identifier = 2;
+  map<string, string> round2_packages_for_others = 3; // user's reshare round2 to cosigner
+  bytes signature = 4;
+  int64 timestamp_ms = 5;
+}
+
+message ContractCreateStep3Response {
+  map<string, string> round2_packages_for_me = 1; // cosigner's reshare round2 to user
+  bytes contract_script_pubkey = 2;               // registered scriptPubKey (derived from V′)
+  bytes contract_group_id = 3;                     // V′ (compressed verifying key hex bytes)
+}
+
+// Step 4: the user, having finalized V′ from step3, refreshes V′ onto the service
+// pairing and hands the cosigner ONLY: a@cosigner (scalar, used to form
+// cosigner_shareB) and a@service·G (point, used to form the service verifying
+// share). The scalar a@service goes DIRECTLY to the service (AssembleContractShare),
+// never to the cosigner — so the cosigner can never reconstruct V′.
+message ContractCreateStep4Request {
+  bytes user_id = 1;
+  bytes identifier = 2;
+  bytes contract_script_pubkey = 3;   // the contract this finalizes
+  bytes a_at_cosigner = 4;            // a@cosigner scalar (32B)
+  bytes a_at_service_point = 5;       // a@service·G compressed point (33B)
+  bytes signature = 6;
+  int64 timestamp_ms = 7;
+}
+message ContractCreateStep4Response {
   bool ok = 1;
+}
+
+// SERVICE-side API. Served by the external contract-signer service. Both the
+// wallet (role="user", half=a@service) and the cosigner (role="cosigner",
+// half=b@service + context) deliver their refresh halves; the service sums them
+// into its V′ secret share. `context` is set only by the cosigner.
+message AssembleContractShareRequest {
+  bytes contract_group_id = 1;  // V′ — correlation key
+  bytes half_scalar = 2;        // a@service (user) or b@service (cosigner), 32B
+  string role = 3;              // "user" | "cosigner"
+  ContractContext context = 4;  // set by the cosigner only
+}
+message ContractContext {
+  bytes contract_script_pubkey = 1;
+  bytes contract_id = 2;             // sha256(wasm)
+  uint32 exit_delay = 3;
+  bytes owner_pk = 4;                // exit-leaf owner x-only
+  bytes server_pk = 5;              // ASP signer x-only
+  string public_key_package_json = 6; // 2-entry V′ PKP {service_id, cosigner_id}
+  bytes service_vk = 7;             // the service's verifying key
+}
+message AssembleContractShareResponse {
+  bool ok = 1;
+  bytes service_share_point = 2;  // service_share·G once both halves are in (else empty)
 }

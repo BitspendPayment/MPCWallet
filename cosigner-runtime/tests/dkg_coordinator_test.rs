@@ -28,6 +28,7 @@ fn make_shared() -> (Arc<SharedServices>, TempDir) {
         store,
         bitcoin_history,
         None,
+        None, // service_url
         None,
         1800, // auto_settle_safety_margin_secs
         1800, // actor_idle_threshold_secs

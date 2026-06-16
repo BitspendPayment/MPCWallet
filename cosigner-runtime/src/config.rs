@@ -10,6 +10,10 @@ pub struct ServerConfig {
     /// ASP (Ark Service Provider) gRPC URL, e.g. "http://localhost:7070".
     /// When empty, Ark RPCs return UNAVAILABLE.
     pub asp_url: String,
+    /// Contract-signer SERVICE base URL, e.g. "http://localhost:7080". The
+    /// always-online signer that holds the service-side share of every contract
+    /// key V′. When empty, contract creation returns UNAVAILABLE.
+    pub service_url: String,
     /// Bitcoin network name (e.g. "regtest", "signet", "testnet", "mainnet").
     /// Used for logging; the authoritative network comes from the ASP's GetArkInfo.
     pub bitcoin_network: String,
@@ -61,6 +65,7 @@ impl ServerConfig {
                 format!("{}/.mpc_wallet/server", home)
             }),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
+            service_url: env::var("SERVICE_URL").unwrap_or_default(),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             persistence_backend: env::var("PERSISTENCE_BACKEND")
                 .unwrap_or_else(|_| "sled".to_string()),

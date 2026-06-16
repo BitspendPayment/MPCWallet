@@ -84,9 +84,9 @@ impl CosignerRegistry {
         &self.shared
     }
 
-    /// Get the existing actor handle for `user_id`, or spawn a new one.
+    /// Get the existing actor handle for `group_key`, or spawn a new one.
     /// Cheap fast path when the actor already exists (DashMap read).
-    pub fn get_or_spawn(self: &Arc<Self>, user_id: &str) -> Result<CosignerHandle, Status> {
+    pub fn get_or_spawn(self: &Arc<Self>, group_key: &str) -> Result<CosignerHandle, Status> {
         // Actors are keyed by their GROUP KEY (cosigner_id). A request addressed by a
         // member's verifying share resolves to the group's actor via `policy_owner_idx`,
         // so every member of a group shares one actor (one for a normal wallet, many
@@ -94,12 +94,12 @@ impl CosignerRegistry {
         let canonical = self
             .shared
             .persistence
-            .get("policy_owner_idx", user_id)
+            .get("policy_owner_idx", group_key)
             .ok()
             .flatten()
-            .unwrap_or_else(|| user_id.to_string());
-        let user_id = canonical.as_str();
-        if let Some(entry) = self.actors.get(user_id) {
+            .unwrap_or_else(|| group_key.to_string());
+        let group_key = canonical.as_str();
+        if let Some(entry) = self.actors.get(group_key) {
             return Ok(entry.handle.clone());
         }
         // Slow path: instantiate WASM and spawn the actor task. State and
@@ -121,12 +121,12 @@ impl CosignerRegistry {
         // loads they would be empty until new events accrued (history) or
         // the client re-registered (push tokens).
         let persistence = self.shared.persistence.as_ref();
-        let mut fresh_state = CosignerState::new(user_id.to_string());
-        fresh_state.vtxos = super::handlers::helpers::load_user_vtxos(persistence, user_id);
+        let mut fresh_state = CosignerState::new(group_key.to_string());
+        fresh_state.vtxos = super::handlers::helpers::load_user_vtxos(persistence, group_key);
         fresh_state.ark_tx_history =
-            super::handlers::helpers::load_user_ark_history(persistence, user_id);
+            super::handlers::helpers::load_user_ark_history(persistence, group_key);
         fresh_state.device_tokens =
-            super::handlers::helpers::load_user_device_tokens(persistence, user_id);
+            super::handlers::helpers::load_user_device_tokens(persistence, group_key);
 
         // Rehydrate a persisted delegate intent if one is present. The
         // sled row doesn't carry the cosigner secret (issue #31) — we look
@@ -136,12 +136,12 @@ impl CosignerRegistry {
         // retrying — the client will re-delegate on its next refresh.
         let mut delegate_loaded = false;
         if let Some(persisted_record) =
-            super::handlers::helpers::load_user_delegate(persistence, user_id)
+            super::handlers::helpers::load_user_delegate(persistence, group_key)
         {
             match self
                 .shared
                 .secret_store
-                .get_secret(&format!("dkg-secret.{user_id}"))
+                .get_secret(&format!("dkg-secret.{group_key}"))
             {
                 Ok(Some(dkg_secret_hex)) => {
                     match ark::client::batch::DelegateSettleSession::from_persisted(
@@ -165,21 +165,21 @@ impl CosignerRegistry {
                         }
                         Err(e) => {
                             tracing::warn!(
-                                "Rehydrate delegate for {user_id} failed: {e}; dropping sled row"
+                                "Rehydrate delegate for {group_key} failed: {e}; dropping sled row"
                             );
-                            super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                            super::handlers::helpers::delete_user_delegate(persistence, group_key);
                         }
                     }
                 }
                 Ok(None) => {
                     tracing::warn!(
-                        "Rehydrate delegate for {user_id}: SecretStore missing dkg-secret entry; dropping sled row"
+                        "Rehydrate delegate for {group_key}: SecretStore missing dkg-secret entry; dropping sled row"
                     );
-                    super::handlers::helpers::delete_user_delegate(persistence, user_id);
+                    super::handlers::helpers::delete_user_delegate(persistence, group_key);
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "Rehydrate delegate for {user_id}: SecretStore error {e}; leaving sled row in place"
+                        "Rehydrate delegate for {group_key}: SecretStore error {e}; leaving sled row in place"
                     );
                 }
             }
@@ -191,7 +191,7 @@ impl CosignerRegistry {
             || delegate_loaded
         {
             tracing::info!(
-                "Rehydrated actor {user_id}: vtxos={}, history={}, device_tokens={}, delegate={}",
+                "Rehydrated actor {group_key}: vtxos={}, history={}, device_tokens={}, delegate={}",
                 fresh_state.vtxos.len(),
                 fresh_state.ark_tx_history.len(),
                 fresh_state.device_tokens.len(),
@@ -219,7 +219,7 @@ impl CosignerRegistry {
             last_active,
         };
         // Insert; if a concurrent caller beat us to it, drop ours and use theirs.
-        match self.actors.entry(user_id.to_string()) {
+        match self.actors.entry(group_key.to_string()) {
             dashmap::mapref::entry::Entry::Occupied(e) => {
                 // Race: another caller spawned. Cancel our spawn and use theirs.
                 drop(handle);
@@ -227,7 +227,7 @@ impl CosignerRegistry {
                 Ok(e.get().handle.clone())
             }
             dashmap::mapref::entry::Entry::Vacant(e) => {
-                tracing::info!("Spawned actor for user {user_id}");
+                tracing::info!("Spawned actor for user {group_key}");
                 e.insert(owned);
                 Ok(handle)
             }
@@ -289,11 +289,11 @@ impl CosignerRegistry {
 
     /// Send a command to the user's actor and await the typed reply.
     /// `make_cmd` receives the reply oneshot sender and returns the command to send.
-    pub async fn dispatch<T, F>(self: &Arc<Self>, user_id: &str, make_cmd: F) -> Result<T, Status>
+    pub async fn dispatch<T, F>(self: &Arc<Self>, group_key: &str, make_cmd: F) -> Result<T, Status>
     where
         F: FnOnce(oneshot::Sender<Result<T, Status>>) -> CosignerCommand,
     {
-        let handle = self.get_or_spawn(user_id)?;
+        let handle = self.get_or_spawn(group_key)?;
         let (reply_tx, reply_rx) = oneshot::channel();
         let cmd = make_cmd(reply_tx);
         handle
@@ -520,9 +520,6 @@ pub async fn run_cosigner(
                     break;
                 }
             }
-            state
-                .lock()
-                .drain_pending_replies_with_err("actor recovering from panic");
         }
     }
 }
@@ -669,23 +666,6 @@ async fn dispatch_one(
                 handlers::ark_send::submit_ark_send
             );
         }
-        CosignerCommand::EvtxoOnboard { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::onboard::evtxo_onboard);
-        }
-        CosignerCommand::EvtxoPendingShares { req, reply } => {
-            dispatch!(
-                user,
-                state,
-                shared,
-                req,
-                reply,
-                handlers::onboard::evtxo_pending_shares
-            );
-        }
-        CosignerCommand::EvtxoAckShare { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::onboard::evtxo_ack_share);
-        }
-
         // -------- Push registration --------
         CosignerCommand::RegisterDeviceToken { req, reply } => {
             dispatch!(

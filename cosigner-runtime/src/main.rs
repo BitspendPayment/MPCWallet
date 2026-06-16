@@ -147,11 +147,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let service_url = if cfg.service_url.is_empty() {
+        None
+    } else {
+        tracing::info!("Contract-signer service at {}", cfg.service_url);
+        Some(cfg.service_url.clone())
+    };
     let mut shared = shared::SharedServices::new(
         persistence,
         secret_store,
         bitcoin_history,
         asp_client,
+        service_url,
         fcm,
         cfg.auto_settle_safety_margin_secs,
         cfg.actor_idle_threshold_secs,
@@ -291,10 +298,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // eVTXO key-generation (resharing) coordinator — same TTL/eviction model.
-    let evtxo_coord = onboarding::EvtxoKeygenCoordinator::new(shared.clone(), dkg_ttl);
+    // Contract-creation (reshare V→V′ + service refresh) coordinator — same
+    // TTL/eviction model.
+    let contract_coord = contract::ContractCreateCoordinator::new(shared.clone(), dkg_ttl);
     {
-        let coord = evtxo_coord.clone();
+        let coord = contract_coord.clone();
         tokio::spawn(async move {
             coord.run_eviction_loop().await;
         });
@@ -310,7 +318,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = rest_api::AppState {
         registry: registry.clone(),
         dkg_coordinator: dkg_coord.clone(),
-        evtxo_coordinator: evtxo_coord.clone(),
+        contract_coordinator: contract_coord.clone(),
         server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
             bitcoin_network: cfg.bitcoin_network.clone(),
         }),

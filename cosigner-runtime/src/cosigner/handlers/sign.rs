@@ -41,12 +41,19 @@ pub fn sign_step1(
         .ok_or_else(|| Status::not_found("no policy state"))?
         .clone();
 
-    // Authenticate. A contract actor accepts ANY registered recipient's verifying
-    // share (auth_check_group vs group_auth_idx[V′]) and co-signs for THAT recipient;
-    // a normal wallet authenticates its single owner.
-    if policy_state.is_contract {
-        let authorized =
-            super::helpers::load_group_auth(shared.persistence.as_ref(), &own_id);
+    // Detect a contract spend up front: if any input spends a registered contract
+    // scriptPubKey on this policy, this is a contract cooperative spend (V′), and
+    // the claimed verifying share (req.user_id) must be one of THAT contract's
+    // registered recipients — the user (pairing A) or the always-online service
+    // (pairing B). A plain spend authenticates the wallet's single owner.
+    let contract_spk = super::contract_gate::detect_evtxo_spend(&policy_state, &req.full_transaction);
+
+    if let Some(spk_hex) = contract_spk.as_ref() {
+        let authorized: Vec<String> = policy_state
+            .contracts
+            .get(spk_hex)
+            .map(|cp| cp.authorized_vks())
+            .unwrap_or_default();
         super::helpers::auth_check_group(
             user,
             state,
@@ -67,20 +74,17 @@ pub fn sign_step1(
         )?;
     }
 
-    // Off-chain contract gate: if any input spends an eVTXO bound to a contract,
-    // run it and refuse to sign on a Deny verdict (no FROST share is produced).
+    // Off-chain contract gate: if any input spends a contract eVTXO, run the
+    // contract and refuse to sign on a Deny verdict (no FROST share is produced).
+    // Gates BOTH the user and the service signing paths.
     super::contract_gate::enforce_contracts(shared, &req.full_transaction)?;
 
-    // Detect an eVTXO spend and select the signing key + PKP. For a contract actor
-    // every spend is an eVTXO spend; recipient_vk = the authenticated user
-    // (req.user_id) selects that recipient's V′ counter-share. Everything else uses
-    // the normal 2-of-2 key.
-    let selected_policy_id = super::contract_gate::detect_evtxo_spend(
-        &policy_state,
-        &req.full_transaction,
-    )
-    .map(|spk_hex| {
-        tracing::info!("[{user_id_hex}] SignStep1: eVTXO cooperative spend — using V′ key");
+    // Select the signing key + PKP: a contract spend selects the authenticated
+    // recipient's V′ counter-share (req.user_id = its verifying share); everything
+    // else uses the normal 2-of-2 key.
+    let is_contract_spend = contract_spk.is_some();
+    let selected_policy_id = contract_spk.map(|spk_hex| {
+        tracing::info!("[{user_id_hex}] SignStep1: contract cooperative spend — using V′ key");
         format!("evtxo:{spk_hex}")
     });
     let (server_kp_json, server_pkp_json) = parsers::resolve_signing_key(
@@ -89,11 +93,10 @@ pub fn sign_step1(
         &user_id_hex,
     );
 
-    // The user's V′ identifier id_i: for a contract spend it is the non-cosigner entry
-    // of the recipient's 2-entry V′ PKP (the author's existing V identifier, or a
-    // refreshed participant's derived id — NOT derive(user_id)). A normal wallet uses
-    // its stored signing identifier (or a derived one).
-    let user_identifier_hex = if policy_state.is_contract {
+    // The recipient's V′ identifier: for a contract spend it is the non-cosigner
+    // entry of the recipient's 2-entry V′ PKP. A normal wallet uses its stored
+    // signing identifier (or a derived one).
+    let user_identifier_hex = if is_contract_spend {
         let cosigner_id = parsers::extract_identifier(&server_kp_json)?;
         parsers::extract_recipient_identifier(&server_pkp_json, &cosigner_id)?
     } else {
@@ -104,7 +107,7 @@ pub fn sign_step1(
     };
 
     // PKP for spent-amount logging: the V′ PKP for a contract spend, else the wallet's.
-    let pkp_json = if policy_state.is_contract {
+    let pkp_json = if is_contract_spend {
         server_pkp_json.clone()
     } else {
         policy_state.normal_policy.public_key_package_json.clone()
@@ -260,7 +263,7 @@ pub fn sign_step1(
 pub fn sign_step2(
     user: &mut CosignerInstance,
     state: &mut CosignerState,
-    shared: &SharedServices,
+    _shared: &SharedServices,
     req: SignStep2Request,
 ) -> Result<SignStep2Response, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
@@ -273,12 +276,24 @@ pub fn sign_step2(
         .ok_or_else(|| Status::not_found("no policy state"))?
         .clone();
 
-    // Same auth split as sign_step1: contract actor → auth_check_group for the
-    // claimed recipient; normal wallet → auth_check for its owner.
-    if policy_state.is_contract {
-        let own_id = state.cosigner_id.clone();
-        let authorized =
-            super::helpers::load_group_auth(shared.persistence.as_ref(), &own_id);
+    // Recover the signing session + the policy id chosen in step1, so the auth
+    // split matches step1: a contract spend (policy id "evtxo:<spk>") authorizes
+    // the claimed recipient against that contract's recipient set; a normal spend
+    // authenticates the wallet's single owner.
+    let sign_h = user
+        .signing_session
+        .ok_or_else(|| Status::internal("no signing session"))?;
+    let current_policy_id = crypto_ops::signing_session_get_current_policy_id(user, sign_h)
+        .map_err(|e| Status::internal(format!("get_policy_id: {e}")))?;
+    let contract_spk = current_policy_id.strip_prefix("evtxo:").map(|s| s.to_string());
+    let is_contract_spend = contract_spk.is_some();
+
+    if let Some(spk_hex) = contract_spk.as_ref() {
+        let authorized: Vec<String> = policy_state
+            .contracts
+            .get(spk_hex)
+            .map(|cp| cp.authorized_vks())
+            .unwrap_or_default();
         super::helpers::auth_check_group(
             user,
             state,
@@ -299,21 +314,15 @@ pub fn sign_step2(
         )?;
     }
 
-    let sign_h = user
-        .signing_session
-        .ok_or_else(|| Status::internal("no signing session"))?;
-
-    let current_policy_id = crypto_ops::signing_session_get_current_policy_id(user, sign_h)
-        .map_err(|e| Status::internal(format!("get_policy_id: {e}")))?;
-    // Same resolution as sign_step1 (normal / eVTXO V′) so the key + identifiers stay
-    // consistent across both steps.
+    // Same resolution as sign_step1 (normal / contract V′) so the key + identifiers
+    // stay consistent across both steps.
     let (server_kp_json, server_pkp_json) =
         parsers::resolve_signing_key(&policy_state, &current_policy_id, &user_id_hex);
     let server_identifier_hex = parsers::extract_identifier(&server_kp_json)?;
 
     // Recipient's V′ identifier id_i (see sign_step1) — read from the V′ PKP for a
     // contract spend, else the wallet's stored/derived identifier.
-    let user_identifier_hex = if policy_state.is_contract {
+    let user_identifier_hex = if is_contract_spend {
         parsers::extract_recipient_identifier(&server_pkp_json, &server_identifier_hex)?
     } else {
         policy_state

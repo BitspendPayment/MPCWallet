@@ -1,13 +1,15 @@
+// This is a generated file - do not edit.
 //
-//  Generated code. Do not modify.
-//  source: mpc_wallet.proto
-//
-// @dart = 2.12
+// Generated from mpc_wallet.proto.
+
+// @dart = 3.3
 
 // ignore_for_file: annotate_overrides, camel_case_types, comment_references
-// ignore_for_file: constant_identifier_names, library_prefixes
-// ignore_for_file: non_constant_identifier_names, prefer_final_fields
-// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+// ignore_for_file: constant_identifier_names
+// ignore_for_file: curly_braces_in_flow_control_structures
+// ignore_for_file: deprecated_member_use_from_same_package, library_prefixes
+// ignore_for_file: non_constant_identifier_names, prefer_relative_imports
+// ignore_for_file: unused_import
 
 import 'dart:convert' as $convert;
 import 'dart:core' as $core;
@@ -20,7 +22,9 @@ const DKGStep1Request$json = {
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
     {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
     {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
-    {'1': 'is_restore', '3': 4, '4': 1, '5': 8, '10': 'isRestore'},
+  ],
+  '9': [
+    {'1': 4, '2': 5},
   ],
 };
 
@@ -28,13 +32,20 @@ const DKGStep1Request$json = {
 final $typed_data.Uint8List dKGStep1RequestDescriptor = $convert.base64Decode(
     'Cg9ES0dTdGVwMVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZX'
     'IYAiABKAxSCmlkZW50aWZpZXISJQoOcm91bmQxX3BhY2thZ2UYAyABKAlSDXJvdW5kMVBhY2th'
-    'Z2USHQoKaXNfcmVzdG9yZRgEIAEoCFIJaXNSZXN0b3Jl');
+    'Z2VKBAgEEAU=');
 
 @$core.Deprecated('Use dKGStep1ResponseDescriptor instead')
 const DKGStep1Response$json = {
   '1': 'DKGStep1Response',
   '2': [
-    {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
+    {
+      '1': 'round1_packages',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.DKGStep1Response.Round1PackagesEntry',
+      '10': 'round1Packages'
+    },
   ],
   '3': [DKGStep1Response_Round1PackagesEntry$json],
 };
@@ -76,7 +87,14 @@ final $typed_data.Uint8List dKGStep2RequestDescriptor = $convert.base64Decode(
 const DKGStep2Response$json = {
   '1': 'DKGStep2Response',
   '2': [
-    {'1': 'all_round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep2Response.AllRound1PackagesEntry', '10': 'allRound1Packages'},
+    {
+      '1': 'all_round1_packages',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.DKGStep2Response.AllRound1PackagesEntry',
+      '10': 'allRound1Packages'
+    },
   ],
   '3': [DKGStep2Response_AllRound1PackagesEntry$json],
 };
@@ -104,7 +122,14 @@ const DKGStep3Request$json = {
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
     {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    {'1': 'round2_packages_for_others', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Request.Round2PackagesForOthersEntry', '10': 'round2PackagesForOthers'},
+    {
+      '1': 'round2_packages_for_others',
+      '3': 3,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.DKGStep3Request.Round2PackagesForOthersEntry',
+      '10': 'round2PackagesForOthers'
+    },
   ],
   '3': [DKGStep3Request_Round2PackagesForOthersEntry$json],
 };
@@ -131,7 +156,14 @@ final $typed_data.Uint8List dKGStep3RequestDescriptor = $convert.base64Decode(
 const DKGStep3Response$json = {
   '1': 'DKGStep3Response',
   '2': [
-    {'1': 'round2_packages_for_me', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Response.Round2PackagesForMeEntry', '10': 'round2PackagesForMe'},
+    {
+      '1': 'round2_packages_for_me',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.DKGStep3Response.Round2PackagesForMeEntry',
+      '10': 'round2PackagesForMe'
+    },
   ],
   '3': [DKGStep3Response_Round2PackagesForMeEntry$json],
 };
@@ -158,8 +190,20 @@ const SignStep1Request$json = {
   '1': 'SignStep1Request',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    {'1': 'hiding_commitment', '3': 2, '4': 1, '5': 12, '10': 'hidingCommitment'},
-    {'1': 'binding_commitment', '3': 3, '4': 1, '5': 12, '10': 'bindingCommitment'},
+    {
+      '1': 'hiding_commitment',
+      '3': 2,
+      '4': 1,
+      '5': 12,
+      '10': 'hidingCommitment'
+    },
+    {
+      '1': 'binding_commitment',
+      '3': 3,
+      '4': 1,
+      '5': 12,
+      '10': 'bindingCommitment'
+    },
     {'1': 'message_to_sign', '3': 4, '4': 1, '5': 12, '10': 'messageToSign'},
     {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
     {'1': 'full_transaction', '3': 6, '4': 1, '5': 12, '10': 'fullTransaction'},
@@ -183,11 +227,21 @@ final $typed_data.Uint8List signStep1RequestDescriptor = $convert.base64Decode(
 const SignStep1Response$json = {
   '1': 'SignStep1Response',
   '2': [
-    {'1': 'commitments', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.SignStep1Response.CommitmentsEntry', '10': 'commitments'},
+    {
+      '1': 'commitments',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.SignStep1Response.CommitmentsEntry',
+      '10': 'commitments'
+    },
     {'1': 'message_to_sign', '3': 2, '4': 1, '5': 12, '10': 'messageToSign'},
     {'1': 'used_key_index', '3': 3, '4': 1, '5': 5, '10': 'usedKeyIndex'},
   ],
-  '3': [SignStep1Response_Commitment$json, SignStep1Response_CommitmentsEntry$json],
+  '3': [
+    SignStep1Response_Commitment$json,
+    SignStep1Response_CommitmentsEntry$json
+  ],
 };
 
 @$core.Deprecated('Use signStep1ResponseDescriptor instead')
@@ -204,7 +258,14 @@ const SignStep1Response_CommitmentsEntry$json = {
   '1': 'CommitmentsEntry',
   '2': [
     {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    {'1': 'value', '3': 2, '4': 1, '5': 11, '6': '.mpc_wallet.SignStep1Response.Commitment', '10': 'value'},
+    {
+      '1': 'value',
+      '3': 2,
+      '4': 1,
+      '5': 11,
+      '6': '.mpc_wallet.SignStep1Response.Commitment',
+      '10': 'value'
+    },
   ],
   '7': {'7': true},
 };
@@ -277,9 +338,10 @@ const BroadcastTransactionRequest$json = {
 };
 
 /// Descriptor for `BroadcastTransactionRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List broadcastTransactionRequestDescriptor = $convert.base64Decode(
-    'ChtCcm9hZGNhc3RUcmFuc2FjdGlvblJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
-    'UKBnR4X2hleBgCIAEoCVIFdHhIZXg=');
+final $typed_data.Uint8List broadcastTransactionRequestDescriptor =
+    $convert.base64Decode(
+        'ChtCcm9hZGNhc3RUcmFuc2FjdGlvblJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
+        'UKBnR4X2hleBgCIAEoCVIFdHhIZXg=');
 
 @$core.Deprecated('Use broadcastTransactionResponseDescriptor instead')
 const BroadcastTransactionResponse$json = {
@@ -290,8 +352,9 @@ const BroadcastTransactionResponse$json = {
 };
 
 /// Descriptor for `BroadcastTransactionResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List broadcastTransactionResponseDescriptor = $convert.base64Decode(
-    'ChxCcm9hZGNhc3RUcmFuc2FjdGlvblJlc3BvbnNlEhMKBXR4X2lkGAEgASgJUgR0eElk');
+final $typed_data.Uint8List broadcastTransactionResponseDescriptor =
+    $convert.base64Decode(
+        'ChxCcm9hZGNhc3RUcmFuc2FjdGlvblJlc3BvbnNlEhMKBXR4X2lkGAEgASgJUgR0eElk');
 
 @$core.Deprecated('Use fetchHistoryRequestDescriptor instead')
 const FetchHistoryRequest$json = {
@@ -312,7 +375,14 @@ final $typed_data.Uint8List fetchHistoryRequestDescriptor = $convert.base64Decod
 const FetchHistoryResponse$json = {
   '1': 'FetchHistoryResponse',
   '2': [
-    {'1': 'utxos', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'utxos'},
+    {
+      '1': 'utxos',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.UtxoInfo',
+      '10': 'utxos'
+    },
   ],
 };
 
@@ -332,23 +402,32 @@ const FetchRecentTransactionsRequest$json = {
 };
 
 /// Descriptor for `FetchRecentTransactionsRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchRecentTransactionsRequestDescriptor = $convert.base64Decode(
-    'Ch5GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlck'
-    'lkEhwKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1IL'
-    'dGltZXN0YW1wTXM=');
+final $typed_data.Uint8List fetchRecentTransactionsRequestDescriptor =
+    $convert.base64Decode(
+        'Ch5GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlck'
+        'lkEhwKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1IL'
+        'dGltZXN0YW1wTXM=');
 
 @$core.Deprecated('Use fetchRecentTransactionsResponseDescriptor instead')
 const FetchRecentTransactionsResponse$json = {
   '1': 'FetchRecentTransactionsResponse',
   '2': [
-    {'1': 'transactions', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.TransactionSummary', '10': 'transactions'},
+    {
+      '1': 'transactions',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.TransactionSummary',
+      '10': 'transactions'
+    },
   ],
 };
 
 /// Descriptor for `FetchRecentTransactionsResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchRecentTransactionsResponseDescriptor = $convert.base64Decode(
-    'Ch9GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1Jlc3BvbnNlEkIKDHRyYW5zYWN0aW9ucxgBIAMoCz'
-    'IeLm1wY193YWxsZXQuVHJhbnNhY3Rpb25TdW1tYXJ5Ugx0cmFuc2FjdGlvbnM=');
+final $typed_data.Uint8List fetchRecentTransactionsResponseDescriptor =
+    $convert.base64Decode(
+        'Ch9GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1Jlc3BvbnNlEkIKDHRyYW5zYWN0aW9ucxgBIAMoCz'
+        'IeLm1wY193YWxsZXQuVHJhbnNhY3Rpb25TdW1tYXJ5Ugx0cmFuc2FjdGlvbnM=');
 
 @$core.Deprecated('Use transactionSummaryDescriptor instead')
 const TransactionSummary$json = {
@@ -389,8 +468,22 @@ const TransactionNotification$json = {
   '2': [
     {'1': 'tx_hash', '3': 1, '4': 1, '5': 9, '10': 'txHash'},
     {'1': 'height', '3': 2, '4': 1, '5': 5, '10': 'height'},
-    {'1': 'added_utxos', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'addedUtxos'},
-    {'1': 'spent_utxos', '3': 4, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'spentUtxos'},
+    {
+      '1': 'added_utxos',
+      '3': 3,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.UtxoInfo',
+      '10': 'addedUtxos'
+    },
+    {
+      '1': 'spent_utxos',
+      '3': 4,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.UtxoInfo',
+      '10': 'spentUtxos'
+    },
   ],
 };
 
@@ -424,13 +517,37 @@ const GetArkInfoResponse$json = {
     {'1': 'forfeit_pubkey', '3': 2, '4': 1, '5': 9, '10': 'forfeitPubkey'},
     {'1': 'network', '3': 3, '4': 1, '5': 9, '10': 'network'},
     {'1': 'session_duration', '3': 4, '4': 1, '5': 3, '10': 'sessionDuration'},
-    {'1': 'unilateral_exit_delay', '3': 5, '4': 1, '5': 3, '10': 'unilateralExitDelay'},
-    {'1': 'boarding_exit_delay', '3': 6, '4': 1, '5': 3, '10': 'boardingExitDelay'},
+    {
+      '1': 'unilateral_exit_delay',
+      '3': 5,
+      '4': 1,
+      '5': 3,
+      '10': 'unilateralExitDelay'
+    },
+    {
+      '1': 'boarding_exit_delay',
+      '3': 6,
+      '4': 1,
+      '5': 3,
+      '10': 'boardingExitDelay'
+    },
     {'1': 'vtxo_min_amount', '3': 7, '4': 1, '5': 3, '10': 'vtxoMinAmount'},
     {'1': 'dust', '3': 8, '4': 1, '5': 3, '10': 'dust'},
-    {'1': 'checkpoint_tapscript', '3': 9, '4': 1, '5': 9, '10': 'checkpointTapscript'},
+    {
+      '1': 'checkpoint_tapscript',
+      '3': 9,
+      '4': 1,
+      '5': 9,
+      '10': 'checkpointTapscript'
+    },
     {'1': 'forfeit_address', '3': 10, '4': 1, '5': 9, '10': 'forfeitAddress'},
-    {'1': 'auto_settle_safety_margin_secs', '3': 11, '4': 1, '5': 3, '10': 'autoSettleSafetyMarginSecs'},
+    {
+      '1': 'auto_settle_safety_margin_secs',
+      '3': 11,
+      '4': 1,
+      '5': 3,
+      '10': 'autoSettleSafetyMarginSecs'
+    },
   ],
 };
 
@@ -500,9 +617,10 @@ const GetBoardingAddressResponse$json = {
 };
 
 /// Descriptor for `GetBoardingAddressResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getBoardingAddressResponseDescriptor = $convert.base64Decode(
-    'ChpHZXRCb2FyZGluZ0FkZHJlc3NSZXNwb25zZRIpChBib2FyZGluZ19hZGRyZXNzGAEgASgJUg'
-    '9ib2FyZGluZ0FkZHJlc3M=');
+final $typed_data.Uint8List getBoardingAddressResponseDescriptor =
+    $convert.base64Decode(
+        'ChpHZXRCb2FyZGluZ0FkZHJlc3NSZXNwb25zZRIpChBib2FyZGluZ19hZGRyZXNzGAEgASgJUg'
+        '9ib2FyZGluZ0FkZHJlc3M=');
 
 @$core.Deprecated('Use vtxoInfoDescriptor instead')
 const VtxoInfo$json = {
@@ -547,9 +665,22 @@ final $typed_data.Uint8List listVtxosRequestDescriptor = $convert.base64Decode(
 const ListVtxosResponse$json = {
   '1': 'ListVtxosResponse',
   '2': [
-    {'1': 'vtxos', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.VtxoInfo', '10': 'vtxos'},
+    {
+      '1': 'vtxos',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.VtxoInfo',
+      '10': 'vtxos'
+    },
     {'1': 'total_balance', '3': 2, '4': 1, '5': 4, '10': 'totalBalance'},
-    {'1': 'has_active_delegate', '3': 3, '4': 1, '5': 8, '10': 'hasActiveDelegate'},
+    {
+      '1': 'has_active_delegate',
+      '3': 3,
+      '4': 1,
+      '5': 8,
+      '10': 'hasActiveDelegate'
+    },
   ],
 };
 
@@ -570,10 +701,11 @@ const CheckBoardingBalanceRequest$json = {
 };
 
 /// Descriptor for `CheckBoardingBalanceRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List checkBoardingBalanceRequestDescriptor = $convert.base64Decode(
-    'ChtDaGVja0JvYXJkaW5nQmFsYW5jZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
-    'wKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGlt'
-    'ZXN0YW1wTXM=');
+final $typed_data.Uint8List checkBoardingBalanceRequestDescriptor =
+    $convert.base64Decode(
+        'ChtDaGVja0JvYXJkaW5nQmFsYW5jZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
+        'wKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGlt'
+        'ZXN0YW1wTXM=');
 
 @$core.Deprecated('Use checkBoardingBalanceResponseDescriptor instead')
 const CheckBoardingBalanceResponse$json = {
@@ -585,9 +717,10 @@ const CheckBoardingBalanceResponse$json = {
 };
 
 /// Descriptor for `CheckBoardingBalanceResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List checkBoardingBalanceResponseDescriptor = $convert.base64Decode(
-    'ChxDaGVja0JvYXJkaW5nQmFsYW5jZVJlc3BvbnNlEhgKB2JhbGFuY2UYASABKARSB2JhbGFuY2'
-    'USHQoKdXR4b19jb3VudBgCIAEoDVIJdXR4b0NvdW50');
+final $typed_data.Uint8List checkBoardingBalanceResponseDescriptor =
+    $convert.base64Decode(
+        'ChxDaGVja0JvYXJkaW5nQmFsYW5jZVJlc3BvbnNlEhgKB2JhbGFuY2UYASABKARSB2JhbGFuY2'
+        'USHQoKdXR4b19jb3VudBgCIAEoDVIJdXR4b0NvdW50');
 
 @$core.Deprecated('Use arkTransactionSummaryDescriptor instead')
 const ArkTransactionSummary$json = {
@@ -617,30 +750,45 @@ const ListArkTransactionsRequest$json = {
 };
 
 /// Descriptor for `ListArkTransactionsRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listArkTransactionsRequestDescriptor = $convert.base64Decode(
-    'ChpMaXN0QXJrVHJhbnNhY3Rpb25zUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHA'
-    'oJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1l'
-    'c3RhbXBNcw==');
+final $typed_data.Uint8List listArkTransactionsRequestDescriptor =
+    $convert.base64Decode(
+        'ChpMaXN0QXJrVHJhbnNhY3Rpb25zUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHA'
+        'oJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1l'
+        'c3RhbXBNcw==');
 
 @$core.Deprecated('Use listArkTransactionsResponseDescriptor instead')
 const ListArkTransactionsResponse$json = {
   '1': 'ListArkTransactionsResponse',
   '2': [
-    {'1': 'transactions', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.ArkTransactionSummary', '10': 'transactions'},
+    {
+      '1': 'transactions',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.ArkTransactionSummary',
+      '10': 'transactions'
+    },
   ],
 };
 
 /// Descriptor for `ListArkTransactionsResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listArkTransactionsResponseDescriptor = $convert.base64Decode(
-    'ChtMaXN0QXJrVHJhbnNhY3Rpb25zUmVzcG9uc2USRQoMdHJhbnNhY3Rpb25zGAEgAygLMiEubX'
-    'BjX3dhbGxldC5BcmtUcmFuc2FjdGlvblN1bW1hcnlSDHRyYW5zYWN0aW9ucw==');
+final $typed_data.Uint8List listArkTransactionsResponseDescriptor =
+    $convert.base64Decode(
+        'ChtMaXN0QXJrVHJhbnNhY3Rpb25zUmVzcG9uc2USRQoMdHJhbnNhY3Rpb25zGAEgAygLMiEubX'
+        'BjX3dhbGxldC5BcmtUcmFuc2FjdGlvblN1bW1hcnlSDHRyYW5zYWN0aW9ucw==');
 
 @$core.Deprecated('Use sendVtxoRequestDescriptor instead')
 const SendVtxoRequest$json = {
   '1': 'SendVtxoRequest',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    {'1': 'recipient_ark_address', '3': 2, '4': 1, '5': 9, '10': 'recipientArkAddress'},
+    {
+      '1': 'recipient_ark_address',
+      '3': 2,
+      '4': 1,
+      '5': 9,
+      '10': 'recipientArkAddress'
+    },
     {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
     {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
     {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
@@ -660,7 +808,14 @@ final $typed_data.Uint8List sendVtxoRequestDescriptor = $convert.base64Decode(
 const SendVtxoResponse$json = {
   '1': 'SendVtxoResponse',
   '2': [
-    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SendVtxoResponse.Status', '10': 'status'},
+    {
+      '1': 'status',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.mpc_wallet.SendVtxoResponse.Status',
+      '10': 'status'
+    },
     {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
     {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
     {'1': 'ark_txid', '3': 4, '4': 1, '5': 9, '10': 'arkTxid'},
@@ -742,7 +897,14 @@ final $typed_data.Uint8List settleRequestDescriptor = $convert.base64Decode(
 const SettleResponse$json = {
   '1': 'SettleResponse',
   '2': [
-    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleResponse.Status', '10': 'status'},
+    {
+      '1': 'status',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.mpc_wallet.SettleResponse.Status',
+      '10': 'status'
+    },
     {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
     {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
     {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
@@ -794,7 +956,14 @@ final $typed_data.Uint8List settleDelegateRequestDescriptor = $convert.base64Dec
 const SettleDelegateResponse$json = {
   '1': 'SettleDelegateResponse',
   '2': [
-    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleDelegateResponse.Status', '10': 'status'},
+    {
+      '1': 'status',
+      '3': 1,
+      '4': 1,
+      '5': 14,
+      '6': '.mpc_wallet.SettleDelegateResponse.Status',
+      '10': 'status'
+    },
     {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
     {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
     {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
@@ -831,7 +1000,13 @@ const SubmitArkSendRequest$json = {
     {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
     {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
     {'1': 'signed_ark_tx_b64', '3': 4, '4': 1, '5': 9, '10': 'signedArkTxB64'},
-    {'1': 'signed_checkpoint_txs_b64', '3': 5, '4': 3, '5': 9, '10': 'signedCheckpointTxsB64'},
+    {
+      '1': 'signed_checkpoint_txs_b64',
+      '3': 5,
+      '4': 3,
+      '5': 9,
+      '10': 'signedCheckpointTxsB64'
+    },
     {'1': 'spent_outpoints', '3': 6, '4': 3, '5': 9, '10': 'spentOutpoints'},
   ],
 };
@@ -867,8 +1042,8 @@ const GetServerInfoRequest$json = {
 };
 
 /// Descriptor for `GetServerInfoRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getServerInfoRequestDescriptor = $convert.base64Decode(
-    'ChRHZXRTZXJ2ZXJJbmZvUmVxdWVzdA==');
+final $typed_data.Uint8List getServerInfoRequestDescriptor =
+    $convert.base64Decode('ChRHZXRTZXJ2ZXJJbmZvUmVxdWVzdA==');
 
 @$core.Deprecated('Use getServerInfoResponseDescriptor instead')
 const GetServerInfoResponse$json = {
@@ -912,12 +1087,13 @@ const RegisterDeviceTokenResponse$json = {
 };
 
 /// Descriptor for `RegisterDeviceTokenResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List registerDeviceTokenResponseDescriptor = $convert.base64Decode(
-    'ChtSZWdpc3RlckRldmljZVRva2VuUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+final $typed_data.Uint8List registerDeviceTokenResponseDescriptor =
+    $convert.base64Decode(
+        'ChtSZWdpc3RlckRldmljZVRva2VuUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
 
-@$core.Deprecated('Use evtxoKeygenStep1RequestDescriptor instead')
-const EvtxoKeygenStep1Request$json = {
-  '1': 'EvtxoKeygenStep1Request',
+@$core.Deprecated('Use contractCreateStep1RequestDescriptor instead')
+const ContractCreateStep1Request$json = {
+  '1': 'ContractCreateStep1Request',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
     {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
@@ -928,30 +1104,39 @@ const EvtxoKeygenStep1Request$json = {
     {'1': 'server_pk', '3': 7, '4': 1, '5': 12, '10': 'serverPk'},
     {'1': 'exit_delay', '3': 8, '4': 1, '5': 13, '10': 'exitDelay'},
     {'1': 'contract_wasm', '3': 9, '4': 1, '5': 12, '10': 'contractWasm'},
+    {'1': 'owner_pk', '3': 10, '4': 1, '5': 12, '10': 'ownerPk'},
+    {'1': 'service_vk', '3': 11, '4': 1, '5': 12, '10': 'serviceVk'},
   ],
 };
 
-/// Descriptor for `EvtxoKeygenStep1Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep1RequestDescriptor = $convert.base64Decode(
-    'ChdFdnR4b0tleWdlblN0ZXAxUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHgoKaW'
-    'RlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchIlCg5yb3VuZDFfcGFja2FnZRgDIAEoCVINcm91'
-    'bmQxUGFja2FnZRIfCgtjb250cmFjdF9pZBgEIAEoDFIKY29udHJhY3RJZBIcCglzaWduYXR1cm'
-    'UYBSABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBiABKANSC3RpbWVzdGFtcE1zEhsK'
-    'CXNlcnZlcl9waxgHIAEoDFIIc2VydmVyUGsSHQoKZXhpdF9kZWxheRgIIAEoDVIJZXhpdERlbG'
-    'F5EiMKDWNvbnRyYWN0X3dhc20YCSABKAxSDGNvbnRyYWN0V2FzbQ==');
+/// Descriptor for `ContractCreateStep1Request`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep1RequestDescriptor = $convert.base64Decode(
+    'ChpDb250cmFjdENyZWF0ZVN0ZXAxUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHg'
+    'oKaWRlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchIlCg5yb3VuZDFfcGFja2FnZRgDIAEoCVIN'
+    'cm91bmQxUGFja2FnZRIfCgtjb250cmFjdF9pZBgEIAEoDFIKY29udHJhY3RJZBIcCglzaWduYX'
+    'R1cmUYBSABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBiABKANSC3RpbWVzdGFtcE1z'
+    'EhsKCXNlcnZlcl9waxgHIAEoDFIIc2VydmVyUGsSHQoKZXhpdF9kZWxheRgIIAEoDVIJZXhpdE'
+    'RlbGF5EiMKDWNvbnRyYWN0X3dhc20YCSABKAxSDGNvbnRyYWN0V2FzbRIZCghvd25lcl9waxgK'
+    'IAEoDFIHb3duZXJQaxIdCgpzZXJ2aWNlX3ZrGAsgASgMUglzZXJ2aWNlVms=');
 
-@$core.Deprecated('Use evtxoKeygenStep1ResponseDescriptor instead')
-const EvtxoKeygenStep1Response$json = {
-  '1': 'EvtxoKeygenStep1Response',
+@$core.Deprecated('Use contractCreateStep1ResponseDescriptor instead')
+const ContractCreateStep1Response$json = {
+  '1': 'ContractCreateStep1Response',
   '2': [
-    {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.EvtxoKeygenStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
-    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {
+      '1': 'round1_packages',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.ContractCreateStep1Response.Round1PackagesEntry',
+      '10': 'round1Packages'
+    },
   ],
-  '3': [EvtxoKeygenStep1Response_Round1PackagesEntry$json],
+  '3': [ContractCreateStep1Response_Round1PackagesEntry$json],
 };
 
-@$core.Deprecated('Use evtxoKeygenStep1ResponseDescriptor instead')
-const EvtxoKeygenStep1Response_Round1PackagesEntry$json = {
+@$core.Deprecated('Use contractCreateStep1ResponseDescriptor instead')
+const ContractCreateStep1Response_Round1PackagesEntry$json = {
   '1': 'Round1PackagesEntry',
   '2': [
     {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
@@ -960,44 +1145,49 @@ const EvtxoKeygenStep1Response_Round1PackagesEntry$json = {
   '7': {'7': true},
 };
 
-/// Descriptor for `EvtxoKeygenStep1Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep1ResponseDescriptor = $convert.base64Decode(
-    'ChhFdnR4b0tleWdlblN0ZXAxUmVzcG9uc2USYQoPcm91bmQxX3BhY2thZ2VzGAEgAygLMjgubX'
-    'BjX3dhbGxldC5FdnR4b0tleWdlblN0ZXAxUmVzcG9uc2UuUm91bmQxUGFja2FnZXNFbnRyeVIO'
-    'cm91bmQxUGFja2FnZXMSLgoTZXZ0eG9fc2NyaXB0X3B1YmtleRgCIAEoDFIRZXZ0eG9TY3JpcH'
-    'RQdWJrZXkaQQoTUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1'
-    'ZRgCIAEoCVIFdmFsdWU6AjgB');
+/// Descriptor for `ContractCreateStep1Response`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep1ResponseDescriptor = $convert.base64Decode(
+    'ChtDb250cmFjdENyZWF0ZVN0ZXAxUmVzcG9uc2USZAoPcm91bmQxX3BhY2thZ2VzGAEgAygLMj'
+    'subXBjX3dhbGxldC5Db250cmFjdENyZWF0ZVN0ZXAxUmVzcG9uc2UuUm91bmQxUGFja2FnZXNF'
+    'bnRyeVIOcm91bmQxUGFja2FnZXMaQQoTUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKA'
+    'lSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
 
-@$core.Deprecated('Use evtxoKeygenStep2RequestDescriptor instead')
-const EvtxoKeygenStep2Request$json = {
-  '1': 'EvtxoKeygenStep2Request',
+@$core.Deprecated('Use contractCreateStep2RequestDescriptor instead')
+const ContractCreateStep2Request$json = {
+  '1': 'ContractCreateStep2Request',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
     {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
-    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
-/// Descriptor for `EvtxoKeygenStep2Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep2RequestDescriptor = $convert.base64Decode(
-    'ChdFdnR4b0tleWdlblN0ZXAyUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHgoKaW'
-    'RlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchIlCg5yb3VuZDFfcGFja2FnZRgDIAEoCVINcm91'
-    'bmQxUGFja2FnZRIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbX'
-    'MYBSABKANSC3RpbWVzdGFtcE1z');
+/// Descriptor for `ContractCreateStep2Request`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep2RequestDescriptor =
+    $convert.base64Decode(
+        'ChpDb250cmFjdENyZWF0ZVN0ZXAyUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHg'
+        'oKaWRlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchIcCglzaWduYXR1cmUYAyABKAxSCXNpZ25h'
+        'dHVyZRIhCgx0aW1lc3RhbXBfbXMYBCABKANSC3RpbWVzdGFtcE1z');
 
-@$core.Deprecated('Use evtxoKeygenStep2ResponseDescriptor instead')
-const EvtxoKeygenStep2Response$json = {
-  '1': 'EvtxoKeygenStep2Response',
+@$core.Deprecated('Use contractCreateStep2ResponseDescriptor instead')
+const ContractCreateStep2Response$json = {
+  '1': 'ContractCreateStep2Response',
   '2': [
-    {'1': 'all_round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.EvtxoKeygenStep2Response.AllRound1PackagesEntry', '10': 'allRound1Packages'},
+    {
+      '1': 'all_round1_packages',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.ContractCreateStep2Response.AllRound1PackagesEntry',
+      '10': 'allRound1Packages'
+    },
   ],
-  '3': [EvtxoKeygenStep2Response_AllRound1PackagesEntry$json],
+  '3': [ContractCreateStep2Response_AllRound1PackagesEntry$json],
 };
 
-@$core.Deprecated('Use evtxoKeygenStep2ResponseDescriptor instead')
-const EvtxoKeygenStep2Response_AllRound1PackagesEntry$json = {
+@$core.Deprecated('Use contractCreateStep2ResponseDescriptor instead')
+const ContractCreateStep2Response_AllRound1PackagesEntry$json = {
   '1': 'AllRound1PackagesEntry',
   '2': [
     {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
@@ -1006,28 +1196,36 @@ const EvtxoKeygenStep2Response_AllRound1PackagesEntry$json = {
   '7': {'7': true},
 };
 
-/// Descriptor for `EvtxoKeygenStep2Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep2ResponseDescriptor = $convert.base64Decode(
-    'ChhFdnR4b0tleWdlblN0ZXAyUmVzcG9uc2USawoTYWxsX3JvdW5kMV9wYWNrYWdlcxgBIAMoCz'
-    'I7Lm1wY193YWxsZXQuRXZ0eG9LZXlnZW5TdGVwMlJlc3BvbnNlLkFsbFJvdW5kMVBhY2thZ2Vz'
-    'RW50cnlSEWFsbFJvdW5kMVBhY2thZ2VzGkQKFkFsbFJvdW5kMVBhY2thZ2VzRW50cnkSEAoDa2'
-    'V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AQ==');
+/// Descriptor for `ContractCreateStep2Response`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep2ResponseDescriptor = $convert.base64Decode(
+    'ChtDb250cmFjdENyZWF0ZVN0ZXAyUmVzcG9uc2USbgoTYWxsX3JvdW5kMV9wYWNrYWdlcxgBIA'
+    'MoCzI+Lm1wY193YWxsZXQuQ29udHJhY3RDcmVhdGVTdGVwMlJlc3BvbnNlLkFsbFJvdW5kMVBh'
+    'Y2thZ2VzRW50cnlSEWFsbFJvdW5kMVBhY2thZ2VzGkQKFkFsbFJvdW5kMVBhY2thZ2VzRW50cn'
+    'kSEAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AQ==');
 
-@$core.Deprecated('Use evtxoKeygenStep3RequestDescriptor instead')
-const EvtxoKeygenStep3Request$json = {
-  '1': 'EvtxoKeygenStep3Request',
+@$core.Deprecated('Use contractCreateStep3RequestDescriptor instead')
+const ContractCreateStep3Request$json = {
+  '1': 'ContractCreateStep3Request',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
     {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    {'1': 'round2_packages_for_others', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.EvtxoKeygenStep3Request.Round2PackagesForOthersEntry', '10': 'round2PackagesForOthers'},
+    {
+      '1': 'round2_packages_for_others',
+      '3': 3,
+      '4': 3,
+      '5': 11,
+      '6':
+          '.mpc_wallet.ContractCreateStep3Request.Round2PackagesForOthersEntry',
+      '10': 'round2PackagesForOthers'
+    },
     {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
     {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
-  '3': [EvtxoKeygenStep3Request_Round2PackagesForOthersEntry$json],
+  '3': [ContractCreateStep3Request_Round2PackagesForOthersEntry$json],
 };
 
-@$core.Deprecated('Use evtxoKeygenStep3RequestDescriptor instead')
-const EvtxoKeygenStep3Request_Round2PackagesForOthersEntry$json = {
+@$core.Deprecated('Use contractCreateStep3RequestDescriptor instead')
+const ContractCreateStep3Request_Round2PackagesForOthersEntry$json = {
   '1': 'Round2PackagesForOthersEntry',
   '2': [
     {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
@@ -1036,29 +1234,48 @@ const EvtxoKeygenStep3Request_Round2PackagesForOthersEntry$json = {
   '7': {'7': true},
 };
 
-/// Descriptor for `EvtxoKeygenStep3Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep3RequestDescriptor = $convert.base64Decode(
-    'ChdFdnR4b0tleWdlblN0ZXAzUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHgoKaW'
-    'RlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchJ9Chpyb3VuZDJfcGFja2FnZXNfZm9yX290aGVy'
-    'cxgDIAMoCzJALm1wY193YWxsZXQuRXZ0eG9LZXlnZW5TdGVwM1JlcXVlc3QuUm91bmQyUGFja2'
-    'FnZXNGb3JPdGhlcnNFbnRyeVIXcm91bmQyUGFja2FnZXNGb3JPdGhlcnMSHAoJc2lnbmF0dXJl'
-    'GAQgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAUgASgDUgt0aW1lc3RhbXBNcxpKCh'
-    'xSb3VuZDJQYWNrYWdlc0Zvck90aGVyc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVl'
-    'GAIgASgJUgV2YWx1ZToCOAE=');
+/// Descriptor for `ContractCreateStep3Request`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep3RequestDescriptor = $convert.base64Decode(
+    'ChpDb250cmFjdENyZWF0ZVN0ZXAzUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHg'
+    'oKaWRlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchKAAQoacm91bmQyX3BhY2thZ2VzX2Zvcl9v'
+    'dGhlcnMYAyADKAsyQy5tcGNfd2FsbGV0LkNvbnRyYWN0Q3JlYXRlU3RlcDNSZXF1ZXN0LlJvdW'
+    '5kMlBhY2thZ2VzRm9yT3RoZXJzRW50cnlSF3JvdW5kMlBhY2thZ2VzRm9yT3RoZXJzEhwKCXNp'
+    'Z25hdHVyZRgEIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgFIAEoA1ILdGltZXN0YW'
+    '1wTXMaSgocUm91bmQyUGFja2FnZXNGb3JPdGhlcnNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIU'
+    'CgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
 
-@$core.Deprecated('Use evtxoKeygenStep3ResponseDescriptor instead')
-const EvtxoKeygenStep3Response$json = {
-  '1': 'EvtxoKeygenStep3Response',
+@$core.Deprecated('Use contractCreateStep3ResponseDescriptor instead')
+const ContractCreateStep3Response$json = {
+  '1': 'ContractCreateStep3Response',
   '2': [
-    {'1': 'round2_packages_for_me', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.EvtxoKeygenStep3Response.Round2PackagesForMeEntry', '10': 'round2PackagesForMe'},
-    {'1': 'evtxo_address', '3': 2, '4': 1, '5': 9, '10': 'evtxoAddress'},
-    {'1': 'evtxo_script_pubkey', '3': 3, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {
+      '1': 'round2_packages_for_me',
+      '3': 1,
+      '4': 3,
+      '5': 11,
+      '6': '.mpc_wallet.ContractCreateStep3Response.Round2PackagesForMeEntry',
+      '10': 'round2PackagesForMe'
+    },
+    {
+      '1': 'contract_script_pubkey',
+      '3': 2,
+      '4': 1,
+      '5': 12,
+      '10': 'contractScriptPubkey'
+    },
+    {
+      '1': 'contract_group_id',
+      '3': 3,
+      '4': 1,
+      '5': 12,
+      '10': 'contractGroupId'
+    },
   ],
-  '3': [EvtxoKeygenStep3Response_Round2PackagesForMeEntry$json],
+  '3': [ContractCreateStep3Response_Round2PackagesForMeEntry$json],
 };
 
-@$core.Deprecated('Use evtxoKeygenStep3ResponseDescriptor instead')
-const EvtxoKeygenStep3Response_Round2PackagesForMeEntry$json = {
+@$core.Deprecated('Use contractCreateStep3ResponseDescriptor instead')
+const ContractCreateStep3Response_Round2PackagesForMeEntry$json = {
   '1': 'Round2PackagesForMeEntry',
   '2': [
     {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
@@ -1067,134 +1284,146 @@ const EvtxoKeygenStep3Response_Round2PackagesForMeEntry$json = {
   '7': {'7': true},
 };
 
-/// Descriptor for `EvtxoKeygenStep3Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoKeygenStep3ResponseDescriptor = $convert.base64Decode(
-    'ChhFdnR4b0tleWdlblN0ZXAzUmVzcG9uc2UScgoWcm91bmQyX3BhY2thZ2VzX2Zvcl9tZRgBIA'
-    'MoCzI9Lm1wY193YWxsZXQuRXZ0eG9LZXlnZW5TdGVwM1Jlc3BvbnNlLlJvdW5kMlBhY2thZ2Vz'
-    'Rm9yTWVFbnRyeVITcm91bmQyUGFja2FnZXNGb3JNZRIjCg1ldnR4b19hZGRyZXNzGAIgASgJUg'
-    'xldnR4b0FkZHJlc3MSLgoTZXZ0eG9fc2NyaXB0X3B1YmtleRgDIAEoDFIRZXZ0eG9TY3JpcHRQ'
-    'dWJrZXkaRgoYUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBX'
-    'ZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
+/// Descriptor for `ContractCreateStep3Response`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep3ResponseDescriptor = $convert.base64Decode(
+    'ChtDb250cmFjdENyZWF0ZVN0ZXAzUmVzcG9uc2USdQoWcm91bmQyX3BhY2thZ2VzX2Zvcl9tZR'
+    'gBIAMoCzJALm1wY193YWxsZXQuQ29udHJhY3RDcmVhdGVTdGVwM1Jlc3BvbnNlLlJvdW5kMlBh'
+    'Y2thZ2VzRm9yTWVFbnRyeVITcm91bmQyUGFja2FnZXNGb3JNZRI0ChZjb250cmFjdF9zY3JpcH'
+    'RfcHVia2V5GAIgASgMUhRjb250cmFjdFNjcmlwdFB1YmtleRIqChFjb250cmFjdF9ncm91cF9p'
+    'ZBgDIAEoDFIPY29udHJhY3RHcm91cElkGkYKGFJvdW5kMlBhY2thZ2VzRm9yTWVFbnRyeRIQCg'
+    'NrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
 
-@$core.Deprecated('Use evtxoOnboardRequestDescriptor instead')
-const EvtxoOnboardRequest$json = {
-  '1': 'EvtxoOnboardRequest',
+@$core.Deprecated('Use contractCreateStep4RequestDescriptor instead')
+const ContractCreateStep4Request$json = {
+  '1': 'ContractCreateStep4Request',
   '2': [
     {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
-    {'1': 'recipient_vk', '3': 3, '4': 1, '5': 12, '10': 'recipientVk'},
+    {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
+    {
+      '1': 'contract_script_pubkey',
+      '3': 3,
+      '4': 1,
+      '5': 12,
+      '10': 'contractScriptPubkey'
+    },
     {'1': 'a_at_cosigner', '3': 4, '4': 1, '5': 12, '10': 'aAtCosigner'},
-    {'1': 'a_at_participant_point', '3': 5, '4': 1, '5': 12, '10': 'aAtParticipantPoint'},
-    {'1': 'ecies_a_at_participant', '3': 6, '4': 1, '5': 12, '10': 'eciesAAtParticipant'},
-    {'1': 'signature', '3': 7, '4': 1, '5': 12, '10': 'signature'},
-    {'1': 'timestamp_ms', '3': 8, '4': 1, '5': 3, '10': 'timestampMs'},
-    {'1': 'contract_group_id', '3': 9, '4': 1, '5': 12, '10': 'contractGroupId'},
+    {
+      '1': 'a_at_service_point',
+      '3': 5,
+      '4': 1,
+      '5': 12,
+      '10': 'aAtServicePoint'
+    },
+    {'1': 'signature', '3': 6, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
-/// Descriptor for `EvtxoOnboardRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoOnboardRequestDescriptor = $convert.base64Decode(
-    'ChNFdnR4b09uYm9hcmRSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIuChNldnR4b1'
-    '9zY3JpcHRfcHVia2V5GAIgASgMUhFldnR4b1NjcmlwdFB1YmtleRIhCgxyZWNpcGllbnRfdmsY'
-    'AyABKAxSC3JlY2lwaWVudFZrEiIKDWFfYXRfY29zaWduZXIYBCABKAxSC2FBdENvc2lnbmVyEj'
-    'MKFmFfYXRfcGFydGljaXBhbnRfcG9pbnQYBSABKAxSE2FBdFBhcnRpY2lwYW50UG9pbnQSMwoW'
-    'ZWNpZXNfYV9hdF9wYXJ0aWNpcGFudBgGIAEoDFITZWNpZXNBQXRQYXJ0aWNpcGFudBIcCglzaW'
-    'duYXR1cmUYByABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYCCABKANSC3RpbWVzdGFt'
-    'cE1zEioKEWNvbnRyYWN0X2dyb3VwX2lkGAkgASgMUg9jb250cmFjdEdyb3VwSWQ=');
+/// Descriptor for `ContractCreateStep4Request`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep4RequestDescriptor = $convert.base64Decode(
+    'ChpDb250cmFjdENyZWF0ZVN0ZXA0UmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHg'
+    'oKaWRlbnRpZmllchgCIAEoDFIKaWRlbnRpZmllchI0ChZjb250cmFjdF9zY3JpcHRfcHVia2V5'
+    'GAMgASgMUhRjb250cmFjdFNjcmlwdFB1YmtleRIiCg1hX2F0X2Nvc2lnbmVyGAQgASgMUgthQX'
+    'RDb3NpZ25lchIrChJhX2F0X3NlcnZpY2VfcG9pbnQYBSABKAxSD2FBdFNlcnZpY2VQb2ludBIc'
+    'CglzaWduYXR1cmUYBiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYByABKANSC3RpbW'
+    'VzdGFtcE1z');
 
-@$core.Deprecated('Use evtxoOnboardResponseDescriptor instead')
-const EvtxoOnboardResponse$json = {
-  '1': 'EvtxoOnboardResponse',
+@$core.Deprecated('Use contractCreateStep4ResponseDescriptor instead')
+const ContractCreateStep4Response$json = {
+  '1': 'ContractCreateStep4Response',
   '2': [
     {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
   ],
 };
 
-/// Descriptor for `EvtxoOnboardResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoOnboardResponseDescriptor = $convert.base64Decode(
-    'ChRFdnR4b09uYm9hcmRSZXNwb25zZRIOCgJvaxgBIAEoCFICb2s=');
+/// Descriptor for `ContractCreateStep4Response`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateStep4ResponseDescriptor =
+    $convert.base64Decode(
+        'ChtDb250cmFjdENyZWF0ZVN0ZXA0UmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
 
-@$core.Deprecated('Use evtxoPendingSharesRequestDescriptor instead')
-const EvtxoPendingSharesRequest$json = {
-  '1': 'EvtxoPendingSharesRequest',
+@$core.Deprecated('Use assembleContractShareRequestDescriptor instead')
+const AssembleContractShareRequest$json = {
+  '1': 'AssembleContractShareRequest',
   '2': [
-    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+    {
+      '1': 'contract_group_id',
+      '3': 1,
+      '4': 1,
+      '5': 12,
+      '10': 'contractGroupId'
+    },
+    {'1': 'half_scalar', '3': 2, '4': 1, '5': 12, '10': 'halfScalar'},
+    {'1': 'role', '3': 3, '4': 1, '5': 9, '10': 'role'},
+    {
+      '1': 'context',
+      '3': 4,
+      '4': 1,
+      '5': 11,
+      '6': '.mpc_wallet.ContractContext',
+      '10': 'context'
+    },
   ],
 };
 
-/// Descriptor for `EvtxoPendingSharesRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoPendingSharesRequestDescriptor = $convert.base64Decode(
-    'ChlFdnR4b1BlbmRpbmdTaGFyZXNSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
-    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
-    'dGFtcE1z');
+/// Descriptor for `AssembleContractShareRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List assembleContractShareRequestDescriptor = $convert.base64Decode(
+    'ChxBc3NlbWJsZUNvbnRyYWN0U2hhcmVSZXF1ZXN0EioKEWNvbnRyYWN0X2dyb3VwX2lkGAEgAS'
+    'gMUg9jb250cmFjdEdyb3VwSWQSHwoLaGFsZl9zY2FsYXIYAiABKAxSCmhhbGZTY2FsYXISEgoE'
+    'cm9sZRgDIAEoCVIEcm9sZRI1Cgdjb250ZXh0GAQgASgLMhsubXBjX3dhbGxldC5Db250cmFjdE'
+    'NvbnRleHRSB2NvbnRleHQ=');
 
-@$core.Deprecated('Use evtxoPendingSharesResponseDescriptor instead')
-const EvtxoPendingSharesResponse$json = {
-  '1': 'EvtxoPendingSharesResponse',
+@$core.Deprecated('Use contractContextDescriptor instead')
+const ContractContext$json = {
+  '1': 'ContractContext',
   '2': [
-    {'1': 'shares', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.PendingContractShare', '10': 'shares'},
+    {
+      '1': 'contract_script_pubkey',
+      '3': 1,
+      '4': 1,
+      '5': 12,
+      '10': 'contractScriptPubkey'
+    },
+    {'1': 'contract_id', '3': 2, '4': 1, '5': 12, '10': 'contractId'},
+    {'1': 'exit_delay', '3': 3, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'owner_pk', '3': 4, '4': 1, '5': 12, '10': 'ownerPk'},
+    {'1': 'server_pk', '3': 5, '4': 1, '5': 12, '10': 'serverPk'},
+    {
+      '1': 'public_key_package_json',
+      '3': 6,
+      '4': 1,
+      '5': 9,
+      '10': 'publicKeyPackageJson'
+    },
+    {'1': 'service_vk', '3': 7, '4': 1, '5': 12, '10': 'serviceVk'},
   ],
 };
 
-/// Descriptor for `EvtxoPendingSharesResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoPendingSharesResponseDescriptor = $convert.base64Decode(
-    'ChpFdnR4b1BlbmRpbmdTaGFyZXNSZXNwb25zZRI4CgZzaGFyZXMYASADKAsyIC5tcGNfd2FsbG'
-    'V0LlBlbmRpbmdDb250cmFjdFNoYXJlUgZzaGFyZXM=');
+/// Descriptor for `ContractContext`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractContextDescriptor = $convert.base64Decode(
+    'Cg9Db250cmFjdENvbnRleHQSNAoWY29udHJhY3Rfc2NyaXB0X3B1YmtleRgBIAEoDFIUY29udH'
+    'JhY3RTY3JpcHRQdWJrZXkSHwoLY29udHJhY3RfaWQYAiABKAxSCmNvbnRyYWN0SWQSHQoKZXhp'
+    'dF9kZWxheRgDIAEoDVIJZXhpdERlbGF5EhkKCG93bmVyX3BrGAQgASgMUgdvd25lclBrEhsKCX'
+    'NlcnZlcl9waxgFIAEoDFIIc2VydmVyUGsSNQoXcHVibGljX2tleV9wYWNrYWdlX2pzb24YBiAB'
+    'KAlSFHB1YmxpY0tleVBhY2thZ2VKc29uEh0KCnNlcnZpY2VfdmsYByABKAxSCXNlcnZpY2VWaw'
+    '==');
 
-@$core.Deprecated('Use pendingContractShareDescriptor instead')
-const PendingContractShare$json = {
-  '1': 'PendingContractShare',
-  '2': [
-    {'1': 'evtxo_script_pubkey', '3': 1, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
-    {'1': 'contract_group_id', '3': 2, '4': 1, '5': 12, '10': 'contractGroupId'},
-    {'1': 'contract_id', '3': 3, '4': 1, '5': 12, '10': 'contractId'},
-    {'1': 'ecies_half_author', '3': 4, '4': 1, '5': 12, '10': 'eciesHalfAuthor'},
-    {'1': 'ecies_half_cosigner', '3': 5, '4': 1, '5': 12, '10': 'eciesHalfCosigner'},
-    {'1': 'public_key_package_json', '3': 6, '4': 1, '5': 9, '10': 'publicKeyPackageJson'},
-    {'1': 'exit_delay', '3': 7, '4': 1, '5': 13, '10': 'exitDelay'},
-    {'1': 'server_pk', '3': 8, '4': 1, '5': 12, '10': 'serverPk'},
-    {'1': 'owner_pk', '3': 9, '4': 1, '5': 12, '10': 'ownerPk'},
-  ],
-};
-
-/// Descriptor for `PendingContractShare`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List pendingContractShareDescriptor = $convert.base64Decode(
-    'ChRQZW5kaW5nQ29udHJhY3RTaGFyZRIuChNldnR4b19zY3JpcHRfcHVia2V5GAEgASgMUhFldn'
-    'R4b1NjcmlwdFB1YmtleRIqChFjb250cmFjdF9ncm91cF9pZBgCIAEoDFIPY29udHJhY3RHcm91'
-    'cElkEh8KC2NvbnRyYWN0X2lkGAMgASgMUgpjb250cmFjdElkEioKEWVjaWVzX2hhbGZfYXV0aG'
-    '9yGAQgASgMUg9lY2llc0hhbGZBdXRob3ISLgoTZWNpZXNfaGFsZl9jb3NpZ25lchgFIAEoDFIR'
-    'ZWNpZXNIYWxmQ29zaWduZXISNQoXcHVibGljX2tleV9wYWNrYWdlX2pzb24YBiABKAlSFHB1Ym'
-    'xpY0tleVBhY2thZ2VKc29uEh0KCmV4aXRfZGVsYXkYByABKA1SCWV4aXREZWxheRIbCglzZXJ2'
-    'ZXJfcGsYCCABKAxSCHNlcnZlclBrEhkKCG93bmVyX3BrGAkgASgMUgdvd25lclBr');
-
-@$core.Deprecated('Use evtxoAckShareRequestDescriptor instead')
-const EvtxoAckShareRequest$json = {
-  '1': 'EvtxoAckShareRequest',
-  '2': [
-    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
-    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
-    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `EvtxoAckShareRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoAckShareRequestDescriptor = $convert.base64Decode(
-    'ChRFdnR4b0Fja1NoYXJlUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSLgoTZXZ0eG'
-    '9fc2NyaXB0X3B1YmtleRgCIAEoDFIRZXZ0eG9TY3JpcHRQdWJrZXkSHAoJc2lnbmF0dXJlGAMg'
-    'ASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcw==');
-
-@$core.Deprecated('Use evtxoAckShareResponseDescriptor instead')
-const EvtxoAckShareResponse$json = {
-  '1': 'EvtxoAckShareResponse',
+@$core.Deprecated('Use assembleContractShareResponseDescriptor instead')
+const AssembleContractShareResponse$json = {
+  '1': 'AssembleContractShareResponse',
   '2': [
     {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+    {
+      '1': 'service_share_point',
+      '3': 2,
+      '4': 1,
+      '5': 12,
+      '10': 'serviceSharePoint'
+    },
   ],
 };
 
-/// Descriptor for `EvtxoAckShareResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List evtxoAckShareResponseDescriptor = $convert.base64Decode(
-    'ChVFdnR4b0Fja1NoYXJlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
-
+/// Descriptor for `AssembleContractShareResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List assembleContractShareResponseDescriptor =
+    $convert.base64Decode(
+        'Ch1Bc3NlbWJsZUNvbnRyYWN0U2hhcmVSZXNwb25zZRIOCgJvaxgBIAEoCFICb2sSLgoTc2Vydm'
+        'ljZV9zaGFyZV9wb2ludBgCIAEoDFIRc2VydmljZVNoYXJlUG9pbnQ=');

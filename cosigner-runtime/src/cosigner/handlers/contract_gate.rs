@@ -85,7 +85,7 @@ pub fn detect_evtxo_spend(
     for input in &psbt.inputs {
         if let Some(utxo) = input.witness_utxo.as_ref() {
             let spk_hex = hex::encode(utxo.script_pubkey.as_bytes());
-            if policy_state.evtxo_policies.contains_key(&spk_hex) {
+            if policy_state.contracts.contains_key(&spk_hex) {
                 return Some(spk_hex);
             }
         }

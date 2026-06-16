@@ -32,11 +32,6 @@ pub enum CosignerCommand {
     SettleDelegate { req: SettleDelegateRequest, reply: Reply<SettleDelegateResponse> },
     SubmitArkSend { req: SubmitArkSendRequest, reply: Reply<SubmitArkSendResponse> },
 
-    // --- Multi-user contract onboarding ---
-    EvtxoOnboard { req: EvtxoOnboardRequest, reply: Reply<EvtxoOnboardResponse> },
-    EvtxoPendingShares { req: EvtxoPendingSharesRequest, reply: Reply<EvtxoPendingSharesResponse> },
-    EvtxoAckShare { req: EvtxoAckShareRequest, reply: Reply<EvtxoAckShareResponse> },
-
     // --- Push registration ---
     RegisterDeviceToken { req: RegisterDeviceTokenRequest, reply: Reply<RegisterDeviceTokenResponse> },
 

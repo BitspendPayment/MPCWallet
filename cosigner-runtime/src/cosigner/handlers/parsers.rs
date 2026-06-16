@@ -119,23 +119,21 @@ pub fn build_signing_package_json(
 /// Resolve the `(key_package_json, public_key_package_json)` a signing session
 /// uses for `policy_id`, consistently across sign_step1 and sign_step2:
 /// - `"evtxo:<spk_hex>"` -> the cosigner's `V′` counter-share for `recipient_vk`
-///   in that eVTXO's `EvtxoPolicy` (contract-gated, recipient-specific),
+///   (the user or the service) in that contract (contract-gated, pairing-specific),
 /// - empty / unknown -> the normal policy.
-/// `recipient_vk` is the verifying share of the recipient being co-signed for
-/// (the author's own user_id in a single-author contract); ignored for the normal
-/// policy. An eVTXO spend by an unknown recipient falls through to the normal key,
-/// which fails aggregation loudly rather than co-signing with the wrong key.
+/// A contract spend by an unknown recipient falls through to the normal key, which
+/// fails aggregation loudly rather than co-signing with the wrong key.
 pub fn resolve_signing_key(
     policy_state: &PolicyState,
     policy_id: &str,
     recipient_vk: &str,
 ) -> (String, String) {
     if let Some(spk_hex) = policy_id.strip_prefix("evtxo:") {
-        if let Some(ep) = policy_state.evtxo_policies.get(spk_hex) {
-            if let Some(rs) = ep.recipient_shares.get(recipient_vk) {
+        if let Some(cp) = policy_state.contracts.get(spk_hex) {
+            if let Some(cs) = cp.share_for(recipient_vk) {
                 return (
-                    rs.key_package_json.clone(),
-                    rs.public_key_package_json.clone(),
+                    cs.key_package_json.clone(),
+                    cs.public_key_package_json.clone(),
                 );
             }
         }
