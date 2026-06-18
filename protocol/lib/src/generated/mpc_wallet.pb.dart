@@ -5020,6 +5020,7 @@ class ContractContext extends $pb.GeneratedMessage {
     $core.List<$core.int>? serverPk,
     $core.String? publicKeyPackageJson,
     $core.List<$core.int>? serviceVk,
+    $core.List<$core.int>? cosignerGroupKey,
   }) {
     final result = create();
     if (contractScriptPubkey != null)
@@ -5031,6 +5032,7 @@ class ContractContext extends $pb.GeneratedMessage {
     if (publicKeyPackageJson != null)
       result.publicKeyPackageJson = publicKeyPackageJson;
     if (serviceVk != null) result.serviceVk = serviceVk;
+    if (cosignerGroupKey != null) result.cosignerGroupKey = cosignerGroupKey;
     return result;
   }
 
@@ -5059,6 +5061,8 @@ class ContractContext extends $pb.GeneratedMessage {
     ..aOS(6, _omitFieldNames ? '' : 'publicKeyPackageJson')
     ..a<$core.List<$core.int>>(
         7, _omitFieldNames ? '' : 'serviceVk', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(
+        8, _omitFieldNames ? '' : 'cosignerGroupKey', $pb.PbFieldType.OY)
     ..hasRequiredFields = false;
 
   @$core.Deprecated('See https://github.com/google/protobuf.dart/issues/998.')
@@ -5142,6 +5146,15 @@ class ContractContext extends $pb.GeneratedMessage {
   $core.bool hasServiceVk() => $_has(6);
   @$pb.TagNumber(7)
   void clearServiceVk() => $_clearField(7);
+
+  @$pb.TagNumber(8)
+  $core.List<$core.int> get cosignerGroupKey => $_getN(7);
+  @$pb.TagNumber(8)
+  set cosignerGroupKey($core.List<$core.int> value) => $_setBytes(7, value);
+  @$pb.TagNumber(8)
+  $core.bool hasCosignerGroupKey() => $_has(7);
+  @$pb.TagNumber(8)
+  void clearCosignerGroupKey() => $_clearField(8);
 }
 
 class AssembleContractShareResponse extends $pb.GeneratedMessage {

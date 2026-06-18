@@ -157,8 +157,8 @@ impl FcmClient {
             exp: now + 3600,
         };
         let header = Header::new(Algorithm::RS256);
-        let jwt = encode(&header, &claims, &self.encoding_key)
-            .map_err(|e| format!("sign JWT: {e}"))?;
+        let jwt =
+            encode(&header, &claims, &self.encoding_key).map_err(|e| format!("sign JWT: {e}"))?;
         let resp = self
             .http
             .post(&token_uri)

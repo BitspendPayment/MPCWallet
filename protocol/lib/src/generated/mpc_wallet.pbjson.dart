@@ -1395,6 +1395,13 @@ const ContractContext$json = {
       '10': 'publicKeyPackageJson'
     },
     {'1': 'service_vk', '3': 7, '4': 1, '5': 12, '10': 'serviceVk'},
+    {
+      '1': 'cosigner_group_key',
+      '3': 8,
+      '4': 1,
+      '5': 12,
+      '10': 'cosignerGroupKey'
+    },
   ],
 };
 
@@ -1404,8 +1411,8 @@ final $typed_data.Uint8List contractContextDescriptor = $convert.base64Decode(
     'JhY3RTY3JpcHRQdWJrZXkSHwoLY29udHJhY3RfaWQYAiABKAxSCmNvbnRyYWN0SWQSHQoKZXhp'
     'dF9kZWxheRgDIAEoDVIJZXhpdERlbGF5EhkKCG93bmVyX3BrGAQgASgMUgdvd25lclBrEhsKCX'
     'NlcnZlcl9waxgFIAEoDFIIc2VydmVyUGsSNQoXcHVibGljX2tleV9wYWNrYWdlX2pzb24YBiAB'
-    'KAlSFHB1YmxpY0tleVBhY2thZ2VKc29uEh0KCnNlcnZpY2VfdmsYByABKAxSCXNlcnZpY2VWaw'
-    '==');
+    'KAlSFHB1YmxpY0tleVBhY2thZ2VKc29uEh0KCnNlcnZpY2VfdmsYByABKAxSCXNlcnZpY2VWax'
+    'IsChJjb3NpZ25lcl9ncm91cF9rZXkYCCABKAxSEGNvc2lnbmVyR3JvdXBLZXk=');
 
 @$core.Deprecated('Use assembleContractShareResponseDescriptor instead')
 const AssembleContractShareResponse$json = {

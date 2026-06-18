@@ -166,10 +166,18 @@ mod tests {
     struct MemStore(StdMutex<HashMap<String, String>>);
     impl KvStore for MemStore {
         fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
-            Ok(self.0.lock().unwrap().get(&format!("{tree}/{key}")).cloned())
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .get(&format!("{tree}/{key}"))
+                .cloned())
         }
         fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
-            self.0.lock().unwrap().insert(format!("{tree}/{key}"), value.to_string());
+            self.0
+                .lock()
+                .unwrap()
+                .insert(format!("{tree}/{key}"), value.to_string());
             Ok(())
         }
         fn delete(&self, tree: &str, key: &str) -> Result<(), PersistenceError> {
@@ -197,11 +205,18 @@ mod tests {
         assert_eq!(reg.fetch(&id).unwrap(), bytes);
 
         // Unknown id → NotFound.
-        assert!(matches!(reg.fetch(&[0u8; 32]), Err(RegistryError::NotFound)));
+        assert!(matches!(
+            reg.fetch(&[0u8; 32]),
+            Err(RegistryError::NotFound)
+        ));
 
         // Corrupted stored bytes (hash no longer matches the key) → HashMismatch.
         store
-            .put(CONTRACT_WASM_TREE, &hex::encode(id), &hex::encode(b"tampered"))
+            .put(
+                CONTRACT_WASM_TREE,
+                &hex::encode(id),
+                &hex::encode(b"tampered"),
+            )
             .unwrap();
         assert!(matches!(reg.fetch(&id), Err(RegistryError::HashMismatch)));
     }

@@ -8,59 +8,16 @@ interface types {
         serialization-error(string),
     }
 
-    /// Opaque handle for DKG round 1 secret state.
-    resource round1-secret {}
-
-    /// Opaque handle for DKG round 2 secret state.
-    resource round2-secret {}
-
-    /// Opaque handle for a signing nonce (single-use).
-    resource signing-nonce {}
-
     // -----------------------------------------------------------------------
-    // Session state resources — all user data lives in WASM linear memory
+    // Session — the per-instance signing session: ceremony state (commitments,
+    // shares, message, the single-use nonce) plus the signing/key/identifier ops.
     // -----------------------------------------------------------------------
 
-    /// DKG session state: round packages, identifiers, server state, relay.
-    resource dkg-session {
+    resource session {
         constructor();
         reset: func();
 
-        // Round 1 packages
-        insert-round1-package: func(id-hex: string, pkg-json: string);
-        insert-receiver-identifier: func(id-hex: string);
-        total-participants: func() -> u32;
-        is-receiver: func(id-hex: string) -> bool;
-        get-round1-packages-json: func() -> string;
-        get-round1-packages-excluding-json: func(exclude-id-hex: string) -> string;
-        get-receiver-ids-json: func() -> string;
-
-        // Server identity
-        set-server-id: func(server-id-hex: string);
-        get-server-id: func() -> string;
-        set-server-internal-secret-hex: func(secret-hex: string);
-        get-server-internal-secret-hex: func() -> string;
-
-        // Round 2 received
-        insert-round2-received: func(sender-id-hex: string, pkg-json: string);
-        get-round2-received-json: func() -> string;
-
-        // Round 2 local (server's own)
-        set-round2-local-json: func(json: string);
-        get-round2-local-json: func() -> string;
-        is-round2-local-empty: func() -> bool;
-
-        // Round 2 relay: sender -> { recipient -> pkg }
-        insert-relay-packages: func(sender-id-hex: string, packages-json: string);
-        insert-relay-from-local: func(server-id-hex: string);
-        relay-sender-count: func() -> u32;
-        get-relay-packages-for: func(recipient-id-hex: string) -> string;
-    }
-
-    /// Signing session state: commitments, shares, message, policy metadata.
-    resource signing-session {
-        constructor();
-        reset: func();
+        // ----- ceremony state -----
 
         // User commitments
         set-user-hiding-hex: func(hex: string);
@@ -93,49 +50,37 @@ interface types {
         get-current-policy-id: func() -> string;
         set-pending-amount: func(amount: s64);
         get-pending-amount: func() -> s64;
-    }
 
-    /// Refresh (re-DKG) session state: round packages, relay, policy metadata.
-    resource refresh-session {
-        constructor();
-        reset: func();
+        // ----- signing ops (the nonce is held inside the session) -----
 
-        // Round 1 packages
-        insert-round1-package: func(id-hex: string, pkg-json: string);
-        round1-count: func() -> u32;
-        get-round1-packages-json: func() -> string;
-        get-round1-packages-excluding-json: func(exclude-id-hex: string) -> string;
+        /// Generate this session's single-use signing nonce from the signer's secret
+        /// share; stores it internally and returns the commitments JSON.
+        new-nonce: func(secret-hex: string) -> result<string, threshold-error>;
 
-        // Server identity
-        set-server-id: func(server-id-hex: string);
-        get-server-id: func() -> string;
-        set-server-identifier-hex: func(id-hex: string);
-        get-server-identifier-hex: func() -> string;
+        /// Compute a FROST signature share using the session's stored nonce.
+        frost-sign: func(signing-package-json: string, key-package-json: string)
+            -> result<string, threshold-error>;
 
-        // Round 2 received
-        insert-round2-received: func(sender-id-hex: string, pkg-json: string);
-        get-round2-received-json: func() -> string;
+        /// Aggregate signature shares into the final signature.
+        frost-aggregate: func(signing-package-json: string, shares-json: string,
+            public-key-package-json: string) -> result<string, threshold-error>;
 
-        // Round 2 local
-        set-round2-local-json: func(json: string);
-        get-round2-local-json: func() -> string;
-        is-round2-local-empty: func() -> bool;
+        // ----- key / identifier ops -----
 
-        // Round 2 relay
-        insert-relay-packages: func(sender-id-hex: string, packages-json: string);
-        insert-relay-from-local: func(server-id-hex: string);
-        relay-sender-count: func() -> u32;
-        get-relay-packages-for: func(recipient-id-hex: string) -> string;
+        /// Apply taproot tweak to a KeyPackage.
+        key-package-tweak: func(kp-json: string, merkle-root: option<list<u8>>)
+            -> result<string, threshold-error>;
 
-        // Refresh policy metadata
-        set-refresh-creation-time-ms: func(ms: s64);
-        get-refresh-creation-time-ms: func() -> s64;
-        set-refresh-id: func(id: string);
-        get-refresh-id: func() -> string;
-        set-refresh-threshold-amount: func(amount: s64);
-        get-refresh-threshold-amount: func() -> s64;
-        set-refresh-interval: func(interval: s64);
-        get-refresh-interval: func() -> s64;
+        /// Apply taproot tweak to a PublicKeyPackage.
+        pub-key-package-tweak: func(pkp-json: string, merkle-root: option<list<u8>>)
+            -> result<string, threshold-error>;
+
+        /// Derive an identifier from arbitrary bytes (SHA-256).
+        identifier-derive: func(message: list<u8>) -> result<string, threshold-error>;
+
+        /// Verify a BIP-340 Schnorr signature (used for request authentication).
+        verify-schnorr-signature: func(pk-hex: string, message: list<u8>, sig-hex: string)
+            -> result<bool, threshold-error>;
     }
 
     /// Opaque handle for an auth signer (reusable).
@@ -150,172 +95,17 @@ interface types {
         /// Get the compressed public key hex (66 chars).
         public-key: func() -> result<string, threshold-error>;
     }
+}
 
-    /// DKG round 1 output.
-    record dkg-round1-output {
-        round1-package-json: string,
-        secret: round1-secret,
-    }
-
-    /// DKG refresh round 1 output (includes coefficients for polynomial eval).
-    record dkg-refresh-round1-output {
-        round1-package-json: string,
-        coefficients-json: string,
-        secret: round1-secret,
-    }
-
-    /// DKG round 2 output.
-    record dkg-round2-output {
-        round2-packages-json: string,
-        secret: round2-secret,
-    }
-
-    /// DKG round 3 output (final keys).
-    record dkg-round3-output {
-        key-package-json: string,
-        public-key-package-json: string,
-    }
-
-    /// Nonce generation output.
-    record nonce-output {
-        commitments-json: string,
-        nonce: signing-nonce,
-    }
-
-    /// Threshold cryptography operations.
-    resource threshold-session {
-        constructor();
-
-        // ----- DKG -----
-
-        /// DKG round 1: generate secret polynomial, commitment, proof-of-knowledge.
-        dkg-part1: func(max-signers: u32, min-signers: u32,
-            secret-hex: string, coefficients-json: string)
-            -> result<dkg-round1-output, threshold-error>;
-
-        /// DKG round 2: verify round 1 packages and compute shares.
-        dkg-part2: func(secret: round1-secret,
-            round1-packages-json: string, receiver-ids-json: string)
-            -> result<dkg-round2-output, threshold-error>;
-
-        /// DKG round 3: verify shares, compute final key package.
-        dkg-part3: func(r2-secret: round2-secret,
-            round1-packages-json: string, round2-packages-json: string,
-            receiver-ids-json: string)
-            -> result<dkg-round3-output, threshold-error>;
-
-        /// DKG round 3 for a passive receiver (no secret polynomial).
-        dkg-part3-receive: func(my-id-hex: string,
-            dealer-r1-json: string, shares-json: string,
-            min-signers: u32, max-signers: u32, all-ids-json: string)
-            -> result<dkg-round3-output, threshold-error>;
-
-        // ----- Key Refresh -----
-
-        /// Key refresh round 1: zero-secret polynomial for share rotation.
-        dkg-refresh-part1: func(id-hex: string, max-signers: u32,
-            min-signers: u32, seed: list<u8>)
-            -> result<dkg-refresh-round1-output, threshold-error>;
-
-        /// Key refresh round 2: compute refresh shares.
-        dkg-refresh-part2: func(secret: round1-secret,
-            round1-packages-json: string)
-            -> result<dkg-round2-output, threshold-error>;
-
-        /// Key refresh round 3: combine with old keys.
-        dkg-refresh-part3: func(r2-secret: round2-secret,
-            round1-packages-json: string, round2-packages-json: string,
-            old-pkp-json: string, old-kp-json: string)
-            -> result<dkg-round3-output, threshold-error>;
-
-        // ----- Signing -----
-
-        /// Generate a signing nonce pair from the signer's secret share.
-        new-nonce: func(secret-hex: string)
-            -> result<nonce-output, threshold-error>;
-
-        /// Compute a FROST signature share.
-        frost-sign: func(signing-package-json: string,
-            nonce: signing-nonce, key-package-json: string)
-            -> result<string, threshold-error>;
-
-        /// Aggregate signature shares into final signature.
-        frost-aggregate: func(signing-package-json: string,
-            shares-json: string, public-key-package-json: string)
-            -> result<string, threshold-error>;
-
-        // ----- Key Operations -----
-
-        /// Apply taproot tweak to a KeyPackage.
-        key-package-tweak: func(kp-json: string, merkle-root: option<list<u8>>)
-            -> result<string, threshold-error>;
-
-        /// Apply taproot tweak to a PublicKeyPackage.
-        pub-key-package-tweak: func(pkp-json: string, merkle-root: option<list<u8>>)
-            -> result<string, threshold-error>;
-
-        /// Normalize KeyPackage to even Y (BIP-340).
-        key-package-into-even-y: func(kp-json: string)
-            -> result<string, threshold-error>;
-
-        /// Normalize PublicKeyPackage to even Y (BIP-340).
-        pub-key-package-into-even-y: func(pkp-json: string)
-            -> result<string, threshold-error>;
-
-        // ----- Auth -----
-
-        /// Verify a BIP-340 Schnorr signature.
-        verify-schnorr-signature: func(pk-hex: string,
-            message: list<u8>, sig-hex: string)
-            -> result<bool, threshold-error>;
-
-        // ----- Ark Protocol -----
-
-        /// Compute the default VTXO script pubkey for the given keys and exit delay.
-        /// Returns hex-encoded 34-byte script pubkey.
-        ark-default-vtxo-script-pubkey: func(server-pk-hex: string,
-            owner-pk-hex: string, exit-delay: u32)
-            -> result<string, threshold-error>;
-
-        /// Get forfeit (cooperative) spend info for a default Ark VTXO.
-        /// Returns JSON: {"script_hex": "...", "control_block_hex": "..."}
-        ark-forfeit-spend-info: func(server-pk-hex: string,
-            owner-pk-hex: string, exit-delay: u32)
-            -> result<string, threshold-error>;
-
-        /// Get exit (unilateral) spend info for a default Ark VTXO.
-        /// Returns JSON: {"script_hex": "...", "control_block_hex": "..."}
-        ark-exit-spend-info: func(server-pk-hex: string,
-            owner-pk-hex: string, exit-delay: u32)
-            -> result<string, threshold-error>;
-
-        // ----- Utils -----
-
-        /// Derive an identifier from arbitrary bytes (SHA-256).
-        identifier-derive: func(message: list<u8>)
-            -> result<string, threshold-error>;
-
-        /// Create identifier from BigInt hex scalar.
-        identifier-from-bigint: func(hex-str: string)
-            -> result<string, threshold-error>;
-
-        /// Generate random coefficients (seeded if seed non-empty).
-        generate-coefficients: func(count: u32, seed: list<u8>)
-            -> result<string, threshold-error>;
-
-        /// Evaluate polynomial at identifier.
-        evaluate-polynomial: func(id-hex: string, coefficients-json: string)
-            -> result<string, threshold-error>;
-
-        /// Generate a random non-zero scalar mod n.
-        mod-n-random: func() -> result<string, threshold-error>;
-
-        /// Scalar * G (base point multiplication).
-        elem-base-mul: func(scalar-hex: string)
-            -> result<string, threshold-error>;
-    }
+/// Host-provided capability: gate the spend currently being signed against its
+/// bound contract. The host evaluates the contract wasm in an isolated sandbox
+/// over the transaction it holds for this signing session. `Err(reason)` means
+/// the cosigner MUST NOT produce its signature share.
+interface contract-gate {
+    enforce: func() -> result<_, string>;
 }
 
 world threshold-world {
+    import contract-gate;
     export types;
 }

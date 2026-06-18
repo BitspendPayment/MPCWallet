@@ -1,10 +1,7 @@
 //! Hex encoding/decoding and JSON parsing helpers shared across modules.
 
-use std::collections::BTreeMap;
-
-use threshold::dkg::{Round1Package, Round2Package};
 use threshold::identifier::Identifier;
-use threshold::scalar::{scalar_from_bytes, scalar_from_bytes_allow_zero};
+use threshold::scalar::scalar_from_bytes;
 
 use crate::exports::component::threshold::types::ThresholdError;
 
@@ -63,87 +60,6 @@ pub fn parse_identifier_hex(hex: &str) -> Result<Identifier, String> {
 pub fn parse_scalar_hex(hex: &str) -> Result<k256::Scalar, String> {
     let bytes = hex_decode_32(hex)?;
     scalar_from_bytes(&bytes).map_err(|e| format!("bad scalar: {e}"))
-}
-
-pub fn parse_scalar_hex_allow_zero(hex: &str) -> Result<k256::Scalar, String> {
-    let bytes = hex_decode_32(hex)?;
-    scalar_from_bytes_allow_zero(&bytes).map_err(|e| format!("bad scalar: {e}"))
-}
-
-pub fn parse_coefficients_json(json_str: &str) -> Result<Vec<k256::Scalar>, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| format!("bad JSON: {e}"))?;
-    let arr = v.as_array().ok_or("coefficients must be array")?;
-    let mut coefficients = Vec::new();
-    for item in arr {
-        let hex = item.as_str().ok_or("coefficient must be hex string")?;
-        coefficients.push(parse_scalar_hex(hex)?);
-    }
-    Ok(coefficients)
-}
-
-pub fn parse_round1_pkgs_json(
-    json_str: &str,
-) -> Result<BTreeMap<Identifier, Round1Package>, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| format!("bad JSON: {e}"))?;
-    let obj = v.as_object().ok_or("expected JSON object")?;
-    let mut map = BTreeMap::new();
-    for (id_hex, pkg_val) in obj {
-        let id = parse_identifier_hex(id_hex)?;
-        let pkg =
-            Round1Package::from_json_value(pkg_val).map_err(|e| format!("bad R1 pkg: {e}"))?;
-        map.insert(id, pkg);
-    }
-    Ok(map)
-}
-
-pub fn parse_round2_pkgs_json(
-    json_str: &str,
-) -> Result<BTreeMap<Identifier, Round2Package>, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| format!("bad JSON: {e}"))?;
-    let obj = v.as_object().ok_or("expected JSON object")?;
-    let mut map = BTreeMap::new();
-    for (id_hex, pkg_val) in obj {
-        let id = parse_identifier_hex(id_hex)?;
-        let pkg =
-            Round2Package::from_json_value(pkg_val).map_err(|e| format!("bad R2 pkg: {e}"))?;
-        map.insert(id, pkg);
-    }
-    Ok(map)
-}
-
-pub fn parse_identifier_list_json(json_str: &str) -> Result<Vec<Identifier>, String> {
-    let v: serde_json::Value =
-        serde_json::from_str(json_str).map_err(|e| format!("bad JSON: {e}"))?;
-    let arr = v.as_array().ok_or("expected JSON array")?;
-    let mut ids = Vec::new();
-    for item in arr {
-        let hex = item.as_str().ok_or("expected hex string in array")?;
-        ids.push(parse_identifier_hex(hex)?);
-    }
-    Ok(ids)
-}
-
-pub fn serialize_round1_pkg(pkg: &Round1Package) -> String {
-    serde_json::to_string(&pkg.to_json_value()).unwrap_or_default()
-}
-
-pub fn serialize_round2_pkgs(pkgs: &BTreeMap<Identifier, Round2Package>) -> String {
-    let mut obj = serde_json::Map::new();
-    for (id, pkg) in pkgs {
-        let id_hex = hex_encode(&id.serialize());
-        obj.insert(id_hex, pkg.to_json_value());
-    }
-    serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_default()
-}
-
-pub fn serialize_dkg_result(
-    kp: &threshold::keys::KeyPackage,
-    pkp: &threshold::keys::PublicKeyPackage,
-) -> (String, String) {
-    (kp.to_json(), pkp.to_json())
 }
 
 /// Convert a string error into a ThresholdError variant.

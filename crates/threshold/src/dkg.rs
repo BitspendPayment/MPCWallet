@@ -782,39 +782,117 @@ pub fn dkg_reshare_part3_receive(
     )
 }
 
-/// Key-preserving REFRESH of one holder's share of a 2-of-2 `V′` onto a NEW
-/// participant identifier — the per-participant onboarding primitive for multi-user
-/// contracts. Unlike a reshare (non-zero Δ ⇒ key changes), this keeps `V′` fixed and
-/// only moves the coefficients.
+/// Output of [`refresh_to_receiver`]: my refreshed counter-share key package, the
+/// 2-entry `PublicKeyPackage` for the new `{receiver, me}` pairing, and my own
+/// half-scalar for the receiver (serialized) for delivery to it.
+pub struct RefreshedPairing {
+    pub receiver_half: [u8; 32],
+    pub my_kp: crate::keys::KeyPackage,
+    pub pairing_pkp: PublicKeyPackage,
+}
+
+/// The new receiver of a refreshed pairing: its identifier and the OTHER current
+/// holders' COMBINED contribution to its verifying share, as a curve point. Passing a
+/// point (never the scalar) lets me build the receiver's verifying share without ever
+/// learning its secret share.
+pub struct Receiver {
+    pub id: Identifier,
+    pub partial_verifying_share: [u8; 33],
+}
+
+/// Key-preserving REFRESH of the group key (held at `my_key_package`) onto a NEW
+/// `{receiver, me}` `min_signers`-of-2 pairing (key UNCHANGED). The other holders have
+/// already dealt their slices: `id_partial_share` (keyed by dealer id) holds the scalars
+/// dealt to ME; `receiver.partial_verifying_share` is their COMBINED contribution to the
+/// receiver, as a point (so I never learn its secret). Current holders = `me +
+/// id_partial_share.keys()`. I deal my own slice, then return my counter-share key package
+/// (`C = own_at_me + Σ id_partial_share`), the pairing PKP, and my half for the receiver.
+pub fn refresh_to_receiver(
+    my_key_package: &crate::keys::KeyPackage,
+    receiver: &Receiver,
+    id_partial_share: &BTreeMap<Identifier, [u8; 32]>,
+    min_signers: usize,
+    rng: &mut impl RngCore,
+) -> Result<RefreshedPairing, Error> {
+    let my_id = my_key_package.identifier.clone();
+    let vprime_vk = my_key_package.verifying_key.clone();
+
+    // The current shareholder set: me + every holder who dealt me a partial share.
+    let mut id_set: Vec<Identifier> = id_partial_share.keys().cloned().collect();
+    id_set.push(my_id.clone());
+
+    // My own refresh contribution to the new {receiver, me} sharing.
+    let own = refresh_to_ids(
+        my_key_package,
+        &id_set,
+        &[receiver.id.clone(), my_id.clone()],
+        min_signers,
+        rng,
+    );
+    let own_at_receiver = own[&receiver.id];
+    let own_at_me = own[&my_id];
+
+    // C = own_at_me + Σ (the other holders' partial shares dealt to me).
+    let mut c = own_at_me;
+    for share_bytes in id_partial_share.values() {
+        c = c + scalar_from_bytes(share_bytes)?;
+    }
+    let c_point = point::base_mul(&c);
+
+    // receiver_share·G = (other holders' combined contribution)·G + own_receiver·G —
+    // built WITHOUT learning the receiver's secret share (only its point).
+    let partial = point::deserialize_compressed(&receiver.partial_verifying_share)?;
+    let receiver_share_point = point::point_add(&partial, &point::base_mul(&own_at_receiver));
+
+    let my_kp = crate::keys::KeyPackage {
+        identifier: my_id.clone(),
+        secret_share: c,
+        verifying_share: c_point,
+        verifying_key: vprime_vk.clone(),
+        min_signers,
+    };
+    let mut verifying_shares: BTreeMap<Identifier, ProjectivePoint> = BTreeMap::new();
+    verifying_shares.insert(receiver.id.clone(), receiver_share_point);
+    verifying_shares.insert(my_id, c_point);
+    let pairing_pkp = PublicKeyPackage {
+        verifying_shares,
+        verifying_key: vprime_vk,
+    };
+
+    Ok(RefreshedPairing {
+        receiver_half: scalar_to_bytes(&own_at_receiver),
+        my_kp,
+        pairing_pkp,
+    })
+}
+
+/// Deal THIS holder's key-preserving refresh contribution toward a new shareholder set.
 ///
-/// The holder (author or cosigner) of `V′`, shared at `id_set` (= the current
-/// shareholder ids, e.g. `{author_id, cosigner_id}`), derives its additive piece
-/// `x = λ_holder · ss` (λ = Lagrange coefficient of the holder over `id_set` at 0),
-/// then deals a FRESH degree-1 polynomial `s(t) = x + slope·t` and returns
-/// `(s(participant_id), s(cosigner_id))`.
-///
-/// When BOTH holders run this (independent `slope`s) and the participant sums the two
-/// `s(participant_id)` halves into `P_i` while the cosigner sums the two
-/// `s(cosigner_id)` halves into `C_i`, `{P_i, C_i}` is a fresh Shamir 2-of-2 sharing
-/// of the SAME secret `v′` at `{participant_id, cosigner_id}` — `V′` is UNCHANGED.
-/// Independent per-participant slopes ⇒ different participants cannot pool their `P_i`
-/// to reconstruct `v′`. `ss` is already BIP-340 even-Y normalized (from the V′
-/// finalizer), so `v′` and thus the refreshed shares are consistent with `V′` with no
-/// further normalization.
-pub fn refresh_share_to_id(
-    holder_kp: &crate::keys::KeyPackage,
+/// Decomposes the holder's Shamir share of the group secret (held at `my_key_package`,
+/// shared over `id_set`) into its additive piece `x = λ · ss`, deals a FRESH polynomial
+/// `s(t) = x + r₁·t + … + r_{k-1}·t^{k-1}` of degree `min_signers - 1` (constant term is
+/// the additive piece, the rest random), and returns `id → s(id)` for every
+/// `recipient_id`. When every current holder does this and the per-id contributions are
+/// summed, the result is a fresh `min_signers`-of-`recipient_ids.len()` Shamir sharing of
+/// the SAME secret — the key is UNCHANGED (proactive refresh) and the new shares are
+/// independent of the old ones.
+pub fn refresh_to_ids(
+    my_key_package: &crate::keys::KeyPackage,
     id_set: &[Identifier],
-    participant_id: &Identifier,
-    cosigner_id: &Identifier,
-    slope: &Scalar,
-) -> Result<(Scalar, Scalar), Error> {
-    let lambda = crate::lagrange::lagrange_coeff_at_zero(&holder_kp.identifier, id_set);
-    let x = lambda * holder_kp.secret_share;
-    // s(t) = x + slope·t (degree-1; constant term is this holder's additive piece).
-    let coeffs = [x, *slope];
-    let at_participant = polynomial::evaluate_polynomial(participant_id, &coeffs);
-    let at_cosigner = polynomial::evaluate_polynomial(cosigner_id, &coeffs);
-    Ok((at_participant, at_cosigner))
+    recipient_ids: &[Identifier],
+    min_signers: usize,
+    rng: &mut impl RngCore,
+) -> BTreeMap<Identifier, Scalar> {
+    let lambda = crate::lagrange::lagrange_coeff_at_zero(&my_key_package.identifier, id_set);
+    let mut coeffs = Vec::with_capacity(min_signers);
+    coeffs.push(lambda * my_key_package.secret_share);
+    for _ in 1..min_signers {
+        coeffs.push(random_scalar(rng));
+    }
+    recipient_ids
+        .iter()
+        .map(|id| (id.clone(), polynomial::evaluate_polynomial(id, &coeffs)))
+        .collect()
 }
 
 /// Shared resharing finalization. Given the new secret share `si` (already

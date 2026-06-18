@@ -8,19 +8,27 @@ use bitcoin::hashes::{Hash, HashEngine};
 use bitcoin::secp256k1::{schnorr::Signature, Message, Secp256k1, XOnlyPublicKey};
 
 pub fn sha256(data: &[u8]) -> Vec<u8> {
-    bitcoin::hashes::sha256::Hash::hash(data).to_byte_array().to_vec()
+    bitcoin::hashes::sha256::Hash::hash(data)
+        .to_byte_array()
+        .to_vec()
 }
 
 pub fn hash256(data: &[u8]) -> Vec<u8> {
-    bitcoin::hashes::sha256d::Hash::hash(data).to_byte_array().to_vec()
+    bitcoin::hashes::sha256d::Hash::hash(data)
+        .to_byte_array()
+        .to_vec()
 }
 
 pub fn ripemd160(data: &[u8]) -> Vec<u8> {
-    bitcoin::hashes::ripemd160::Hash::hash(data).to_byte_array().to_vec()
+    bitcoin::hashes::ripemd160::Hash::hash(data)
+        .to_byte_array()
+        .to_vec()
 }
 
 pub fn hash160(data: &[u8]) -> Vec<u8> {
-    bitcoin::hashes::hash160::Hash::hash(data).to_byte_array().to_vec()
+    bitcoin::hashes::hash160::Hash::hash(data)
+        .to_byte_array()
+        .to_vec()
 }
 
 /// BIP-340 tagged hash: SHA256(SHA256(tag) || SHA256(tag) || msg).
@@ -30,15 +38,23 @@ pub fn tagged_hash(tag: &str, msg: &[u8]) -> Vec<u8> {
     e.input(t.as_byte_array());
     e.input(t.as_byte_array());
     e.input(msg);
-    bitcoin::hashes::sha256::Hash::from_engine(e).to_byte_array().to_vec()
+    bitcoin::hashes::sha256::Hash::from_engine(e)
+        .to_byte_array()
+        .to_vec()
 }
 
 /// BIP-340 Schnorr verify. `msg` must be the 32-byte sighash. Returns false on
 /// any malformed input rather than trapping, so a contract gets a defined result.
 pub fn schnorr_verify(pubkey: &[u8], msg: &[u8], sig: &[u8]) -> bool {
-    let Ok(pk) = XOnlyPublicKey::from_slice(pubkey) else { return false };
-    let Ok(signature) = Signature::from_slice(sig) else { return false };
-    let Ok(message) = Message::from_digest_slice(msg) else { return false };
+    let Ok(pk) = XOnlyPublicKey::from_slice(pubkey) else {
+        return false;
+    };
+    let Ok(signature) = Signature::from_slice(sig) else {
+        return false;
+    };
+    let Ok(message) = Message::from_digest_slice(msg) else {
+        return false;
+    };
     Secp256k1::verification_only()
         .verify_schnorr(&signature, &message, &pk)
         .is_ok()

@@ -11,29 +11,80 @@ pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
 pub enum CosignerCommand {
     // --- Signing ---
-    SignStep1 { req: SignStep1Request, reply: Reply<SignStep1Response> },
-    SignStep2 { req: SignStep2Request, reply: Reply<SignStep2Response> },
+    SignStep1 {
+        req: SignStep1Request,
+        reply: Reply<SignStep1Response>,
+    },
+    SignStep2 {
+        req: SignStep2Request,
+        reply: Reply<SignStep2Response>,
+    },
 
     // --- Transactions ---
-    BroadcastTransaction { req: BroadcastTransactionRequest, reply: Reply<BroadcastTransactionResponse> },
-    FetchHistory { req: FetchHistoryRequest, reply: Reply<FetchHistoryResponse> },
-    FetchRecentTransactions { req: FetchRecentTransactionsRequest, reply: Reply<FetchRecentTransactionsResponse> },
+    BroadcastTransaction {
+        req: BroadcastTransactionRequest,
+        reply: Reply<BroadcastTransactionResponse>,
+    },
+    FetchHistory {
+        req: FetchHistoryRequest,
+        reply: Reply<FetchHistoryResponse>,
+    },
+    FetchRecentTransactions {
+        req: FetchRecentTransactionsRequest,
+        reply: Reply<FetchRecentTransactionsResponse>,
+    },
 
     // --- Ark ---
-    GetArkInfo { req: GetArkInfoRequest, reply: Reply<GetArkInfoResponse> },
-    GetArkAddress { req: GetArkAddressRequest, reply: Reply<GetArkAddressResponse> },
-    GetBoardingAddress { req: GetBoardingAddressRequest, reply: Reply<GetBoardingAddressResponse> },
-    CheckBoardingBalance { req: CheckBoardingBalanceRequest, reply: Reply<CheckBoardingBalanceResponse> },
-    ListVtxos { req: ListVtxosRequest, reply: Reply<ListVtxosResponse> },
-    ListArkTransactions { req: ListArkTransactionsRequest, reply: Reply<ListArkTransactionsResponse> },
-    SendVtxo { req: SendVtxoRequest, reply: Reply<SendVtxoResponse> },
-    RedeemVtxo { req: RedeemVtxoRequest, reply: Reply<RedeemVtxoResponse> },
-    Settle { req: SettleRequest, reply: Reply<SettleResponse> },
-    SettleDelegate { req: SettleDelegateRequest, reply: Reply<SettleDelegateResponse> },
-    SubmitArkSend { req: SubmitArkSendRequest, reply: Reply<SubmitArkSendResponse> },
+    GetArkInfo {
+        req: GetArkInfoRequest,
+        reply: Reply<GetArkInfoResponse>,
+    },
+    GetArkAddress {
+        req: GetArkAddressRequest,
+        reply: Reply<GetArkAddressResponse>,
+    },
+    GetBoardingAddress {
+        req: GetBoardingAddressRequest,
+        reply: Reply<GetBoardingAddressResponse>,
+    },
+    CheckBoardingBalance {
+        req: CheckBoardingBalanceRequest,
+        reply: Reply<CheckBoardingBalanceResponse>,
+    },
+    ListVtxos {
+        req: ListVtxosRequest,
+        reply: Reply<ListVtxosResponse>,
+    },
+    ListArkTransactions {
+        req: ListArkTransactionsRequest,
+        reply: Reply<ListArkTransactionsResponse>,
+    },
+    SendVtxo {
+        req: SendVtxoRequest,
+        reply: Reply<SendVtxoResponse>,
+    },
+    RedeemVtxo {
+        req: RedeemVtxoRequest,
+        reply: Reply<RedeemVtxoResponse>,
+    },
+    Settle {
+        req: SettleRequest,
+        reply: Reply<SettleResponse>,
+    },
+    SettleDelegate {
+        req: SettleDelegateRequest,
+        reply: Reply<SettleDelegateResponse>,
+    },
+    SubmitArkSend {
+        req: SubmitArkSendRequest,
+        reply: Reply<SubmitArkSendResponse>,
+    },
 
     // --- Push registration ---
-    RegisterDeviceToken { req: RegisterDeviceTokenRequest, reply: Reply<RegisterDeviceTokenResponse> },
+    RegisterDeviceToken {
+        req: RegisterDeviceTokenRequest,
+        reply: Reply<RegisterDeviceTokenResponse>,
+    },
 
     // --- Auto-settle ---
     /// Tick from the global 60-second task. The actor checks its stored

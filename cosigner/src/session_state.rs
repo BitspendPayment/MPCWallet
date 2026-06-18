@@ -4,9 +4,12 @@
 //! opaque `ResourceAny` handles and async coordination primitives.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+
+use threshold::nonce::SigningNonce;
 
 use crate::exports::component::threshold::types::*;
+use crate::{key_ops, signing_ops, util_ops};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -20,201 +23,12 @@ fn map_to_json_object(map: &HashMap<String, String>) -> String {
     serde_json::Value::Object(obj).to_string()
 }
 
-fn map_to_parsed_json_object(map: &HashMap<String, String>) -> String {
-    let mut obj = serde_json::Map::new();
-    for (k, v) in map {
-        match serde_json::from_str::<serde_json::Value>(v) {
-            Ok(val) => {
-                obj.insert(k.clone(), val);
-            }
-            Err(_) => {
-                obj.insert(k.clone(), serde_json::Value::String(v.clone()));
-            }
-        }
-    }
-    serde_json::Value::Object(obj).to_string()
-}
-
-fn set_to_json_array(set: &HashSet<String>) -> String {
-    let arr: Vec<serde_json::Value> = set
-        .iter()
-        .map(|s| serde_json::Value::String(s.clone()))
-        .collect();
-    serde_json::Value::Array(arr).to_string()
-}
-
-fn json_to_map(json: &str) -> HashMap<String, String> {
-    let mut map = HashMap::new();
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json) {
-        if let Some(obj) = v.as_object() {
-            for (k, v) in obj {
-                let s = if let Some(s) = v.as_str() {
-                    s.to_string()
-                } else {
-                    v.to_string()
-                };
-                map.insert(k.clone(), s);
-            }
-        }
-    }
-    map
-}
 
 // ---------------------------------------------------------------------------
-// DKG Session
+// Session — ceremony state + the single-use nonce + the signing/key/identifier ops
 // ---------------------------------------------------------------------------
 
-pub struct DkgSessionState {
-    round1_packages: RefCell<HashMap<String, String>>,
-    receiver_identifiers: RefCell<HashSet<String>>,
-    server_id_hex: RefCell<String>,
-    server_internal_secret_hex: RefCell<String>,
-    round2_received: RefCell<HashMap<String, String>>,
-    round2_local: RefCell<HashMap<String, String>>,
-    // sender_id -> { recipient_id -> pkg_json }
-    round2_relay: RefCell<HashMap<String, HashMap<String, String>>>,
-}
-
-impl GuestDkgSession for DkgSessionState {
-    fn new() -> Self {
-        Self {
-            round1_packages: RefCell::new(HashMap::new()),
-            receiver_identifiers: RefCell::new(HashSet::new()),
-            server_id_hex: RefCell::new(String::new()),
-            server_internal_secret_hex: RefCell::new(String::new()),
-            round2_received: RefCell::new(HashMap::new()),
-            round2_local: RefCell::new(HashMap::new()),
-            round2_relay: RefCell::new(HashMap::new()),
-        }
-    }
-
-    fn reset(&self) {
-        self.round1_packages.borrow_mut().clear();
-        self.receiver_identifiers.borrow_mut().clear();
-        *self.server_id_hex.borrow_mut() = String::new();
-        *self.server_internal_secret_hex.borrow_mut() = String::new();
-        self.round2_received.borrow_mut().clear();
-        self.round2_local.borrow_mut().clear();
-        self.round2_relay.borrow_mut().clear();
-    }
-
-    fn insert_round1_package(&self, id_hex: String, pkg_json: String) {
-        self.round1_packages
-            .borrow_mut()
-            .insert(id_hex, pkg_json);
-    }
-
-    fn insert_receiver_identifier(&self, id_hex: String) {
-        self.receiver_identifiers.borrow_mut().insert(id_hex);
-    }
-
-    fn total_participants(&self) -> u32 {
-        (self.round1_packages.borrow().len() + self.receiver_identifiers.borrow().len()) as u32
-    }
-
-    fn is_receiver(&self, id_hex: String) -> bool {
-        self.receiver_identifiers.borrow().contains(&id_hex)
-    }
-
-    fn get_round1_packages_json(&self) -> String {
-        map_to_json_object(&self.round1_packages.borrow())
-    }
-
-    fn get_round1_packages_excluding_json(&self, exclude_id_hex: String) -> String {
-        let pkgs = self.round1_packages.borrow();
-        let mut obj = serde_json::Map::new();
-        for (id, pkg_str) in pkgs.iter() {
-            if id != &exclude_id_hex {
-                match serde_json::from_str::<serde_json::Value>(pkg_str) {
-                    Ok(val) => {
-                        obj.insert(id.clone(), val);
-                    }
-                    Err(_) => {
-                        obj.insert(id.clone(), serde_json::Value::String(pkg_str.clone()));
-                    }
-                }
-            }
-        }
-        serde_json::Value::Object(obj).to_string()
-    }
-
-    fn get_receiver_ids_json(&self) -> String {
-        set_to_json_array(&self.receiver_identifiers.borrow())
-    }
-
-    fn set_server_id(&self, server_id_hex: String) {
-        *self.server_id_hex.borrow_mut() = server_id_hex;
-    }
-
-    fn get_server_id(&self) -> String {
-        self.server_id_hex.borrow().clone()
-    }
-
-    fn set_server_internal_secret_hex(&self, secret_hex: String) {
-        *self.server_internal_secret_hex.borrow_mut() = secret_hex;
-    }
-
-    fn get_server_internal_secret_hex(&self) -> String {
-        self.server_internal_secret_hex.borrow().clone()
-    }
-
-    fn insert_round2_received(&self, sender_id_hex: String, pkg_json: String) {
-        self.round2_received
-            .borrow_mut()
-            .insert(sender_id_hex, pkg_json);
-    }
-
-    fn get_round2_received_json(&self) -> String {
-        map_to_parsed_json_object(&self.round2_received.borrow())
-    }
-
-    fn set_round2_local_json(&self, json: String) {
-        *self.round2_local.borrow_mut() = json_to_map(&json);
-    }
-
-    fn get_round2_local_json(&self) -> String {
-        map_to_json_object(&self.round2_local.borrow())
-    }
-
-    fn is_round2_local_empty(&self) -> bool {
-        self.round2_local.borrow().is_empty()
-    }
-
-    fn insert_relay_packages(&self, sender_id_hex: String, packages_json: String) {
-        let pkgs = json_to_map(&packages_json);
-        self.round2_relay
-            .borrow_mut()
-            .insert(sender_id_hex, pkgs);
-    }
-
-    fn insert_relay_from_local(&self, server_id_hex: String) {
-        let local = self.round2_local.borrow().clone();
-        self.round2_relay
-            .borrow_mut()
-            .insert(server_id_hex, local);
-    }
-
-    fn relay_sender_count(&self) -> u32 {
-        self.round2_relay.borrow().len() as u32
-    }
-
-    fn get_relay_packages_for(&self, recipient_id_hex: String) -> String {
-        let relay = self.round2_relay.borrow();
-        let mut obj = serde_json::Map::new();
-        for (sender, sender_pkgs) in relay.iter() {
-            if let Some(pkg) = sender_pkgs.get(&recipient_id_hex) {
-                obj.insert(sender.clone(), serde_json::Value::String(pkg.clone()));
-            }
-        }
-        serde_json::Value::Object(obj).to_string()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Signing Session
-// ---------------------------------------------------------------------------
-
-pub struct SigningSessionState {
+pub struct SessionState {
     user_hiding_hex: RefCell<String>,
     user_binding_hex: RefCell<String>,
     message_to_sign_hex: RefCell<String>,
@@ -223,9 +37,12 @@ pub struct SigningSessionState {
     shares: RefCell<HashMap<String, String>>,
     current_policy_id: RefCell<String>,
     pending_amount: RefCell<i64>,
+    /// Single-use signing nonce for the in-progress round (set by `new_nonce`,
+    /// consumed by `frost_sign`).
+    nonce: RefCell<Option<SigningNonce>>,
 }
 
-impl GuestSigningSession for SigningSessionState {
+impl GuestSession for SessionState {
     fn new() -> Self {
         Self {
             user_hiding_hex: RefCell::new(String::new()),
@@ -236,6 +53,7 @@ impl GuestSigningSession for SigningSessionState {
             shares: RefCell::new(HashMap::new()),
             current_policy_id: RefCell::new(String::new()),
             pending_amount: RefCell::new(0),
+            nonce: RefCell::new(None),
         }
     }
 
@@ -248,6 +66,7 @@ impl GuestSigningSession for SigningSessionState {
         self.shares.borrow_mut().clear();
         *self.current_policy_id.borrow_mut() = String::new();
         *self.pending_amount.borrow_mut() = 0;
+        *self.nonce.borrow_mut() = None;
     }
 
     fn set_user_hiding_hex(&self, hex: String) {
@@ -331,182 +150,66 @@ impl GuestSigningSession for SigningSessionState {
     fn get_pending_amount(&self) -> i64 {
         *self.pending_amount.borrow()
     }
+
+    // ----- signing ops (nonce held in this session) -----
+
+    fn new_nonce(&self, secret_hex: String) -> Result<String, ThresholdError> {
+        let (commitments_json, nonce) = signing_ops::new_nonce(secret_hex)?;
+        *self.nonce.borrow_mut() = Some(nonce);
+        Ok(commitments_json)
+    }
+
+    fn frost_sign(
+        &self,
+        signing_package_json: String,
+        key_package_json: String,
+    ) -> Result<String, ThresholdError> {
+        let nonce = self
+            .nonce
+            .borrow_mut()
+            .take()
+            .ok_or_else(|| ThresholdError::InvalidInput("no signing nonce; call new-nonce first".into()))?;
+        signing_ops::frost_sign(signing_package_json, &nonce, key_package_json)
+    }
+
+    fn frost_aggregate(
+        &self,
+        signing_package_json: String,
+        shares_json: String,
+        public_key_package_json: String,
+    ) -> Result<String, ThresholdError> {
+        signing_ops::frost_aggregate(signing_package_json, shares_json, public_key_package_json)
+    }
+
+    // ----- key / identifier ops -----
+
+    fn key_package_tweak(
+        &self,
+        kp_json: String,
+        merkle_root: Option<Vec<u8>>,
+    ) -> Result<String, ThresholdError> {
+        key_ops::key_package_tweak(kp_json, merkle_root)
+    }
+
+    fn pub_key_package_tweak(
+        &self,
+        pkp_json: String,
+        merkle_root: Option<Vec<u8>>,
+    ) -> Result<String, ThresholdError> {
+        key_ops::pub_key_package_tweak(pkp_json, merkle_root)
+    }
+
+    fn identifier_derive(&self, message: Vec<u8>) -> Result<String, ThresholdError> {
+        util_ops::identifier_derive(message)
+    }
+
+    fn verify_schnorr_signature(
+        &self,
+        pk_hex: String,
+        message: Vec<u8>,
+        sig_hex: String,
+    ) -> Result<bool, ThresholdError> {
+        crate::auth_ops::verify_schnorr_signature(pk_hex, message, sig_hex)
+    }
 }
 
-// ---------------------------------------------------------------------------
-// Refresh Session
-// ---------------------------------------------------------------------------
-
-pub struct RefreshSessionState {
-    round1_packages: RefCell<HashMap<String, String>>,
-    server_id_hex: RefCell<String>,
-    server_identifier_hex: RefCell<String>,
-    round2_received: RefCell<HashMap<String, String>>,
-    round2_local: RefCell<HashMap<String, String>>,
-    round2_relay: RefCell<HashMap<String, HashMap<String, String>>>,
-    refresh_creation_time_ms: RefCell<i64>,
-    refresh_id: RefCell<String>,
-    refresh_threshold_amount: RefCell<i64>,
-    refresh_interval: RefCell<i64>,
-}
-
-impl GuestRefreshSession for RefreshSessionState {
-    fn new() -> Self {
-        Self {
-            round1_packages: RefCell::new(HashMap::new()),
-            server_id_hex: RefCell::new(String::new()),
-            server_identifier_hex: RefCell::new(String::new()),
-            round2_received: RefCell::new(HashMap::new()),
-            round2_local: RefCell::new(HashMap::new()),
-            round2_relay: RefCell::new(HashMap::new()),
-            refresh_creation_time_ms: RefCell::new(0),
-            refresh_id: RefCell::new(String::new()),
-            refresh_threshold_amount: RefCell::new(0),
-            refresh_interval: RefCell::new(0),
-        }
-    }
-
-    fn reset(&self) {
-        self.round1_packages.borrow_mut().clear();
-        *self.server_id_hex.borrow_mut() = String::new();
-        *self.server_identifier_hex.borrow_mut() = String::new();
-        self.round2_received.borrow_mut().clear();
-        self.round2_local.borrow_mut().clear();
-        self.round2_relay.borrow_mut().clear();
-        *self.refresh_creation_time_ms.borrow_mut() = 0;
-        *self.refresh_id.borrow_mut() = String::new();
-        *self.refresh_threshold_amount.borrow_mut() = 0;
-        *self.refresh_interval.borrow_mut() = 0;
-    }
-
-    fn insert_round1_package(&self, id_hex: String, pkg_json: String) {
-        self.round1_packages
-            .borrow_mut()
-            .insert(id_hex, pkg_json);
-    }
-
-    fn round1_count(&self) -> u32 {
-        self.round1_packages.borrow().len() as u32
-    }
-
-    fn get_round1_packages_json(&self) -> String {
-        map_to_json_object(&self.round1_packages.borrow())
-    }
-
-    fn get_round1_packages_excluding_json(&self, exclude_id_hex: String) -> String {
-        let pkgs = self.round1_packages.borrow();
-        let mut obj = serde_json::Map::new();
-        for (id, pkg_str) in pkgs.iter() {
-            if id != &exclude_id_hex {
-                match serde_json::from_str::<serde_json::Value>(pkg_str) {
-                    Ok(val) => {
-                        obj.insert(id.clone(), val);
-                    }
-                    Err(_) => {
-                        obj.insert(id.clone(), serde_json::Value::String(pkg_str.clone()));
-                    }
-                }
-            }
-        }
-        serde_json::Value::Object(obj).to_string()
-    }
-
-    fn set_server_id(&self, server_id_hex: String) {
-        *self.server_id_hex.borrow_mut() = server_id_hex;
-    }
-
-    fn get_server_id(&self) -> String {
-        self.server_id_hex.borrow().clone()
-    }
-
-    fn set_server_identifier_hex(&self, id_hex: String) {
-        *self.server_identifier_hex.borrow_mut() = id_hex;
-    }
-
-    fn get_server_identifier_hex(&self) -> String {
-        self.server_identifier_hex.borrow().clone()
-    }
-
-    fn insert_round2_received(&self, sender_id_hex: String, pkg_json: String) {
-        self.round2_received
-            .borrow_mut()
-            .insert(sender_id_hex, pkg_json);
-    }
-
-    fn get_round2_received_json(&self) -> String {
-        map_to_parsed_json_object(&self.round2_received.borrow())
-    }
-
-    fn set_round2_local_json(&self, json: String) {
-        *self.round2_local.borrow_mut() = json_to_map(&json);
-    }
-
-    fn get_round2_local_json(&self) -> String {
-        map_to_json_object(&self.round2_local.borrow())
-    }
-
-    fn is_round2_local_empty(&self) -> bool {
-        self.round2_local.borrow().is_empty()
-    }
-
-    fn insert_relay_packages(&self, sender_id_hex: String, packages_json: String) {
-        let pkgs = json_to_map(&packages_json);
-        self.round2_relay
-            .borrow_mut()
-            .insert(sender_id_hex, pkgs);
-    }
-
-    fn insert_relay_from_local(&self, server_id_hex: String) {
-        let local = self.round2_local.borrow().clone();
-        self.round2_relay
-            .borrow_mut()
-            .insert(server_id_hex, local);
-    }
-
-    fn relay_sender_count(&self) -> u32 {
-        self.round2_relay.borrow().len() as u32
-    }
-
-    fn get_relay_packages_for(&self, recipient_id_hex: String) -> String {
-        let relay = self.round2_relay.borrow();
-        let mut obj = serde_json::Map::new();
-        for (sender, sender_pkgs) in relay.iter() {
-            if let Some(pkg) = sender_pkgs.get(&recipient_id_hex) {
-                obj.insert(sender.clone(), serde_json::Value::String(pkg.clone()));
-            }
-        }
-        serde_json::Value::Object(obj).to_string()
-    }
-
-    fn set_refresh_creation_time_ms(&self, ms: i64) {
-        *self.refresh_creation_time_ms.borrow_mut() = ms;
-    }
-
-    fn get_refresh_creation_time_ms(&self) -> i64 {
-        *self.refresh_creation_time_ms.borrow()
-    }
-
-    fn set_refresh_id(&self, id: String) {
-        *self.refresh_id.borrow_mut() = id;
-    }
-
-    fn get_refresh_id(&self) -> String {
-        self.refresh_id.borrow().clone()
-    }
-
-    fn set_refresh_threshold_amount(&self, amount: i64) {
-        *self.refresh_threshold_amount.borrow_mut() = amount;
-    }
-
-    fn get_refresh_threshold_amount(&self) -> i64 {
-        *self.refresh_threshold_amount.borrow()
-    }
-
-    fn set_refresh_interval(&self, interval: i64) {
-        *self.refresh_interval.borrow_mut() = interval;
-    }
-
-    fn get_refresh_interval(&self) -> i64 {
-        *self.refresh_interval.borrow()
-    }
-}

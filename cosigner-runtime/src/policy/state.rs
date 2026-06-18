@@ -1,5 +1,75 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+
+use threshold::identifier::Identifier;
+use threshold::keys::{KeyPackage, PublicKeyPackage};
+
+// serde adapters: persist the threshold crypto types through their existing
+// Dart-compatible `to_json`/`from_json` (as a nested JSON object / hex string),
+// so the policy holds the real types instead of pre-serialized String blobs.
+mod kp_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use threshold::keys::KeyPackage;
+
+    pub fn serialize<S: Serializer>(kp: &KeyPackage, s: S) -> Result<S::Ok, S::Error> {
+        let v: serde_json::Value =
+            serde_json::from_str(&kp.to_json()).map_err(serde::ser::Error::custom)?;
+        v.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<KeyPackage, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        KeyPackage::from_json(&v.to_string())
+            .map_err(|e| serde::de::Error::custom(format!("{e:?}")))
+    }
+}
+
+mod pkp_json {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use threshold::keys::PublicKeyPackage;
+
+    pub fn serialize<S: Serializer>(pkp: &PublicKeyPackage, s: S) -> Result<S::Ok, S::Error> {
+        let v: serde_json::Value =
+            serde_json::from_str(&pkp.to_json()).map_err(serde::ser::Error::custom)?;
+        v.serialize(s)
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PublicKeyPackage, D::Error> {
+        let v = serde_json::Value::deserialize(d)?;
+        PublicKeyPackage::from_json(&v.to_string())
+            .map_err(|e| serde::de::Error::custom(format!("{e:?}")))
+    }
+}
+
+mod id_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+    use threshold::identifier::Identifier;
+
+    pub fn serialize<S: Serializer>(id: &Identifier, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&hex::encode(id.serialize()))
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Identifier, D::Error> {
+        let h = String::deserialize(d)?;
+        let bytes = hex::decode(&h).map_err(serde::de::Error::custom)?;
+        let arr: [u8; 32] = bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("identifier must be 32 bytes"))?;
+        Identifier::deserialize(&arr).map_err(|e| serde::de::Error::custom(format!("{e:?}")))
+    }
+}
+
+mod arr32_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&hex::encode(b))
+    }
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
+        let h = String::deserialize(d)?;
+        let bytes = hex::decode(&h).map_err(serde::de::Error::custom)?;
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
+    }
+}
 
 /// Per-user policy state. Mirrors `PolicyState` from `server/lib/state.dart`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +105,11 @@ pub struct NormalPolicy {
     pub public_key_package_json: String,
 }
 
+/// Hex of a compressed verifying key (a participant's verifying share / group key).
+/// Kept as a `String` because it is a JSON map key (serde requires string keys) and is
+/// compared directly against wire-provided verifying-key hex.
+pub type VerifyingKeyHex = String;
+
 /// A contract: a fresh contract key `V′` (derived by resharing `V`) bound to a
 /// WASM contract. Spending the cooperative leaf requires `V′`, so the cosigner is
 /// a mandatory signer and runs `contract_id`'s contract before co-signing.
@@ -47,68 +122,56 @@ pub struct NormalPolicy {
 /// onboarded (contract-create step 4).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractPolicy {
-    /// Contract that governs cooperative spends: hex of sha256(component_wasm).
-    pub contract_id_hex: String,
+    /// Contract that governs cooperative spends: sha256(component_wasm).
+    #[serde(with = "arr32_hex")]
+    pub contract_id: [u8; 32],
     /// `V′` x-only public key (the cooperative-leaf / contract key).
-    pub contract_pk_xonly_hex: String,
-    /// The cosigner's CANONICAL `V′` key package (JSON) — its share at `cosigner_id`.
+    #[serde(with = "arr32_hex")]
+    pub contract_pk: [u8; 32],
+    /// The cosigner's CANONICAL `V′` key package — its share at `cosigner_id`.
     /// Used to refresh `V′` onto the service pairing.
-    pub cosigner_vprime_kp_json: String,
-    /// The user's `V′` identifier hex (the non-cosigner shareholder), needed for the
+    #[serde(with = "kp_json")]
+    pub cosigner_key_package: KeyPackage,
+    /// The user's `V′` identifier (the non-cosigner shareholder), needed for the
     /// Lagrange coefficient when refreshing onto the service.
-    pub author_id_hex: String,
+    #[serde(with = "id_hex")]
+    pub author_id: Identifier,
     /// Unilateral-exit CSV delay (the exit leaf).
     pub exit_delay: u32,
-    /// User-supplied exit-leaf owner key (x-only hex), for the taptree.
-    pub owner_pk_xonly_hex: String,
+    /// User-supplied exit-leaf owner x-only key, for the taptree.
+    #[serde(with = "arr32_hex")]
+    pub owner_pk: [u8; 32],
 
-    /// The user's verifying share (hex) — the user signing-path identity (pairing A).
-    pub user_vk_hex: String,
-    /// The cosigner's counter-share for the USER pairing (`cosigner_shareA` + PKP_A).
-    pub user_share: CosignerShare,
-    /// The always-online service's verifying key (hex) — the service signing-path
-    /// identity (pairing B).
-    pub service_vk_hex: String,
-    /// The cosigner's counter-share for the SERVICE pairing (`cosigner_shareB` +
-    /// PKP_B). `None` until the service is onboarded.
-    #[serde(default)]
-    pub service_share: Option<CosignerShare>,
+    /// The cosigner's counter-share per signing pairing, keyed by the counterparty's
+    /// verifying key hex (compressed point). The author/user pairing (`cosigner_shareA`)
+    /// is present from creation; the always-online service pairing (`cosigner_shareB`)
+    /// is added at contract-create step 4.
+    pub shares: BTreeMap<VerifyingKeyHex, CosignerShare>,
 }
 
 impl ContractPolicy {
-    /// The verifying shares authorized to sign this contract: the user always, and
-    /// the service once it has been onboarded.
-    pub fn authorized_vks(&self) -> Vec<String> {
-        let mut v = vec![self.user_vk_hex.clone()];
-        if self.service_share.is_some() {
-            v.push(self.service_vk_hex.clone());
-        }
-        v
+    /// The verifying shares authorized to sign this contract — the counterparties with
+    /// an onboarded pairing (the user from creation, the service once added at step 4).
+    pub fn authorized_verifying_keys(&self) -> Vec<VerifyingKeyHex> {
+        self.shares.keys().cloned().collect()
     }
 
-    /// The cosigner's counter-share for the given recipient verifying share, or
+    /// The cosigner's counter-share for the given recipient verifying key, or
     /// `None` if it is not an (onboarded) recipient of this contract.
-    pub fn share_for(&self, vk_hex: &str) -> Option<&CosignerShare> {
-        if vk_hex == self.user_vk_hex {
-            Some(&self.user_share)
-        } else if vk_hex == self.service_vk_hex {
-            self.service_share.as_ref()
-        } else {
-            None
-        }
+    pub fn share_for(&self, verifying_key_hex: &str) -> Option<&CosignerShare> {
+        self.shares.get(verifying_key_hex)
     }
 }
 
-/// The cosigner's `V′` counter-share for one signing pairing.
-/// `public_key_package_json` is the 2-entry PKP `{recipient_id: P·G, cosigner_id:
-/// C·G}` whose group key is `V′`; `key_package_json` is the cosigner's own `C`
-/// key package.
+/// The cosigner's `V′` counter-share for one signing pairing. `public_key_package`
+/// is the 2-entry PKP `{recipient_id: P·G, cosigner_id: C·G}` whose group key is
+/// `V′`; `key_package` is the cosigner's own `C` key package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CosignerShare {
-    /// Cosigner's `V′` counter-share key package (JSON).
-    pub key_package_json: String,
-    /// 2-entry `V′` public key package (JSON) for this pairing.
-    pub public_key_package_json: String,
+    #[serde(with = "kp_json")]
+    pub key_package: KeyPackage,
+    #[serde(with = "pkp_json")]
+    pub public_key_package: PublicKeyPackage,
 }
 
 /// Per-user UTXO cache.

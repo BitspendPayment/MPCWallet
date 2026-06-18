@@ -544,6 +544,7 @@ message ContractContext {
   bytes server_pk = 5;              // ASP signer x-only
   string public_key_package_json = 6; // 2-entry V′ PKP {service_id, cosigner_id}
   bytes service_vk = 7;             // the service's verifying key
+  bytes cosigner_group_key = 8;     // the user's V — the cosigner actor the service addresses
 }
 message AssembleContractShareResponse {
   bool ok = 1;

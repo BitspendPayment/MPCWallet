@@ -41,7 +41,10 @@ impl BitcoinHistoryService {
     }
 
     /// List unspent outputs for a given electrum script hash.
-    pub async fn list_unspent_by_script_hash(&self, script_hash: &str) -> Result<Vec<UtxoInfo>, String> {
+    pub async fn list_unspent_by_script_hash(
+        &self,
+        script_hash: &str,
+    ) -> Result<Vec<UtxoInfo>, String> {
         let utxos = self.electrum.list_unspent(script_hash).await?;
         Ok(utxos
             .into_iter()
@@ -64,7 +67,10 @@ impl BitcoinHistoryService {
 
         // Normal policy
         let pkp_json = &policy_state.normal_policy.public_key_package_json;
-        all_utxos.extend(self.fetch_utxos_for_policy(pkp_json, &wasm_tweaked_pubkey_hex_fn).await?);
+        all_utxos.extend(
+            self.fetch_utxos_for_policy(pkp_json, &wasm_tweaked_pubkey_hex_fn)
+                .await?,
+        );
 
         Ok(all_utxos)
     }
@@ -106,7 +112,10 @@ impl BitcoinHistoryService {
 
         let mut summaries = Vec::new();
         for item in &history {
-            match self.process_transaction(&item.tx_hash, item.height, &script_hash).await {
+            match self
+                .process_transaction(&item.tx_hash, item.height, &script_hash)
+                .await
+            {
                 Ok(summary) => summaries.push(summary),
                 Err(e) => tracing::warn!("Error processing tx {}: {e}", item.tx_hash),
             }
@@ -134,8 +143,8 @@ impl BitcoinHistoryService {
         // Check outputs
         for output in &tx.output {
             let output_script_hex = hex::encode(output.script_pubkey.as_bytes());
-            let output_script_hash = tx_parser::derive_script_hash(&output_script_hex)
-                .unwrap_or_default();
+            let output_script_hash =
+                tx_parser::derive_script_hash(&output_script_hex).unwrap_or_default();
             if output_script_hash == script_hash {
                 my_outputs += output.value.to_sat() as i64;
             }
@@ -146,13 +155,15 @@ impl BitcoinHistoryService {
             let prev_txid = input.previous_output.txid.to_string();
             if let Ok(prev_hex) = self.electrum.get_transaction(&prev_txid).await {
                 if let Ok(prev_bytes) = hex::decode(&prev_hex) {
-                    if let Ok(prev_tx) = bitcoin::consensus::deserialize::<bitcoin::Transaction>(&prev_bytes) {
+                    if let Ok(prev_tx) =
+                        bitcoin::consensus::deserialize::<bitcoin::Transaction>(&prev_bytes)
+                    {
                         let vout = input.previous_output.vout as usize;
                         if vout < prev_tx.output.len() {
                             let prev_out = &prev_tx.output[vout];
                             let prev_script_hex = hex::encode(prev_out.script_pubkey.as_bytes());
-                            let prev_script_hash = tx_parser::derive_script_hash(&prev_script_hex)
-                                .unwrap_or_default();
+                            let prev_script_hash =
+                                tx_parser::derive_script_hash(&prev_script_hex).unwrap_or_default();
                             if prev_script_hash == script_hash {
                                 my_inputs += prev_out.value.to_sat() as i64;
                             }
@@ -192,12 +203,8 @@ impl BitcoinHistoryService {
         if header_bytes.len() >= 72 {
             // Time is at offset 68 (4 bytes LE) in standard bitcoin header
             let time_bytes = &header_bytes[68..72];
-            let time = u32::from_le_bytes([
-                time_bytes[0],
-                time_bytes[1],
-                time_bytes[2],
-                time_bytes[3],
-            ]);
+            let time =
+                u32::from_le_bytes([time_bytes[0], time_bytes[1], time_bytes[2], time_bytes[3]]);
             // Note: can't mutate cache without &mut self, we'll skip caching for now
             return Ok(time);
         }

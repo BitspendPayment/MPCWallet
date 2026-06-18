@@ -54,7 +54,8 @@ impl KvStore for EnclaveStore {
     fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .get(&self.storage_url(tree, key))
                 .header(h, &v)
                 .send()
@@ -68,11 +69,13 @@ impl KvStore for EnclaveStore {
             }
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                return Err(PersistenceError::Backend(
-                    format!("enclave get: status {status} body={body}"),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave get: status {status} body={body}"
+                )));
             }
-            let body = resp.text().await
+            let body = resp
+                .text()
+                .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave get body: {e}")))?;
             Ok(Some(body))
         })
@@ -82,7 +85,8 @@ impl KvStore for EnclaveStore {
     fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .put(&self.storage_url(tree, key))
                 .header(h, &v)
                 .body(value.to_string())
@@ -94,9 +98,9 @@ impl KvStore for EnclaveStore {
             tracing::debug!(http_status = %status, "enclave put response");
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                return Err(PersistenceError::Backend(
-                    format!("enclave put: status {status} body={body}"),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave put: status {status} body={body}"
+                )));
             }
             Ok(())
         })
@@ -106,7 +110,8 @@ impl KvStore for EnclaveStore {
     fn delete(&self, tree: &str, key: &str) -> Result<(), PersistenceError> {
         let (h, v) = self.auth_header();
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .delete(&self.storage_url(tree, key))
                 .header(h, &v)
                 .send()
@@ -116,9 +121,9 @@ impl KvStore for EnclaveStore {
             let status = resp.status();
             if !status.is_success() {
                 let body = resp.text().await.unwrap_or_default();
-                return Err(PersistenceError::Backend(
-                    format!("enclave delete: status {status} body={body}"),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave delete: status {status} body={body}"
+                )));
             }
             Ok(())
         })
@@ -131,7 +136,8 @@ impl KvStore for EnclaveStore {
         Self::block_on(async {
             // List keys with the tree prefix
             let list_url = format!("{}/v1/storage?prefix={}", self.base_url, prefix);
-            let resp = self.client
+            let resp = self
+                .client
                 .get(&list_url)
                 .header(h, &v)
                 .send()
@@ -139,20 +145,24 @@ impl KvStore for EnclaveStore {
                 .map_err(|e| PersistenceError::Backend(format!("enclave list: {e}")))?;
 
             if !resp.status().is_success() {
-                return Err(PersistenceError::Backend(
-                    format!("enclave list: status {}", resp.status()),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave list: status {}",
+                    resp.status()
+                )));
             }
 
             // Supervisor returns a bare JSON array of full keys (tree prefix
             // included), e.g. ["delegate_sessions/abc", "delegate_sessions/def"].
-            let keys: Vec<String> = resp.json().await
+            let keys: Vec<String> = resp
+                .json()
+                .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave list parse: {e}")))?;
 
             let mut result = HashMap::new();
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
             for full_key in keys {
-                let short_key = full_key.strip_prefix(&prefix)
+                let short_key = full_key
+                    .strip_prefix(&prefix)
                     .unwrap_or(&full_key)
                     .to_string();
                 if short_key.is_empty() {
@@ -178,7 +188,8 @@ impl KvStore for EnclaveStore {
         let prefix = format!("{tree}/");
         Self::block_on(async {
             let list_url = format!("{}/v1/storage?prefix={}", self.base_url, prefix);
-            let resp = self.client
+            let resp = self
+                .client
                 .get(&list_url)
                 .header(h, &v)
                 .send()
@@ -186,12 +197,15 @@ impl KvStore for EnclaveStore {
                 .map_err(|e| PersistenceError::Backend(format!("enclave clear list: {e}")))?;
 
             if !resp.status().is_success() {
-                return Err(PersistenceError::Backend(
-                    format!("enclave clear list: status {}", resp.status()),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave clear list: status {}",
+                    resp.status()
+                )));
             }
 
-            let keys: Vec<String> = resp.json().await
+            let keys: Vec<String> = resp
+                .json()
+                .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave clear parse: {e}")))?;
 
             let (ah, av) = ("Authorization", format!("Bearer {}", self.mgmt_token));
@@ -210,7 +224,8 @@ impl SecretStore for EnclaveStore {
         let (h, v) = self.auth_header();
         let url = format!("{}/v1/secrets/{name}", self.base_url);
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .get(&url)
                 .header(h, &v)
                 .send()
@@ -221,11 +236,14 @@ impl SecretStore for EnclaveStore {
                 return Ok(None);
             }
             if !resp.status().is_success() {
-                return Err(PersistenceError::Backend(
-                    format!("enclave get_secret: status {}", resp.status()),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave get_secret: status {}",
+                    resp.status()
+                )));
             }
-            let body: serde_json::Value = resp.json().await
+            let body: serde_json::Value = resp
+                .json()
+                .await
                 .map_err(|e| PersistenceError::Backend(format!("enclave get_secret parse: {e}")))?;
             Ok(body["value"].as_str().map(|s| s.to_string()))
         })
@@ -237,7 +255,8 @@ impl SecretStore for EnclaveStore {
         let url = format!("{}/v1/secrets/{name}", self.base_url);
         let body = serde_json::json!({ "value": value });
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .put(&url)
                 .header(h, &v)
                 .json(&body)
@@ -246,9 +265,10 @@ impl SecretStore for EnclaveStore {
                 .map_err(|e| PersistenceError::Backend(format!("enclave put_secret: {e}")))?;
 
             if !resp.status().is_success() {
-                return Err(PersistenceError::Backend(
-                    format!("enclave put_secret: status {}", resp.status()),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave put_secret: status {}",
+                    resp.status()
+                )));
             }
             Ok(())
         })
@@ -259,7 +279,8 @@ impl SecretStore for EnclaveStore {
         let (h, v) = self.auth_header();
         let url = format!("{}/v1/secrets/{name}", self.base_url);
         Self::block_on(async {
-            let resp = self.client
+            let resp = self
+                .client
                 .delete(&url)
                 .header(h, &v)
                 .send()
@@ -267,9 +288,10 @@ impl SecretStore for EnclaveStore {
                 .map_err(|e| PersistenceError::Backend(format!("enclave delete_secret: {e}")))?;
 
             if !resp.status().is_success() {
-                return Err(PersistenceError::Backend(
-                    format!("enclave delete_secret: status {}", resp.status()),
-                ));
+                return Err(PersistenceError::Backend(format!(
+                    "enclave delete_secret: status {}",
+                    resp.status()
+                )));
             }
             Ok(())
         })

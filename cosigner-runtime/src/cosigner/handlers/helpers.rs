@@ -7,9 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
-use crate::cosigner::state::CosignerState;
 use crate::cosigner::registry::CosignerInstance;
-use crate::crypto_ops;
+use crate::cosigner::state::CosignerState;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 
@@ -36,7 +35,7 @@ pub fn auth_check(
         .ok_or_else(|| Status::internal("no session"))?;
     let iface = user.bindings.component_threshold_types();
     let is_valid = iface
-        .threshold_session()
+        .session()
         .call_verify_schnorr_signature(&mut user.store, *session, &pk_hex, &auth_message, &sig_hex)
         .map_err(|e| Status::internal(format!("WASM error: {e}")))?
         .map_err(|_| Status::internal("signature verification failed"))?;
@@ -97,7 +96,9 @@ pub fn auth_check_group(
     let claimed_hex = hex::encode(claimed_share_bytes);
     if !is_authorized_share(authorized_shares, &claimed_hex) {
         tracing::warn!("[{claimed_hex}] not an authorized signer for {operation}");
-        return Err(Status::unauthenticated("signer not authorized for this group"));
+        return Err(Status::unauthenticated(
+            "signer not authorized for this group",
+        ));
     }
     auth_check(
         user,
@@ -108,7 +109,6 @@ pub fn auth_check_group(
         operation,
     )
 }
-
 
 /// Load policy state from persistence into the user instance if not present.
 ///
@@ -457,7 +457,8 @@ pub fn calculate_spent_amount(
             .map_err(|e| Status::internal(format!("invalid ARK_AMOUNT value: {e}")))?;
         return Ok(amount);
     }
-    let tweaked_pkp_json = crypto_ops::pub_key_package_tweak(user, pkp_json, None)
+    let tweaked_pkp_json = user
+        .pub_key_package_tweak(pkp_json, None)
         .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
     let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(&tweaked_pkp_json)?;
     let script_hex = crate::bitcoin::tx_parser::derive_p2tr_script_hex(&vk_hex)

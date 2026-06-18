@@ -6,9 +6,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::shared::SharedServices;
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
+use crate::shared::SharedServices;
 
 pub async fn run_vtxo_stream(registry: Arc<CosignerRegistry>, shared: Arc<SharedServices>) {
     if shared.asp_client.is_none() {

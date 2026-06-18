@@ -4,12 +4,11 @@ use tokio::runtime::Handle;
 use tonic::Status;
 
 use crate::auth::message::{OP_FETCH_HISTORY, OP_FETCH_RECENT_TXS};
-use crate::crypto_ops;
-use crate::shared::SharedServices;
-use crate::cosigner::state::CosignerState;
-use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::registry::CosignerInstance;
+use crate::cosigner::state::CosignerState;
+use crate::shared::SharedServices;
+use crate::wallet_proto::*;
 
 use super::helpers::{auth_check, ensure_policy_loaded};
 
@@ -158,12 +157,9 @@ fn build_tweaked_map(
 
     let mut map = HashMap::new();
 
-    let tweaked = crypto_ops::pub_key_package_tweak(
-        user,
-        &ps.normal_policy.public_key_package_json,
-        None,
-    )
-    .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
+    let tweaked = user
+        .pub_key_package_tweak(&ps.normal_policy.public_key_package_json, None)
+        .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
     let vk = parsers::extract_verifying_key(&tweaked)?;
     map.insert(ps.normal_policy.public_key_package_json.clone(), vk);
 

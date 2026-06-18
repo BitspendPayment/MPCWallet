@@ -118,7 +118,7 @@ pub fn build_signing_package_json(
 
 /// Resolve the `(key_package_json, public_key_package_json)` a signing session
 /// uses for `policy_id`, consistently across sign_step1 and sign_step2:
-/// - `"evtxo:<spk_hex>"` -> the cosigner's `V′` counter-share for `recipient_vk`
+/// - `"evtxo:<spk_hex>"` -> the cosigner's `V′` counter-share for `recipient_verifying_key`
 ///   (the user or the service) in that contract (contract-gated, pairing-specific),
 /// - empty / unknown -> the normal policy.
 /// A contract spend by an unknown recipient falls through to the normal key, which
@@ -126,15 +126,12 @@ pub fn build_signing_package_json(
 pub fn resolve_signing_key(
     policy_state: &PolicyState,
     policy_id: &str,
-    recipient_vk: &str,
+    recipient_verifying_key: &str,
 ) -> (String, String) {
     if let Some(spk_hex) = policy_id.strip_prefix("evtxo:") {
         if let Some(cp) = policy_state.contracts.get(spk_hex) {
-            if let Some(cs) = cp.share_for(recipient_vk) {
-                return (
-                    cs.key_package_json.clone(),
-                    cs.public_key_package_json.clone(),
-                );
+            if let Some(cs) = cp.share_for(recipient_verifying_key) {
+                return (cs.key_package.to_json(), cs.public_key_package.to_json());
             }
         }
     }
@@ -146,8 +143,8 @@ pub fn resolve_signing_key(
 
 /// Parse a JSON object of string-wrapped values into a HashMap.
 pub fn parse_json_string_map(json: &str) -> Result<HashMap<String, String>, Status> {
-    let v: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| Status::internal(format!("bad JSON: {e}")))?;
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| Status::internal(format!("bad JSON: {e}")))?;
     let obj = v
         .as_object()
         .ok_or_else(|| Status::internal("expected JSON object"))?;

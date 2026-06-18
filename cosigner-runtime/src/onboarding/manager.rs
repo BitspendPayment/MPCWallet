@@ -1,8 +1,8 @@
-//! `DkgCoordinator` — process-global owner of in-flight DKG ceremonies.
+//! `OnboardingManager` — process-global owner of in-flight Onboarding ceremonies.
 //!
-//! - One `DkgSession` per `user_id_hex`, wrapped in a `parking_lot::Mutex`
+//! - One `OnboardingSession` per `user_id_hex`, wrapped in a `parking_lot::Mutex`
 //!   inside a `DashMap`.
-//! - DKG computations are sub-millisecond pure-Rust (no WASM); the lock is
+//! - Onboarding computations are sub-millisecond pure-Rust (no WASM); the lock is
 //!   never held across `await`, so we don't need `spawn_blocking`.
 //! - Sessions are evicted by a background sweep after `ttl` of inactivity,
 //!   or removed immediately when step3 finalizes.
@@ -22,19 +22,21 @@ use crate::wallet_proto::{
     DkgStep3Response,
 };
 
-use super::handlers::{self, drain_pairs_with_err, drain_with_err};
-use super::session::DkgSession;
+use crate::ceremony::{drain_pairs_with_err, drain_with_err};
+
+use super::handlers;
+use super::session::OnboardingSession;
 
 const EVICTION_TICK: Duration = Duration::from_secs(30);
-const EVICT_MSG: &str = "dkg session evicted: restart from step1";
+const EVICT_MSG: &str = "onboarding session evicted: restart from step1";
 
-pub struct DkgCoordinator {
-    sessions: DashMap<String, Arc<Mutex<DkgSession>>>,
+pub struct OnboardingManager {
+    sessions: DashMap<String, Arc<Mutex<OnboardingSession>>>,
     shared: Arc<SharedServices>,
     ttl: Duration,
 }
 
-impl DkgCoordinator {
+impl OnboardingManager {
     pub fn new(shared: Arc<SharedServices>, ttl: Duration) -> Arc<Self> {
         Arc::new(Self {
             sessions: DashMap::new(),
@@ -47,21 +49,21 @@ impl DkgCoordinator {
         self.sessions.len()
     }
 
-    fn get_or_create(&self, user_id: &str) -> Arc<Mutex<DkgSession>> {
+    fn get_or_create(&self, user_id: &str) -> Arc<Mutex<OnboardingSession>> {
         self.sessions
             .entry(user_id.to_string())
             .or_insert_with(|| {
                 tracing::info!(
                     user_id = %user_id,
-                    dkg_session_event = "created",
-                    "DKG session created"
+                    onboarding_session_event = "created",
+                    "onboarding session created"
                 );
-                Arc::new(Mutex::new(DkgSession::new(user_id.to_string())))
+                Arc::new(Mutex::new(OnboardingSession::new(user_id.to_string())))
             })
             .clone()
     }
 
-    pub async fn dkg_step1(
+    pub async fn onboarding_step1(
         self: &Arc<Self>,
         user_id: &str,
         req: DkgStep1Request,
@@ -70,13 +72,13 @@ impl DkgCoordinator {
         let sess = self.get_or_create(user_id);
         {
             let mut guard = sess.lock();
-            handlers::dkg_step1(&mut guard, &self.shared, req, tx);
+            handlers::onboarding_step1(&mut guard, &self.shared, req, tx);
         }
         rx.await
-            .map_err(|_| Status::internal("dkg session dropped reply"))?
+            .map_err(|_| Status::internal("onboarding session dropped reply"))?
     }
 
-    pub async fn dkg_step2(
+    pub async fn onboarding_step2(
         self: &Arc<Self>,
         user_id: &str,
         req: DkgStep2Request,
@@ -89,13 +91,13 @@ impl DkgCoordinator {
         let (tx, rx) = oneshot::channel();
         {
             let mut guard = sess.lock();
-            handlers::dkg_step2(&mut guard, &self.shared, req, tx);
+            handlers::onboarding_step2(&mut guard, &self.shared, req, tx);
         }
         rx.await
-            .map_err(|_| Status::internal("dkg session dropped reply"))?
+            .map_err(|_| Status::internal("onboarding session dropped reply"))?
     }
 
-    pub async fn dkg_step3(
+    pub async fn onboarding_step3(
         self: &Arc<Self>,
         user_id: &str,
         req: DkgStep3Request,
@@ -108,18 +110,18 @@ impl DkgCoordinator {
         let (tx, rx) = oneshot::channel();
         let finalized = {
             let mut guard = sess.lock();
-            handlers::dkg_step3(&mut guard, &self.shared, req, tx)
+            handlers::onboarding_step3(&mut guard, &self.shared, req, tx)
         };
         if finalized {
             self.sessions.remove(user_id);
             tracing::info!(
                 user_id = %user_id,
-                dkg_session_event = "completed",
-                "DKG session completed"
+                onboarding_session_event = "completed",
+                "onboarding session completed"
             );
         }
         rx.await
-            .map_err(|_| Status::internal("dkg session dropped reply"))?
+            .map_err(|_| Status::internal("onboarding session dropped reply"))?
     }
 
     /// Run one eviction sweep: remove and drain any session whose
@@ -145,12 +147,11 @@ impl DkgCoordinator {
             if let Some((_, sess_arc)) = self.sessions.remove(uid) {
                 let mut s = sess_arc.lock();
                 drain_with_err(&mut s.pending_step1, EVICT_MSG);
-                drain_with_err(&mut s.pending_step2, EVICT_MSG);
                 drain_pairs_with_err(&mut s.pending_step3, EVICT_MSG);
                 tracing::info!(
                     user_id = %uid,
-                    dkg_session_event = "evicted",
-                    "DKG session evicted"
+                    onboarding_session_event = "evicted",
+                    "onboarding session evicted"
                 );
             }
         }

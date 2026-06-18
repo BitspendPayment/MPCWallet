@@ -10,14 +10,14 @@ use crate::auth::message::{
     OP_CHECK_BOARDING_BALANCE, OP_GET_ARK_ADDRESS, OP_GET_ARK_INFO, OP_GET_BOARDING_ADDRESS,
     OP_LIST_ARK_TXS, OP_LIST_VTXOS,
 };
-use crate::shared::SharedServices;
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::handle::CosignerHandle;
-use crate::cosigner::registry::CosignerRegistry;
-use crate::cosigner::state::CosignerState;
-use crate::wallet_proto::*;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::registry::CosignerInstance;
+use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::state::CosignerState;
+use crate::shared::SharedServices;
+use crate::wallet_proto::*;
 
 use super::helpers::{auth_check, get_user_xonly_pubkey};
 
@@ -99,7 +99,10 @@ fn register_user_scripts(
     };
 
     let mut scripts = Vec::new();
-    for exit_delay in [info.unilateral_exit_delay as u32, info.boarding_exit_delay as u32] {
+    for exit_delay in [
+        info.unilateral_exit_delay as u32,
+        info.boarding_exit_delay as u32,
+    ] {
         if let Ok(script_hex) = ark::client::vtxo_script_pubkey_hex(
             owner_pk_hex,
             &info.signer_pubkey,
@@ -107,7 +110,10 @@ fn register_user_scripts(
             network,
         ) {
             registry.set_script_owner(&script_hex, user_id_hex);
-            if let Err(e) = shared.persistence.put("ark_script_to_user", &script_hex, user_id_hex) {
+            if let Err(e) = shared
+                .persistence
+                .put("ark_script_to_user", &script_hex, user_id_hex)
+            {
                 tracing::warn!("persist ark_script_to_user/{script_hex} failed: {e}");
             }
             scripts.push(script_hex);
@@ -157,8 +163,14 @@ fn register_user_scripts(
     let info_clone = info.clone();
     let user_id_owned = user_id_hex.to_string();
     rt.spawn(async move {
-        run_indexer_subscription(user_id_owned, subscription_id, asp_url, info_clone, user_handle)
-            .await;
+        run_indexer_subscription(
+            user_id_owned,
+            subscription_id,
+            asp_url,
+            info_clone,
+            user_handle,
+        )
+        .await;
     });
 }
 
@@ -361,9 +373,7 @@ pub fn check_boarding_balance(
 
     let balance: u64 = utxos.iter().map(|u| u.amount_sats as u64).sum();
     let utxo_count = utxos.len() as u32;
-    tracing::info!(
-        "[{user_id_hex}] CheckBoardingBalance: {utxo_count} UTXOs, balance={balance}"
-    );
+    tracing::info!("[{user_id_hex}] CheckBoardingBalance: {utxo_count} UTXOs, balance={balance}");
     Ok(CheckBoardingBalanceResponse {
         balance,
         utxo_count,

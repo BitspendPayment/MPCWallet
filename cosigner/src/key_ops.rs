@@ -1,4 +1,4 @@
-//! Key package operations (tweak, even Y normalization).
+//! Key package operations (taproot tweak).
 
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 
@@ -21,14 +21,4 @@ pub fn pub_key_package_tweak(
     let pkp = PublicKeyPackage::from_json(&pkp_json).map_err(convert::to_serde_error)?;
     let tweaked = pkp.tweak(merkle_root.as_deref());
     Ok(tweaked.to_json())
-}
-
-pub fn key_package_into_even_y(kp_json: String) -> Result<String, ThresholdError> {
-    let kp = KeyPackage::from_json(&kp_json).map_err(convert::to_serde_error)?;
-    Ok(kp.into_even_y().to_json())
-}
-
-pub fn pub_key_package_into_even_y(pkp_json: String) -> Result<String, ThresholdError> {
-    let pkp = PublicKeyPackage::from_json(&pkp_json).map_err(convert::to_serde_error)?;
-    Ok(pkp.into_even_y().to_json())
 }

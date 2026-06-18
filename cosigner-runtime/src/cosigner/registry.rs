@@ -69,6 +69,10 @@ impl CosignerRegistry {
         let component = Component::from_file(&engine, wasm_path)?;
         let mut linker = Linker::new(&engine);
         wasmtime_wasi::add_to_linker_sync(&mut linker)?;
+        component::threshold::contract_gate::add_to_linker(
+            &mut linker,
+            |v: &mut CosignerWasiView| v,
+        )?;
 
         Ok(Arc::new(Self {
             engine,
@@ -152,9 +156,7 @@ impl CosignerRegistry {
                             fresh_state.delegate_session =
                                 Some(crate::cosigner::state::DelegateRecord {
                                     session,
-                                    covered_outpoints: persisted_record
-                                        .covered_outpoints
-                                        .clone(),
+                                    covered_outpoints: persisted_record.covered_outpoints.clone(),
                                     earliest_expires_at: persisted_record.earliest_expires_at,
                                     // Rehydrated records carry signed
                                     // sighashes already — the bypass must
@@ -267,20 +269,15 @@ impl CosignerRegistry {
     /// WASM instance without losing the actor's `CosignerState`.
     pub(crate) fn new_user_instance(&self) -> Result<CosignerInstance, Box<dyn std::error::Error>> {
         let wasi_ctx = WasiCtxBuilder::new().inherit_stdio().build();
-        let view = CosignerWasiView::new(ResourceTable::new(), wasi_ctx);
+        let view = CosignerWasiView::new(ResourceTable::new(), wasi_ctx, self.shared.clone());
         let mut store = Store::new(&self.engine, view);
         let bindings = ThresholdWorld::instantiate(&mut store, &self.component, &self.linker)?;
         let iface = bindings.component_threshold_types();
-        let session = iface.threshold_session().call_constructor(&mut store)?;
+        let session = iface.session().call_constructor(&mut store)?;
         Ok(CosignerInstance {
             store,
             bindings,
             session: Some(session),
-            round1_secret: None,
-            round2_secret: None,
-            signing_nonce: None,
-            signing_session: None,
-            refresh_session: None,
             script_path_spend: false,
             policy_state: None,
             utxo_state: None,
@@ -356,11 +353,20 @@ wasmtime::component::bindgen!({
 pub struct CosignerWasiView {
     table: ResourceTable,
     ctx: WasiCtx,
+    shared: Arc<SharedServices>,
+    /// Full transaction of the spend currently being signed. The host stashes it
+    /// before the guest computes its share; the `contract-gate` import reads it.
+    pub current_full_tx: Option<Vec<u8>>,
 }
 
 impl CosignerWasiView {
-    pub fn new(table: ResourceTable, ctx: WasiCtx) -> Self {
-        Self { table, ctx }
+    pub fn new(table: ResourceTable, ctx: WasiCtx, shared: Arc<SharedServices>) -> Self {
+        Self {
+            table,
+            ctx,
+            shared,
+            current_full_tx: None,
+        }
     }
 }
 
@@ -373,6 +379,16 @@ impl WasiView for CosignerWasiView {
     }
 }
 
+// Host-side implementation of the `contract-gate` capability the guest imports:
+// evaluate the contract bound to the stashed spend in the isolated ContractEngine.
+impl component::threshold::contract_gate::Host for CosignerWasiView {
+    fn enforce(&mut self) -> Result<(), String> {
+        let tx = self.current_full_tx.clone().unwrap_or_default();
+        super::handlers::contract_gate::enforce_contracts(&self.shared, &tx)
+            .map_err(|s| s.message().to_string())
+    }
+}
+
 /// Per-cosigner WASM instance. All threshold-crypto state lives in WASM
 /// linear memory as `ResourceAny` handles; only persistent host state
 /// (policy, UTXOs) is mirrored on the host.
@@ -380,21 +396,338 @@ pub struct CosignerInstance {
     pub store: Store<CosignerWasiView>,
     pub bindings: ThresholdWorld,
 
+    /// The `session` resource handle: the in-progress signing ceremony state
+    /// (commitments, shares, message, the single-use nonce) plus the signing ops.
+    /// Created once at instantiation; `reset` clears it per signing round.
     pub session: Option<ResourceAny>,
-    /// Round1 secret handle, lives between refresh steps.
-    pub round1_secret: Option<ResourceAny>,
-    /// Round2 secret handle, lives between refresh steps.
-    pub round2_secret: Option<ResourceAny>,
-    /// Signing nonce handle, lives between sign step1 and step2.
-    pub signing_nonce: Option<ResourceAny>,
-    pub signing_session: Option<ResourceAny>,
-    pub refresh_session: Option<ResourceAny>,
 
     /// True when the current signing session uses script-path (no tweak).
     pub script_path_spend: bool,
 
     pub policy_state: Option<PolicyState>,
     pub utxo_state: Option<UtxoState>,
+}
+
+/// A WASM threshold error rendered as a string.
+fn threshold_err_to_string(e: &exports::component::threshold::types::ThresholdError) -> String {
+    use exports::component::threshold::types::ThresholdError;
+    match e {
+        ThresholdError::InvalidInput(msg) => format!("invalid input: {msg}"),
+        ThresholdError::CryptoError(msg) => format!("crypto error: {msg}"),
+        ThresholdError::SerializationError(msg) => format!("serialization error: {msg}"),
+    }
+}
+
+/// Threshold *signing* operations dispatched into the cosigner WASM guest's single
+/// `session` resource. Each fetches the session handle, calls the bindgen export, and
+/// flattens the wasmtime trap + `ThresholdError` results into a `String`. (Onboarding
+/// and contract creation run native-Rust, so only signing hits the guest.)
+impl CosignerInstance {
+    /// Generate the session's single-use signing nonce; the nonce is stored inside the
+    /// guest session, so [`Self::frost_sign`] takes no nonce arg. Returns commitments JSON.
+    pub fn new_nonce(&mut self, secret_hex: &str) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_new_nonce(&mut self.store, session, secret_hex)
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    pub fn frost_sign(
+        &mut self,
+        signing_package_json: &str,
+        key_package_json: &str,
+    ) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_frost_sign(&mut self.store, session, signing_package_json, key_package_json)
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    pub fn frost_aggregate(
+        &mut self,
+        signing_package_json: &str,
+        shares_json: &str,
+        public_key_package_json: &str,
+    ) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_frost_aggregate(
+                &mut self.store,
+                session,
+                signing_package_json,
+                shares_json,
+                public_key_package_json,
+            )
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    pub fn key_package_tweak(
+        &mut self,
+        kp_json: &str,
+        merkle_root: Option<&[u8]>,
+    ) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_key_package_tweak(&mut self.store, session, kp_json, merkle_root)
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    pub fn pub_key_package_tweak(
+        &mut self,
+        pkp_json: &str,
+        merkle_root: Option<&[u8]>,
+    ) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_pub_key_package_tweak(&mut self.store, session, pkp_json, merkle_root)
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    pub fn identifier_derive(&mut self, message: &[u8]) -> Result<String, String> {
+        let session = self.session.ok_or("no session")?;
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_identifier_derive(&mut self.store, session, message)
+            .map_err(|e| e.to_string())?
+            .map_err(|e| threshold_err_to_string(&e))
+    }
+
+    // ----- session state accessors (the one session created at instantiation) -----
+
+    pub fn signing_session_reset(&mut self, h: ResourceAny) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_reset(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_user_hiding_hex(
+        &mut self,
+        h: ResourceAny,
+        hex: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_user_hiding_hex(&mut self.store, h, hex)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_user_hiding_hex(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_user_hiding_hex(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_user_binding_hex(
+        &mut self,
+        h: ResourceAny,
+        hex: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_user_binding_hex(&mut self.store, h, hex)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_user_binding_hex(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_user_binding_hex(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_message_to_sign(
+        &mut self,
+        h: ResourceAny,
+        msg_hex: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_message_to_sign(&mut self.store, h, msg_hex)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_message_to_sign(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_message_to_sign(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_has_message(&mut self, h: ResourceAny) -> Result<bool, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_has_message(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_server_commitments_json(
+        &mut self,
+        h: ResourceAny,
+        json: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_server_commitments_json(&mut self.store, h, json)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_server_commitments_json(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_server_commitments_json(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_has_server_commitments(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<bool, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_has_server_commitments(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_insert_commitment(
+        &mut self,
+        h: ResourceAny,
+        id_hex: &str,
+        commitments_json: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_insert_commitment(&mut self.store, h, id_hex, commitments_json)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_commitments_json(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_commitments_json(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_insert_share(
+        &mut self,
+        h: ResourceAny,
+        id_hex: &str,
+        share_hex: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_insert_share(&mut self.store, h, id_hex, share_hex)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_has_share(
+        &mut self,
+        h: ResourceAny,
+        id_hex: &str,
+    ) -> Result<bool, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_has_share(&mut self.store, h, id_hex)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_share_count(&mut self, h: ResourceAny) -> Result<u32, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_share_count(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_shares_json(&mut self, h: ResourceAny) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_shares_json(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_current_policy_id(
+        &mut self,
+        h: ResourceAny,
+        id: &str,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_current_policy_id(&mut self.store, h, id)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_get_current_policy_id(
+        &mut self,
+        h: ResourceAny,
+    ) -> Result<String, String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_get_current_policy_id(&mut self.store, h)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn signing_session_set_pending_amount(
+        &mut self,
+        h: ResourceAny,
+        amount: i64,
+    ) -> Result<(), String> {
+        let iface = self.bindings.component_threshold_types();
+        iface
+            .session()
+            .call_set_pending_amount(&mut self.store, h, amount)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Lock `user` and `state` inside `spawn_blocking`, run `f`, return the typed
@@ -538,7 +871,9 @@ async fn dispatch_one(
         CosignerCommand::Shutdown => {
             // Already filtered out by run_cosigner; reaching this arm would be a
             // bug. Logging it makes it visible without panicking.
-            tracing::error!("dispatch_one received Shutdown; expected to be filtered by run_cosigner");
+            tracing::error!(
+                "dispatch_one received Shutdown; expected to be filtered by run_cosigner"
+            );
         }
 
         // -------- Signing --------

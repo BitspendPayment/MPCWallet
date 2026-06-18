@@ -140,4 +140,3 @@ pub fn derive_script_hash(script_hex: &str) -> Result<String, String> {
 
     Ok(hex::encode(&reversed))
 }
-

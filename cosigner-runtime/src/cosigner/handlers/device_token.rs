@@ -6,8 +6,8 @@ use tonic::Status;
 
 use crate::auth::message::OP_REGISTER_DEVICE_TOKEN;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::state::{CosignerState, DeviceToken};
 use crate::cosigner::registry::CosignerInstance;
+use crate::cosigner::state::{CosignerState, DeviceToken};
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
 

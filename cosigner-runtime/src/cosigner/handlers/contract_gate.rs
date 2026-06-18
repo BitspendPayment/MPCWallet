@@ -1,65 +1,65 @@
 //! Off-chain contract gate. Before the cosigner co-signs a spend, run any
-//! contract bound to an eVTXO input and refuse to sign (no FROST share produced)
+//! contract bound to an contract input and refuse to sign (no FROST share produced)
 //! on a `Deny` verdict. A wasm guest cannot instantiate wasm, so this runs in
 //! the native host and gates the signature — analogous to the spending-policy
 //! check, just richer.
 //!
 //! Which contract governs an input is resolved from host storage: the
-//! `evtxo_contract` tree maps an eVTXO scriptPubKey (hex) -> contract_id (hex),
-//! populated when the eVTXO address is created. The eVTXO's cooperative leaf is
+//! `evtxo_contract` tree maps a contract scriptPubKey (hex) -> contract_id (hex),
+//! populated when the contract address is created. The contract's cooperative leaf is
 //! keyed by the 2-of-2 contract key V′, so the cosigner is a mandatory signer and
 //! this gate runs on every cooperative spend; the contract binding is off-chain
 //! (this map), not an on-chain commitment.
 
 use tonic::Status;
 
-use crate::contract::{crypto_host, ContractHost, Verdict};
 use crate::bitcoin::tx_parser;
+use crate::contract::{crypto_host, ContractHost, Verdict};
 use crate::persistence::{KvStore, PersistenceError};
 use crate::shared::SharedServices;
 
-/// Persistence tree: eVTXO scriptPubKey (hex) -> contract_id (hex).
-pub const EVTXO_CONTRACT_TREE: &str = "evtxo_contract";
+/// Persistence tree: contract scriptPubKey (hex) -> contract_id (hex).
+pub const CONTRACT_SPK_TREE: &str = "evtxo_contract";
 
-/// Register the contract bound to an eVTXO output. Called when an eVTXO address
+/// Register the contract bound to an contract output. Called when an contract address
 /// is created (alongside generating its V′ key) so the gate can resolve
 /// `contract_id` at spend time from the input's scriptPubKey.
-pub fn register_evtxo_contract(
+pub fn register_contract_spk(
     persistence: &dyn KvStore,
-    evtxo_script_pubkey: &[u8],
+    contract_script_pubkey: &[u8],
     contract_id: &[u8; 32],
 ) -> Result<(), PersistenceError> {
     persistence.put(
-        EVTXO_CONTRACT_TREE,
-        &hex::encode(evtxo_script_pubkey),
+        CONTRACT_SPK_TREE,
+        &hex::encode(contract_script_pubkey),
         &hex::encode(contract_id),
     )
 }
 
-/// Derive an eVTXO's scriptPubKey from its keys (split-key tree: cooperative
-/// leaf = `server_pk` + `evtxo_pk` = V′, exit leaf = `owner_pk` = main V) and
+/// Derive an contract's scriptPubKey from its keys (split-key tree: cooperative
+/// leaf = `server_pk` + `contract_pk` = V′, exit leaf = `owner_pk` = main V) and
 /// register the governing contract under it. Returns the 34-byte spk. Called
-/// when an eVTXO address is created (after resharing yields V′). `*_xonly_hex`
+/// when an contract address is created (after resharing yields V′). `*_xonly_hex`
 /// are 64-char x-only hex.
-pub fn register_evtxo(
+pub fn register_contract(
     persistence: &dyn KvStore,
     server_pk_xonly_hex: &str,
-    evtxo_pk_xonly_hex: &str,
+    contract_pk_xonly_hex: &str,
     owner_pk_xonly_hex: &str,
     exit_delay: u32,
     contract_id: &[u8; 32],
 ) -> Result<Vec<u8>, Status> {
     let server = decode_xonly(server_pk_xonly_hex)?;
-    let evtxo = decode_xonly(evtxo_pk_xonly_hex)?;
+    let contract_pk = decode_xonly(contract_pk_xonly_hex)?;
     let owner = decode_xonly(owner_pk_xonly_hex)?;
     // On-chain commitment to the contract: commit = sha256(contract_id),
     // contract_id = sha256(component_wasm). The cooperative leaf hashlocks on it.
     let mut commit = [0u8; 32];
     commit.copy_from_slice(&crypto_host::sha256(contract_id));
-    let spk = ark::evtxo_script_pubkey(&commit, &server, &evtxo, &owner, exit_delay)
-        .map_err(|e| Status::internal(format!("eVTXO script pubkey: {e:?}")))?;
-    register_evtxo_contract(persistence, &spk, contract_id)
-        .map_err(|e| Status::internal(format!("register eVTXO contract: {e}")))?;
+    let spk = ark::evtxo_script_pubkey(&commit, &server, &contract_pk, &owner, exit_delay)
+        .map_err(|e| Status::internal(format!("contract script pubkey: {e:?}")))?;
+    register_contract_spk(persistence, &spk, contract_id)
+        .map_err(|e| Status::internal(format!("register contract contract: {e}")))?;
     Ok(spk.to_vec())
 }
 
@@ -74,10 +74,10 @@ fn decode_xonly(hex_str: &str) -> Result<[u8; 32], Status> {
     Ok(a)
 }
 
-/// If the spend touches a registered eVTXO (matched by an input's
-/// scriptPubKey), return that eVTXO's spk hex — the key into `evtxo_policies`.
+/// If the spend touches a registered contract (matched by an input's
+/// scriptPubKey), return that contract's spk hex — the key into the contract policies.
 /// `sign_step1` uses it to select the V′ key and mark the signing session.
-pub fn detect_evtxo_spend(
+pub fn detect_contract_spend(
     policy_state: &crate::policy::PolicyState,
     full_transaction: &[u8],
 ) -> Option<String> {
@@ -125,21 +125,21 @@ pub(crate) fn enforce(
         .collect();
 
     for (idx, input) in psbt.inputs.iter().enumerate() {
-        // Detect an eVTXO by its scriptPubKey: the cosigner co-signs the
-        // cooperative (V′) leaf, so any spend of a registered eVTXO that reaches
-        // the cosigner runs that eVTXO's contract. (Unilateral exit on the main
+        // Detect an contract by its scriptPubKey: the cosigner co-signs the
+        // cooperative (V′) leaf, so any spend of a registered contract that reaches
+        // the cosigner runs that contract's contract. (Unilateral exit on the main
         // key V doesn't involve the cosigner, so it isn't gated here.)
         let Some(utxo) = input.witness_utxo.as_ref() else {
             continue;
         };
         let spk_hex = hex::encode(utxo.script_pubkey.as_bytes());
-        let contract_id = match persistence.get(EVTXO_CONTRACT_TREE, &spk_hex) {
+        let contract_id = match persistence.get(CONTRACT_SPK_TREE, &spk_hex) {
             Ok(Some(cid_hex)) => decode_id(&cid_hex),
-            _ => continue, // not a registered eVTXO — out of scope for the gate
+            _ => continue, // not a registered contract — out of scope for the gate
         };
         let Some(contract_id) = contract_id else {
             return Err(Status::internal(format!(
-                "corrupt contract registration for eVTXO {spk_hex}"
+                "corrupt contract registration for contract {spk_hex}"
             )));
         };
 
@@ -179,7 +179,12 @@ mod tests {
     struct MemStore(Mutex<HashMap<String, String>>);
     impl KvStore for MemStore {
         fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
-            Ok(self.0.lock().unwrap().get(&format!("{tree}/{key}")).cloned())
+            Ok(self
+                .0
+                .lock()
+                .unwrap()
+                .get(&format!("{tree}/{key}"))
+                .cloned())
         }
         fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
             self.0
@@ -210,10 +215,10 @@ mod tests {
         })
     }
 
-    /// A real eVTXO scriptPubKey (commit + cooperative=V′, exit=V).
-    fn evtxo_spk() -> bitcoin::ScriptBuf {
-        let spk =
-            ark::evtxo_script_pubkey(&[0x44; 32], &[0x11; 32], &[0x22; 32], &[0x33; 32], 144).unwrap();
+    /// A real contract scriptPubKey (commit + cooperative=V′, exit=V).
+    fn contract_spk() -> bitcoin::ScriptBuf {
+        let spk = ark::evtxo_script_pubkey(&[0x44; 32], &[0x11; 32], &[0x22; 32], &[0x33; 32], 144)
+            .unwrap();
         bitcoin::ScriptBuf::from_bytes(spk.to_vec())
     }
 
@@ -288,8 +293,8 @@ mod tests {
     fn gate_allows_under_and_denies_over() {
         let (host, id) = host_with_example();
         let store = MemStore::default();
-        let spk = evtxo_spk();
-        register_evtxo_contract(&store, spk.as_bytes(), &id).unwrap();
+        let spk = contract_spk();
+        register_contract_spk(&store, spk.as_bytes(), &id).unwrap();
 
         // Under the 100_000-sat limit → allowed.
         assert!(enforce(&store, &host, &psbt_spending(&spk, 50_000)).is_ok());
@@ -305,11 +310,11 @@ mod tests {
 
     #[test]
     fn gate_noop_for_unregistered_spk() {
-        // A spend whose scriptPubKey isn't a registered eVTXO is never gated,
+        // A spend whose scriptPubKey isn't a registered contract is never gated,
         // even over-limit (it's a normal VTXO the cosigner signs as today).
         let (host, _id) = host_with_example();
         let store = MemStore::default(); // nothing registered
-        assert!(enforce(&store, &host, &psbt_spending(&evtxo_spk(), 200_000)).is_ok());
+        assert!(enforce(&store, &host, &psbt_spending(&contract_spk(), 200_000)).is_ok());
     }
 
     #[test]
@@ -317,27 +322,38 @@ mod tests {
         // oracle-gate allows only when args == b"ORACLE-OK" AND total ≤ limit.
         let (host, id) = host_with_oracle();
         let store = MemStore::default();
-        let spk = evtxo_spk();
-        register_evtxo_contract(&store, spk.as_bytes(), &id).unwrap();
+        let spk = contract_spk();
+        register_contract_spk(&store, spk.as_bytes(), &id).unwrap();
 
         // Good arg + within limit → allowed.
-        assert!(
-            enforce(&store, &host, &psbt_spending_with_args(&spk, 50_000, b"ORACLE-OK")).is_ok()
-        );
+        assert!(enforce(
+            &store,
+            &host,
+            &psbt_spending_with_args(&spk, 50_000, b"ORACLE-OK")
+        )
+        .is_ok());
 
         // Good arg + over limit → denied on the amount check.
         assert_eq!(
-            enforce(&store, &host, &psbt_spending_with_args(&spk, 200_000, b"ORACLE-OK"))
-                .unwrap_err()
-                .code(),
+            enforce(
+                &store,
+                &host,
+                &psbt_spending_with_args(&spk, 200_000, b"ORACLE-OK")
+            )
+            .unwrap_err()
+            .code(),
             tonic::Code::PermissionDenied
         );
 
         // Bad arg + within limit → denied on the arg check.
         assert_eq!(
-            enforce(&store, &host, &psbt_spending_with_args(&spk, 50_000, b"WRONG"))
-                .unwrap_err()
-                .code(),
+            enforce(
+                &store,
+                &host,
+                &psbt_spending_with_args(&spk, 50_000, b"WRONG")
+            )
+            .unwrap_err()
+            .code(),
             tonic::Code::PermissionDenied
         );
 
@@ -351,12 +367,19 @@ mod tests {
     }
 
     #[test]
-    fn register_evtxo_derives_spk_and_gates() {
+    fn register_contract_derives_spk_and_gates() {
         let (host, id) = host_with_example();
         let store = MemStore::default();
-        // x-only hex for server_pk, V′ (evtxo), V (owner).
-        let spk = register_evtxo(&store, &"11".repeat(32), &"22".repeat(32), &"33".repeat(32), 144, &id)
-            .unwrap();
+        // x-only hex for server_pk, V′ (contract_pk), V (owner).
+        let spk = register_contract(
+            &store,
+            &"11".repeat(32),
+            &"22".repeat(32),
+            &"33".repeat(32),
+            144,
+            &id,
+        )
+        .unwrap();
 
         // Matches the ark derivation (commit = sha256(contract_id)).
         let mut commit = [0u8; 32];

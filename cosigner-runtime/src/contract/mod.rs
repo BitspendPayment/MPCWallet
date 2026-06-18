@@ -3,12 +3,15 @@
 //! Bitcoin transaction for full introspection, and returns the allow/deny
 //! verdict that gates the cosigner's FROST signature share.
 
-pub mod create;
 pub mod crypto_host;
 mod engine;
+mod handler;
+pub mod manager;
 mod registry;
+pub mod session;
 
-pub use create::ContractCreateCoordinator;
+pub use manager::ContractManager;
+pub use session::ContractSession;
 
 pub use engine::{
     ContractEngine, EvalContext, Outpoint, PrevoutInfo, Transaction, Txin, Txout, Verdict,

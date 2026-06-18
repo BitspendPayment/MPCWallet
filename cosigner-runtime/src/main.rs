@@ -3,8 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, contract, cosigner, onboarding, fcm_client, persistence, rest_api,
-    shared, telemetry, vtxo_stream,
+    bitcoin, config, contract, cosigner, fcm_client, onboarding, persistence, rest_api, shared,
+    telemetry, vtxo_stream,
 };
 
 #[derive(Parser)]
@@ -229,9 +229,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let candidates = match persistence_clone.get_all("delegate_sessions") {
                     Ok(rows) => rows,
                     Err(e) => {
-                        tracing::warn!(
-                            "auto-settle tick: get_all delegate_sessions failed: {e}"
-                        );
+                        tracing::warn!("auto-settle tick: get_all delegate_sessions failed: {e}");
                         continue;
                     }
                 };
@@ -250,9 +248,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                     };
-                    if let Err(e) =
-                        handle.try_send(cosigner::CosignerCommand::TickAutoSettle)
-                    {
+                    if let Err(e) = handle.try_send(cosigner::CosignerCommand::TickAutoSettle) {
                         tracing::debug!("auto-settle tick: skip {user_id}: {e}");
                     }
                 }
@@ -290,9 +286,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TTL. Spawned independently of the per-user registry — the post-DKG
     // actor is lazy-spawned by the first sign/ark/refresh/policy call.
     let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
-    let dkg_coord = onboarding::DkgCoordinator::new(shared.clone(), dkg_ttl);
+    let onboarding_mgr = onboarding::OnboardingManager::new(shared.clone(), dkg_ttl);
     {
-        let coord = dkg_coord.clone();
+        let coord = onboarding_mgr.clone();
         tokio::spawn(async move {
             coord.run_eviction_loop().await;
         });
@@ -300,9 +296,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Contract-creation (reshare V→V′ + service refresh) coordinator — same
     // TTL/eviction model.
-    let contract_coord = contract::ContractCreateCoordinator::new(shared.clone(), dkg_ttl);
+    let contract_mgr = contract::ContractManager::new(shared.clone(), dkg_ttl);
     {
-        let coord = contract_coord.clone();
+        let coord = contract_mgr.clone();
         tokio::spawn(async move {
             coord.run_eviction_loop().await;
         });
@@ -317,8 +313,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let app_state = rest_api::AppState {
         registry: registry.clone(),
-        dkg_coordinator: dkg_coord.clone(),
-        contract_coordinator: contract_coord.clone(),
+        onboarding_manager: onboarding_mgr.clone(),
+        contract_manager: contract_mgr.clone(),
         server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
             bitcoin_network: cfg.bitcoin_network.clone(),
         }),

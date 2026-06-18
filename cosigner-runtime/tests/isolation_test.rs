@@ -1,7 +1,8 @@
 //! Integration test: verify per-user WASM isolation.
 //!
-//! Tests that two users get independent WASM instances with isolated memory.
-//! A DKG session started by user A does not leak state to user B.
+//! Tests that two users get independent WASM instances with isolated memory:
+//! deterministic ops match across instances while random ops differ, and dropping
+//! one instance leaves the other working.
 
 use std::path::PathBuf;
 
@@ -30,6 +31,14 @@ impl WasiView for TestWasiView {
     }
 }
 
+// The guest imports `contract-gate`; these isolation tests don't exercise it, so
+// satisfy the import with a no-op (always-allow) host impl.
+impl component::threshold::contract_gate::Host for TestWasiView {
+    fn enforce(&mut self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 fn wasm_path() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -54,7 +63,7 @@ fn create_instance(
 }
 
 #[test]
-fn test_basic_utils_work() {
+fn test_basic_session_ops() {
     let path = wasm_path();
     if !path.exists() {
         eprintln!(
@@ -70,66 +79,57 @@ fn test_basic_utils_work() {
     let component = Component::from_file(&engine, &path).unwrap();
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker).unwrap();
+    component::threshold::contract_gate::add_to_linker(&mut linker, |v: &mut TestWasiView| v)
+        .unwrap();
 
     let (mut store, bindings) = create_instance(&engine, &component, &linker);
-
-    // Create a session
     let iface = bindings.component_threshold_types();
-    let session = iface
-        .threshold_session()
-        .call_constructor(&mut store)
-        .unwrap();
+    let session = iface.session().call_constructor(&mut store).unwrap();
 
-    // Test mod_n_random: should return a 64-char hex string
-    let random_hex = iface
-        .threshold_session()
-        .call_mod_n_random(&mut store, session)
-        .unwrap()
-        .unwrap();
-    assert_eq!(random_hex.len(), 64, "mod_n_random should return 64-char hex");
-
-    // Two calls should return different values (with overwhelming probability)
-    let random_hex2 = iface
-        .threshold_session()
-        .call_mod_n_random(&mut store, session)
-        .unwrap()
-        .unwrap();
-    assert_ne!(random_hex, random_hex2, "two random scalars should differ");
-
-    // Test identifier_derive
+    // identifier_derive: deterministic, 64-char hex.
     let id_hex = iface
-        .threshold_session()
+        .session()
         .call_identifier_derive(&mut store, session, b"test-message")
         .unwrap()
         .unwrap();
     assert_eq!(id_hex.len(), 64, "identifier should be 64-char hex");
-
-    // Same input → same identifier
     let id_hex2 = iface
-        .threshold_session()
+        .session()
         .call_identifier_derive(&mut store, session, b"test-message")
         .unwrap()
         .unwrap();
     assert_eq!(id_hex, id_hex2, "same input should give same identifier");
 
-    // Test elem_base_mul with a known scalar
-    let point_hex = iface
-        .threshold_session()
-        .call_elem_base_mul(
-            &mut store,
-            session,
-            "0000000000000000000000000000000000000000000000000000000000000001",
-        )
+    // new_nonce: returns commitments JSON and stashes the single-use nonce internally.
+    let secret = "0000000000000000000000000000000000000000000000000000000000000001";
+    let comms1 = iface
+        .session()
+        .call_new_nonce(&mut store, session, secret)
         .unwrap()
         .unwrap();
-    // 1*G = generator point (compressed, starts with 02 or 03)
-    assert_eq!(point_hex.len(), 66, "compressed point should be 66-char hex");
-    assert!(
-        point_hex.starts_with("02") || point_hex.starts_with("03"),
-        "should be a valid compressed point"
+    assert!(comms1.contains("hiding") && comms1.contains("binding"));
+    let comms2 = iface
+        .session()
+        .call_new_nonce(&mut store, session, secret)
+        .unwrap()
+        .unwrap();
+    assert_ne!(comms1, comms2, "each nonce's commitments should be fresh/random");
+
+    // Ceremony-state round-trip.
+    iface
+        .session()
+        .call_set_message_to_sign(&mut store, session, "deadbeef")
+        .unwrap();
+    assert!(iface.session().call_has_message(&mut store, session).unwrap());
+    assert_eq!(
+        iface
+            .session()
+            .call_get_message_to_sign(&mut store, session)
+            .unwrap(),
+        "deadbeef"
     );
 
-    println!("Basic utils test passed!");
+    println!("Basic session ops test passed!");
 }
 
 #[test]
@@ -149,137 +149,60 @@ fn test_user_isolation() {
     let component = Component::from_file(&engine, &path).unwrap();
     let mut linker = Linker::new(&engine);
     wasmtime_wasi::add_to_linker_sync(&mut linker).unwrap();
+    component::threshold::contract_gate::add_to_linker(&mut linker, |v: &mut TestWasiView| v)
+        .unwrap();
 
-    // Create two independent instances (simulating two users)
+    // Two independent instances (simulating two users).
     let (mut store_a, bindings_a) = create_instance(&engine, &component, &linker);
     let (mut store_b, bindings_b) = create_instance(&engine, &component, &linker);
 
     let iface_a = bindings_a.component_threshold_types();
     let iface_b = bindings_b.component_threshold_types();
+    let session_a = iface_a.session().call_constructor(&mut store_a).unwrap();
+    let session_b = iface_b.session().call_constructor(&mut store_b).unwrap();
 
-    let session_a = iface_a
-        .threshold_session()
-        .call_constructor(&mut store_a)
-        .unwrap();
-    let session_b = iface_b
-        .threshold_session()
-        .call_constructor(&mut store_b)
-        .unwrap();
-
-    // Generate coefficients with the same seed in both instances
-    let seed = b"test-seed-for-coefficients";
-    let coeffs_a = iface_a
-        .threshold_session()
-        .call_generate_coefficients(&mut store_a, session_a, 1, seed)
+    // Deterministic op: same input → same output across instances (both work).
+    let id_a = iface_a
+        .session()
+        .call_identifier_derive(&mut store_a, session_a, b"x")
         .unwrap()
         .unwrap();
-    let coeffs_b = iface_b
-        .threshold_session()
-        .call_generate_coefficients(&mut store_b, session_b, 1, seed)
+    let id_b = iface_b
+        .session()
+        .call_identifier_derive(&mut store_b, session_b, b"x")
         .unwrap()
         .unwrap();
+    assert_eq!(id_a, id_b, "deterministic op must agree across instances");
 
-    // Same seed → same coefficients (deterministic), proving both instances work independently
-    assert_eq!(
-        coeffs_a, coeffs_b,
-        "same seed should produce same coefficients in both instances"
+    // Memory isolation: state set in A must NOT be visible in B.
+    iface_a
+        .session()
+        .call_set_message_to_sign(&mut store_a, session_a, "aabb")
+        .unwrap();
+    assert!(iface_a.session().call_has_message(&mut store_a, session_a).unwrap());
+    assert!(
+        !iface_b.session().call_has_message(&mut store_b, session_b).unwrap(),
+        "instance B must not see instance A's message"
     );
 
-    // Generate random values in each instance - they should differ
-    let rand_a = iface_a
-        .threshold_session()
-        .call_mod_n_random(&mut store_a, session_a)
+    // Random op: nonces from different instances differ.
+    let secret = "0000000000000000000000000000000000000000000000000000000000000001";
+    let comms_a = iface_a
+        .session()
+        .call_new_nonce(&mut store_a, session_a, secret)
         .unwrap()
         .unwrap();
-    let rand_b = iface_b
-        .threshold_session()
-        .call_mod_n_random(&mut store_b, session_b)
+    let comms_b = iface_b
+        .session()
+        .call_new_nonce(&mut store_b, session_b, secret)
         .unwrap()
         .unwrap();
-    assert_ne!(
-        rand_a, rand_b,
-        "random values from different instances should differ"
-    );
+    assert_ne!(comms_a, comms_b, "nonces from different instances should differ");
 
-    // Drop instance A - instance B should still work
+    // Drop instance A — instance B still works.
     drop(store_a);
     drop(bindings_a);
-
-    let rand_b2 = iface_b
-        .threshold_session()
-        .call_mod_n_random(&mut store_b, session_b)
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        rand_b2.len(),
-        64,
-        "instance B should still work after instance A is dropped"
-    );
+    assert!(iface_b.session().call_has_message(&mut store_b, session_b).unwrap() == false);
 
     println!("User isolation test passed!");
-}
-
-#[test]
-fn test_dkg_round_trip() {
-    let path = wasm_path();
-    if !path.exists() {
-        eprintln!(
-            "WASM component not found at {:?}. Run `make cosigner-build` first.",
-            path
-        );
-        return;
-    }
-
-    let mut config = Config::new();
-    config.wasm_component_model(true);
-    let engine = Engine::new(&config).unwrap();
-    let component = Component::from_file(&engine, &path).unwrap();
-    let mut linker = Linker::new(&engine);
-    wasmtime_wasi::add_to_linker_sync(&mut linker).unwrap();
-
-    // Create two instances (two DKG participants: dealer + receiver)
-    let (mut store_a, bindings_a) = create_instance(&engine, &component, &linker);
-
-    let iface_a = bindings_a.component_threshold_types();
-    let session_a = iface_a
-        .threshold_session()
-        .call_constructor(&mut store_a)
-        .unwrap();
-
-    // Generate a secret and coefficient for participant A
-    let secret_hex = iface_a
-        .threshold_session()
-        .call_mod_n_random(&mut store_a, session_a)
-        .unwrap()
-        .unwrap();
-    let coeffs_json = iface_a
-        .threshold_session()
-        .call_generate_coefficients(&mut store_a, session_a, 1, &[])
-        .unwrap()
-        .unwrap();
-
-    // DKG Part 1 - should succeed and return a round1 package + secret handle
-    let r1_result = iface_a
-        .threshold_session()
-        .call_dkg_part1(&mut store_a, session_a, 2, 2, &secret_hex, &coeffs_json)
-        .unwrap()
-        .unwrap();
-
-    // Verify round1 package is valid JSON
-    let r1_pkg: serde_json::Value =
-        serde_json::from_str(&r1_result.round1_package_json).unwrap();
-    assert!(
-        r1_pkg.get("commitment").is_some(),
-        "round1 package should have commitment"
-    );
-    assert!(
-        r1_pkg.get("proofOfKnowledge").is_some(),
-        "round1 package should have proofOfKnowledge"
-    );
-    assert!(
-        r1_pkg.get("verifyingKey").is_some(),
-        "round1 package should have verifyingKey"
-    );
-
-    println!("DKG round trip test passed (part 1)!");
 }

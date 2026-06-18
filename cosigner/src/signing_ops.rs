@@ -1,21 +1,21 @@
 //! FROST signing operations.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use rand::rngs::OsRng;
 use threshold::commitment::SigningPackage;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
-use threshold::nonce::{self, SigningCommitments};
+use threshold::nonce::{self, SigningCommitments, SigningNonce};
 use threshold::point;
 use threshold::scalar::scalar_to_bytes;
 use threshold::signing;
 
 use crate::exports::component::threshold::types::*;
 use crate::convert;
-use crate::SigningNonceState;
 
-pub fn new_nonce(secret_hex: String) -> Result<NonceOutput, ThresholdError> {
+/// Generate a fresh single-use signing nonce; returns its commitments JSON plus the
+/// secret nonce (the caller — the session — stores the nonce for `frost_sign`).
+pub fn new_nonce(secret_hex: String) -> Result<(String, SigningNonce), ThresholdError> {
     let secret = convert::parse_scalar_hex(&secret_hex).map_err(convert::to_input_error)?;
 
     let mut rng = OsRng;
@@ -24,31 +24,24 @@ pub fn new_nonce(secret_hex: String) -> Result<NonceOutput, ThresholdError> {
     let hiding = convert::hex_encode(&point::serialize_compressed(&nonce.commitments.hiding));
     let binding = convert::hex_encode(&point::serialize_compressed(&nonce.commitments.binding));
 
-    let data = serde_json::json!({
+    let commitments_json = serde_json::json!({
         "hiding": hiding,
         "binding": binding,
     })
     .to_string();
 
-    Ok(NonceOutput {
-        commitments_json: data,
-        nonce: SigningNonce::new(SigningNonceState {
-            inner: RefCell::new(Some(nonce)),
-        }),
-    })
+    Ok((commitments_json, nonce))
 }
 
 pub fn frost_sign(
     signing_package_json: String,
-    nonce: SigningNonce,
+    nonce: &SigningNonce,
     key_package_json: String,
 ) -> Result<String, ThresholdError> {
-    let nonce_state = nonce.get::<SigningNonceState>();
-    let signing_nonce = nonce_state
-        .inner
-        .borrow_mut()
-        .take()
-        .ok_or_else(|| ThresholdError::InvalidInput("signing-nonce already consumed".into()))?;
+    // Contract gate (host capability): the host evaluates the contract bound to
+    // the spend being signed, in its own sandbox, over the tx it holds for this
+    // session. Refuse to produce a share if it denies.
+    crate::component::threshold::contract_gate::enforce().map_err(ThresholdError::CryptoError)?;
 
     let signing_pkg =
         parse_signing_package_json(&signing_package_json).map_err(convert::to_serde_error)?;
@@ -56,7 +49,7 @@ pub fn frost_sign(
         KeyPackage::from_json(&key_package_json).map_err(convert::to_serde_error)?;
 
     let share =
-        signing::sign(&signing_pkg, &signing_nonce, &kp).map_err(convert::to_crypto_error)?;
+        signing::sign(&signing_pkg, nonce, &kp).map_err(convert::to_crypto_error)?;
 
     Ok(convert::hex_encode(&scalar_to_bytes(&share.s)))
 }

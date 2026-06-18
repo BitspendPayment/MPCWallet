@@ -3,14 +3,12 @@
 
 use tonic::Status;
 
-use crate::shared::SharedServices;
+use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::registry::CosignerInstance;
+use crate::shared::SharedServices;
 
-use super::helpers::{
-    get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos,
-};
+use super::helpers::{get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos};
 
 /// Resolve a VTXO's exit_delay by trying both candidates against its
 /// scriptPubKey. Falls back to `boarding_exit_delay`.
@@ -133,13 +131,8 @@ pub fn apply_stream_update(
                 }
                 continue;
             }
-            let exit_delay = resolve_exit_delay(
-                &owner_pk,
-                &info.signer_pubkey,
-                &new.script,
-                &info,
-                network,
-            );
+            let exit_delay =
+                resolve_exit_delay(&owner_pk, &info.signer_pubkey, &new.script, &info, network);
             tracing::info!(
                 "[{user_id_hex}] VTXO stream: new spendable {}:{} amount={} exit_delay={exit_delay} expires_at={}",
                 outpoint.txid,

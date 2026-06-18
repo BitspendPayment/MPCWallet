@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use opentelemetry::{global, trace::TracerProvider as _, KeyValue};
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_otlp::{
+    LogExporter, MetricExporter, Protocol, SpanExporter, WithExportConfig, WithHttpConfig,
+};
 use opentelemetry_sdk::{
     logs::LoggerProvider,
     metrics::{PeriodicReader, SdkMeterProvider},
@@ -74,8 +76,7 @@ pub fn init() -> TelemetryGuard {
         .with_ansi(std::io::stderr().is_terminal())
         .compact();
 
-    let token = std::env::var("ENCLAVE_RUNTIME_TOKEN")
-        .unwrap_or_default();
+    let token = std::env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default();
     if token.is_empty() {
         tracing_subscriber::registry()
             .with(env_filter)
@@ -144,8 +145,8 @@ pub fn init() -> TelemetryGuard {
         .with_resource(resource)
         .build();
 
-    let otel_trace_layer = tracing_opentelemetry::layer()
-        .with_tracer(tracer_provider.tracer(SERVICE_NAME_VALUE));
+    let otel_trace_layer =
+        tracing_opentelemetry::layer().with_tracer(tracer_provider.tracer(SERVICE_NAME_VALUE));
 
     let otel_log_layer = OpenTelemetryTracingBridge::new(&logger_provider);
 

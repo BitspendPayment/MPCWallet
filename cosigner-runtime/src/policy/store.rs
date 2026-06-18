@@ -1,5 +1,5 @@
 //! Sled-backed policy persistence. Shared by `CosignerInstance` (via
-//! `handlers::helpers::ensure_policy_loaded`) and `DkgCoordinator` (via
+//! `handlers::helpers::ensure_policy_loaded`) and `OnboardingManager` (via
 //! the DKG step3 finalize path).
 
 use tonic::Status;

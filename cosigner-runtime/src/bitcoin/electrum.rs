@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, Mutex, oneshot};
+use tokio::sync::{broadcast, oneshot, Mutex};
 
 /// Electrum TCP JSON-RPC client with notification support and automatic reconnection.
 pub struct ElectrumClient {
@@ -187,16 +187,13 @@ impl ElectrumClient {
     }
 
     /// Get transaction history for a script hash.
-    pub async fn get_history(
-        &self,
-        script_hash: &str,
-    ) -> Result<Vec<ElectrumHistoryItem>, String> {
+    pub async fn get_history(&self, script_hash: &str) -> Result<Vec<ElectrumHistoryItem>, String> {
         let result = self
             .request("blockchain.scripthash.get_history", &[json!(script_hash)])
             .await?;
 
-        let items: Vec<ElectrumHistoryItem> = serde_json::from_value(result)
-            .map_err(|e| format!("Failed to parse history: {e}"))?;
+        let items: Vec<ElectrumHistoryItem> =
+            serde_json::from_value(result).map_err(|e| format!("Failed to parse history: {e}"))?;
         Ok(items)
     }
 
@@ -234,7 +231,6 @@ impl ElectrumClient {
             .map(|s| s.to_string())
             .ok_or_else(|| "unexpected header response".to_string())
     }
-
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]

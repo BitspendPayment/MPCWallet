@@ -1,4 +1,4 @@
-//! DkgCoordinator lifecycle tests. These exercise session creation,
+//! OnboardingManager lifecycle tests. These exercise session creation,
 //! TTL eviction, concurrent step1 dedup, and missing-session step2/3 paths
 //! without driving a full 3-participant ceremony (which is covered E2E by
 //! `e2e/test/ark_e2e_test.dart` and `bin/load_tester.rs`).
@@ -11,7 +11,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use tonic::Code;
 
 use cosigner_runtime::bitcoin::{BitcoinHistoryService, ElectrumClient};
-use cosigner_runtime::dkg_coordinator::DkgCoordinator;
+use cosigner_runtime::onboarding::OnboardingManager;
 use cosigner_runtime::persistence::SledStore;
 use cosigner_runtime::shared::SharedServices;
 use cosigner_runtime::wallet_proto::{
@@ -42,43 +42,41 @@ fn dummy_identifier(seed: u8) -> Vec<u8> {
     id
 }
 
-fn step1_req(seed: u8, is_restore: bool) -> DkgStep1Request {
+fn step1_req(seed: u8) -> DkgStep1Request {
     DkgStep1Request {
         user_id: hex::decode("a1b2c3d4e5f6071829").unwrap(),
         identifier: dummy_identifier(seed),
         round1_package: String::new(), // empty = passive receiver
-        is_restore,
     }
 }
 
-/// Spawn `coord.dkg_step1(...)` and return immediately. step1 parks in
+/// Spawn `coord.onboarding_step1(...)` and return immediately. step1 parks in
 /// `pending_step1` waiting for the 2nd + 3rd participant; the returned
 /// JoinHandle can be `.abort()`-ed to avoid leaking the task on test exit.
 fn spawn_step1(
-    coord: Arc<DkgCoordinator>,
+    coord: Arc<OnboardingManager>,
     user_id: &'static str,
     seed: u8,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let _ = coord.dkg_step1(user_id, step1_req(seed, false)).await;
+        let _ = coord.onboarding_step1(user_id, step1_req(seed)).await;
     })
 }
 
 /// Like `spawn_step1` but returns the eventual result so tests can assert
 /// on the parked-sender outcome (e.g. that eviction produces `Aborted`).
 fn spawn_step1_capture(
-    coord: Arc<DkgCoordinator>,
+    coord: Arc<OnboardingManager>,
     user_id: &'static str,
     seed: u8,
-    is_restore: bool,
 ) -> tokio::task::JoinHandle<Result<DkgStep1Response, tonic::Status>> {
-    tokio::spawn(async move { coord.dkg_step1(user_id, step1_req(seed, is_restore)).await })
+    tokio::spawn(async move { coord.onboarding_step1(user_id, step1_req(seed)).await })
 }
 
 #[tokio::test]
 async fn test_dkg_session_evicted_after_ttl() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_millis(50));
+    let coord = OnboardingManager::new(shared, Duration::from_millis(50));
 
     let h = spawn_step1(coord.clone(), "deadbeef", 1);
     // Let step1 actually run and register the session.
@@ -97,7 +95,7 @@ async fn test_dkg_session_evicted_after_ttl() {
 #[tokio::test]
 async fn test_sweep_does_not_evict_fresh_sessions() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_secs(300));
+    let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let h = spawn_step1(coord.clone(), "fresh", 1);
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -111,7 +109,7 @@ async fn test_sweep_does_not_evict_fresh_sessions() {
 #[tokio::test]
 async fn test_concurrent_step1_creates_one_session() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_secs(300));
+    let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     // Two concurrent step1 calls for the same uid must dedupe through
     // DashMap::entry().or_insert_with. Both calls park; we just check count.
@@ -128,7 +126,7 @@ async fn test_concurrent_step1_creates_one_session() {
 #[tokio::test]
 async fn test_step3_with_no_session_returns_aborted() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_secs(300));
+    let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let req = DkgStep3Request {
         user_id: hex::decode("a1b2c3d4e5f6071829").unwrap(),
@@ -136,7 +134,7 @@ async fn test_step3_with_no_session_returns_aborted() {
         round2_packages_for_others: Default::default(),
     };
     let err = coord
-        .dkg_step3("abad1dea", req)
+        .onboarding_step3("abad1dea", req)
         .await
         .expect_err("expected Status::aborted");
     assert_eq!(err.code(), Code::Aborted);
@@ -145,7 +143,7 @@ async fn test_step3_with_no_session_returns_aborted() {
 #[tokio::test]
 async fn test_step2_with_no_session_returns_aborted() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_secs(300));
+    let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let req = DkgStep2Request {
         user_id: hex::decode("a1b2c3d4e5f6071829").unwrap(),
@@ -153,28 +151,10 @@ async fn test_step2_with_no_session_returns_aborted() {
         round1_package: String::new(),
     };
     let err = coord
-        .dkg_step2("00112233", req)
+        .onboarding_step2("00112233", req)
         .await
         .expect_err("expected Status::aborted");
     assert_eq!(err.code(), Code::Aborted);
-}
-
-#[tokio::test]
-async fn test_restore_with_unknown_recovery_id_returns_not_found() {
-    let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_secs(300));
-
-    // `is_restore=true` with no prior policy in sled →
-    // `step1_server_init::lookup_policy_by_recovery_id` returns `Ok(None)` →
-    // step1 errors with NotFound (sent through reply, not stashed). This
-    // exercises the path where the old WASM-mediated handler used
-    // `user.policy_state.is_some()` as a reset guard; with the split that
-    // guard is gone, but the lookup itself still fails cleanly.
-    let err = coord
-        .dkg_step1("11223344", step1_req(7, true))
-        .await
-        .expect_err("expected NotFound for unknown recovery id");
-    assert_eq!(err.code(), Code::NotFound);
 }
 
 /// After TTL eviction, the parked oneshot sender for a still-awaiting
@@ -184,9 +164,9 @@ async fn test_restore_with_unknown_recovery_id_returns_not_found() {
 #[tokio::test]
 async fn test_evicted_session_drains_parked_sender_with_aborted() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_millis(50));
+    let coord = OnboardingManager::new(shared, Duration::from_millis(50));
 
-    let h = spawn_step1_capture(coord.clone(), "deadc0de", 1, false);
+    let h = spawn_step1_capture(coord.clone(), "deadc0de", 1);
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(coord.active_session_count(), 1);
 
@@ -198,42 +178,6 @@ async fn test_evicted_session_drains_parked_sender_with_aborted() {
     assert_eq!(err.code(), Code::Aborted);
 }
 
-/// Restore with a corrupt policy JSON row in sled: the recovery index
-/// points at a policies entry that won't parse as PolicyState. The
-/// handler must return `Status::internal` with a clear parse-error
-/// message rather than panicking on the bad JSON.
-///
-/// The lookup key is `hex::encode(req.user_id)` (the request body's
-/// bytes, not the URL parameter), so `step1_req` fixes it at
-/// "a1b2c3d4e5f6071829" — we seed sled under that exact key.
-#[tokio::test]
-async fn test_restore_with_corrupt_policy_returns_internal() {
-    let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared.clone(), Duration::from_secs(300));
-
-    let recovery_id = "a1b2c3d4e5f6071829";
-    let canonical = "ff".repeat(33);
-    shared
-        .persistence
-        .put("policy_recovery_idx", recovery_id, &canonical)
-        .unwrap();
-    shared
-        .persistence
-        .put("policies", &canonical, "{ not valid json")
-        .unwrap();
-
-    let err = coord
-        .dkg_step1(recovery_id, step1_req(8, true))
-        .await
-        .expect_err("expected Status::internal for corrupt policy JSON");
-    assert_eq!(err.code(), Code::Internal);
-    assert!(
-        err.message().contains("parse policy") || err.message().contains("parse"),
-        "error should mention JSON parse failure: got {:?}",
-        err.message()
-    );
-}
-
 /// Concurrent step1 calls plus a sweep task firing every 15ms while step1
 /// is parked. Verifies no panic, no double-eviction. After TTL exactly one
 /// eviction should have occurred across the race window, and the parked
@@ -241,9 +185,9 @@ async fn test_restore_with_corrupt_policy_returns_internal() {
 #[tokio::test]
 async fn test_concurrent_step1_and_sweep_no_panic() {
     let (shared, _tmp) = make_shared();
-    let coord = DkgCoordinator::new(shared, Duration::from_millis(50));
+    let coord = OnboardingManager::new(shared, Duration::from_millis(50));
 
-    let h = spawn_step1_capture(coord.clone(), "1ace1ace", 1, false);
+    let h = spawn_step1_capture(coord.clone(), "1ace1ace", 1);
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(coord.active_session_count(), 1);
 
@@ -258,7 +202,10 @@ async fn test_concurrent_step1_and_sweep_no_panic() {
     });
 
     let total_evicted = sweep_task.await.expect("sweep task panicked");
-    assert_eq!(total_evicted, 1, "exactly one eviction across the race window");
+    assert_eq!(
+        total_evicted, 1,
+        "exactly one eviction across the race window"
+    );
 
     let result = h.await.expect("step1 task panicked");
     assert!(

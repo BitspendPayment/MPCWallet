@@ -5,15 +5,13 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::auth::message::{
-    OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE,
-};
-use crate::shared::SharedServices;
-use crate::cosigner::state::{CosignerState, DelegateRecord, VtxoEntry};
-use crate::wallet_proto::*;
+use crate::auth::message::{OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE};
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::types::ArkTxEntry;
 use crate::cosigner::registry::CosignerInstance;
+use crate::cosigner::state::{CosignerState, DelegateRecord, VtxoEntry};
+use crate::cosigner::types::ArkTxEntry;
+use crate::shared::SharedServices;
+use crate::wallet_proto::*;
 
 use super::helpers::{
     auth_check, delete_user_delegate, get_user_ark_keys, get_user_xonly_pubkey, now_secs,
@@ -108,7 +106,10 @@ pub fn send_vtxo(
                     "no VTXOs available for sending",
                 ));
             }
-            tracing::info!("[{user_id_hex}] SendVtxo: spending VTXOs: {:?}", state.vtxos);
+            tracing::info!(
+                "[{user_id_hex}] SendVtxo: spending VTXOs: {:?}",
+                state.vtxos
+            );
 
             let total_available: u64 = state.vtxos.iter().map(|e| e.amount).sum();
             if total_available < req.amount {
@@ -645,7 +646,13 @@ pub fn settle_delegate(
             let earliest_expires_at = state
                 .vtxos
                 .iter()
-                .filter_map(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+                .filter_map(|e| {
+                    if e.expires_at > 0 {
+                        Some(e.expires_at)
+                    } else {
+                        None
+                    }
+                })
                 .min()
                 .unwrap_or(0);
             let margin = shared.auto_settle_safety_margin_secs;
@@ -728,11 +735,7 @@ pub fn settle_delegate(
                             covered_outpoints: record.covered_outpoints.clone(),
                             earliest_expires_at: record.earliest_expires_at,
                         };
-                        save_user_delegate(
-                            shared.persistence.as_ref(),
-                            &user_id_hex,
-                            &persisted,
-                        );
+                        save_user_delegate(shared.persistence.as_ref(), &user_id_hex, &persisted);
                     }
                     Err(e) => {
                         tracing::warn!(
@@ -752,8 +755,8 @@ pub fn settle_delegate(
 
             let asp_for_call = asp.clone();
             let mut session = record.session;
-            let (commitment_txid, vtxo_outpoint, info) = Handle::current()
-                .block_on(async move {
+            let (commitment_txid, vtxo_outpoint, info) =
+                Handle::current().block_on(async move {
                     let mut guard = asp_for_call.lock().await;
                     let (commitment_txid, vtxo_outpoint) = session
                         .settle(&mut *guard)
@@ -881,24 +884,21 @@ pub fn submit_ark_send(
     // back to the sync side.
     let asp_for_call = asp.clone();
     let log_user = user_id_hex.clone();
-    let (ark_txid, response_signed_checkpoint_txs, info) = Handle::current().block_on(
-        async move {
+    let (ark_txid, response_signed_checkpoint_txs, info) =
+        Handle::current().block_on(async move {
             let mut guard = asp_for_call.lock().await;
             tracing::info!("[{log_user}] SubmitArkSend: calling asp.submit_tx");
             let response = guard
                 .submit_tx(signed_ark_b64, signed_checkpoint_b64s)
                 .await
                 .map_err(|e| {
-                    tracing::error!(
-                        "[{log_user}] SubmitArkSend: asp.submit_tx failed: {e}"
-                    );
+                    tracing::error!("[{log_user}] SubmitArkSend: asp.submit_tx failed: {e}");
                     Status::internal(format!("submit_tx: {e}"))
                 })?;
             let ark_txid = response.ark_txid.clone();
             // Hold off on info fetch until after counter-signing is decided.
             Ok::<_, Status>((ark_txid, response.signed_checkpoint_txs, guard.info.clone()))
-        },
-    )?;
+        })?;
 
     // Counter-sign: merge client FROST sigs onto ASP-returned checkpoints.
     let mut final_checkpoints = Vec::new();
@@ -966,16 +966,21 @@ pub fn submit_ark_send(
     let spent_total: u64 = state
         .vtxos
         .iter()
-        .filter(|e| req.spent_outpoints.contains(&format!("{}:{}", e.txid, e.vout)))
+        .filter(|e| {
+            req.spent_outpoints
+                .contains(&format!("{}:{}", e.txid, e.vout))
+        })
         .map(|e| e.amount)
         .sum();
     state.vtxos.retain(|e| {
-        !req.spent_outpoints.contains(&format!("{}:{}", e.txid, e.vout))
+        !req.spent_outpoints
+            .contains(&format!("{}:{}", e.txid, e.vout))
     });
     if let Some(record) = &state.delegate_session {
-        let any_covered_spent = record.covered_outpoints.iter().any(|(t, v)| {
-            req.spent_outpoints.contains(&format!("{t}:{v}"))
-        });
+        let any_covered_spent = record
+            .covered_outpoints
+            .iter()
+            .any(|(t, v)| req.spent_outpoints.contains(&format!("{t}:{v}")));
         if any_covered_spent {
             state.delegate_session = None;
             delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);

@@ -3,12 +3,12 @@
 
 pub mod auth;
 pub mod bitcoin;
+pub mod ceremony;
 pub mod config;
 pub mod contract;
 pub mod cosigner;
-pub mod crypto_ops;
-pub mod onboarding;
 pub mod fcm_client;
+pub mod onboarding;
 pub mod persistence;
 pub mod policy;
 pub mod rest_api;

@@ -11,10 +11,10 @@ use axum::{Json, Router};
 use serde_json::{json, Value};
 use tonic::Status;
 
+use crate::contract::ContractManager;
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
-use crate::contract::ContractCreateCoordinator;
-use crate::onboarding::DkgCoordinator;
+use crate::onboarding::OnboardingManager;
 use crate::wallet_proto::{self};
 
 /// Per-route extractor types pull what they need from this struct via
@@ -22,8 +22,8 @@ use crate::wallet_proto::{self};
 #[derive(Clone)]
 pub struct AppState {
     pub registry: Arc<CosignerRegistry>,
-    pub dkg_coordinator: Arc<DkgCoordinator>,
-    pub contract_coordinator: Arc<ContractCreateCoordinator>,
+    pub onboarding_manager: Arc<OnboardingManager>,
+    pub contract_manager: Arc<ContractManager>,
     /// Public deployment metadata served by `/api/server-info`. Built once
     /// at startup from `ServerConfig::bitcoin_network`.
     pub server_info: Arc<wallet_proto::GetServerInfoResponse>,
@@ -35,15 +35,15 @@ impl FromRef<AppState> for Arc<CosignerRegistry> {
     }
 }
 
-impl FromRef<AppState> for Arc<DkgCoordinator> {
+impl FromRef<AppState> for Arc<OnboardingManager> {
     fn from_ref(s: &AppState) -> Self {
-        s.dkg_coordinator.clone()
+        s.onboarding_manager.clone()
     }
 }
 
-impl FromRef<AppState> for Arc<ContractCreateCoordinator> {
+impl FromRef<AppState> for Arc<ContractManager> {
     fn from_ref(s: &AppState) -> Self {
-        s.contract_coordinator.clone()
+        s.contract_manager.clone()
     }
 }
 
@@ -77,17 +77,29 @@ pub fn routes(state: AppState) -> Router {
         // Ark
         .route("/u/{group_key}/ark/info", post(get_ark_info))
         .route("/u/{group_key}/ark/address", post(get_ark_address))
-        .route("/u/{group_key}/ark/boarding-address", post(get_boarding_address))
-        .route("/u/{group_key}/ark/boarding-balance", post(check_boarding_balance))
+        .route(
+            "/u/{group_key}/ark/boarding-address",
+            post(get_boarding_address),
+        )
+        .route(
+            "/u/{group_key}/ark/boarding-balance",
+            post(check_boarding_balance),
+        )
         .route("/u/{group_key}/ark/vtxos", post(list_vtxos))
-        .route("/u/{group_key}/ark/transactions", post(list_ark_transactions))
+        .route(
+            "/u/{group_key}/ark/transactions",
+            post(list_ark_transactions),
+        )
         .route("/u/{group_key}/ark/send", post(send_vtxo))
         .route("/u/{group_key}/ark/redeem", post(redeem_vtxo))
         .route("/u/{group_key}/ark/settle", post(settle))
         .route("/u/{group_key}/ark/settle-delegate", post(settle_delegate))
         .route("/u/{group_key}/ark/submit-send", post(submit_ark_send))
         // Push notifications
-        .route("/u/{group_key}/push/register-device-token", post(register_device_token))
+        .route(
+            "/u/{group_key}/push/register-device-token",
+            post(register_device_token),
+        )
         // Server deployment metadata. Unauthenticated, not user-scoped.
         // Accepts both GET and POST so the enclave-FFI transport (which only
         // models POST) can reach it the same way regular HTTP clients do.
@@ -189,7 +201,10 @@ macro_rules! dispatch_json {
     ($reg:ident, $group_key:ident, $variant:ident, $req:expr) => {{
         let req = $req;
         match $reg
-            .dispatch(&$group_key, move |reply| CosignerCommand::$variant { req, reply })
+            .dispatch(&$group_key, move |reply| CosignerCommand::$variant {
+                req,
+                reply,
+            })
             .await
         {
             Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
@@ -228,7 +243,7 @@ async fn get_server_info(
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step1", fields(group_key = %group_key))]
 async fn dkg_step1(
-    State(coord): State<Arc<DkgCoordinator>>,
+    State(coord): State<Arc<OnboardingManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -237,7 +252,7 @@ async fn dkg_step1(
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
     };
-    match coord.dkg_step1(&group_key, req).await {
+    match coord.onboarding_step1(&group_key, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -245,7 +260,7 @@ async fn dkg_step1(
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step2", fields(group_key = %group_key))]
 async fn dkg_step2(
-    State(coord): State<Arc<DkgCoordinator>>,
+    State(coord): State<Arc<OnboardingManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -254,7 +269,7 @@ async fn dkg_step2(
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
     };
-    match coord.dkg_step2(&group_key, req).await {
+    match coord.onboarding_step2(&group_key, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -262,7 +277,7 @@ async fn dkg_step2(
 
 #[tracing::instrument(skip_all, name = "rest::dkg_step3", fields(group_key = %group_key))]
 async fn dkg_step3(
-    State(coord): State<Arc<DkgCoordinator>>,
+    State(coord): State<Arc<OnboardingManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -271,7 +286,7 @@ async fn dkg_step3(
         identifier: hex_field(&body, "identifier"),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
     };
-    match coord.dkg_step3(&group_key, req).await {
+    match coord.onboarding_step3(&group_key, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -283,7 +298,7 @@ async fn dkg_step3(
 
 #[tracing::instrument(skip_all, name = "rest::contract_create_step1", fields(group_key = %group_key))]
 async fn contract_create_step1(
-    State(coord): State<Arc<ContractCreateCoordinator>>,
+    State(coord): State<Arc<ContractManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -300,7 +315,7 @@ async fn contract_create_step1(
         owner_pk: hex_field(&body, "owner_pk"),
         service_vk: hex_field(&body, "service_vk"),
     };
-    match coord.step1(&group_key, req).await {
+    match coord.create_contract_step_1(&group_key, req).await {
         Ok(resp) => Ok(Json(json!({ "round1_packages": resp.round1_packages }))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -308,7 +323,7 @@ async fn contract_create_step1(
 
 #[tracing::instrument(skip_all, name = "rest::contract_create_step2", fields(group_key = %group_key))]
 async fn contract_create_step2(
-    State(coord): State<Arc<ContractCreateCoordinator>>,
+    State(coord): State<Arc<ContractManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -318,7 +333,7 @@ async fn contract_create_step2(
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
-    match coord.step2(&group_key, req).await {
+    match coord.create_contract_step_2(&group_key, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -326,7 +341,7 @@ async fn contract_create_step2(
 
 #[tracing::instrument(skip_all, name = "rest::contract_create_step3", fields(group_key = %group_key))]
 async fn contract_create_step3(
-    State(coord): State<Arc<ContractCreateCoordinator>>,
+    State(coord): State<Arc<ContractManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -337,7 +352,7 @@ async fn contract_create_step3(
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
-    match coord.step3(&group_key, req).await {
+    match coord.create_contract_step_3(&group_key, req).await {
         Ok(resp) => Ok(Json(json!({
             "round2_packages_for_me": resp.round2_packages_for_me,
             "contract_script_pubkey": to_hex(&resp.contract_script_pubkey),
@@ -349,7 +364,7 @@ async fn contract_create_step3(
 
 #[tracing::instrument(skip_all, name = "rest::contract_create_step4", fields(group_key = %group_key))]
 async fn contract_create_step4(
-    State(coord): State<Arc<ContractCreateCoordinator>>,
+    State(coord): State<Arc<ContractManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
@@ -362,7 +377,7 @@ async fn contract_create_step4(
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
-    match coord.step4(&group_key, req).await {
+    match coord.create_contract_step_4(&group_key, req).await {
         Ok(resp) => Ok(Json(json!({ "ok": resp.ok }))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -400,7 +415,10 @@ async fn sign_step1(
         claimed_share,
     };
     match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::SignStep1 { req, reply })
+        .dispatch(&group_key, move |reply| CosignerCommand::SignStep1 {
+            req,
+            reply,
+        })
         .await
     {
         Ok(r) => {
@@ -445,7 +463,10 @@ async fn sign_step2(
         claimed_share,
     };
     match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::SignStep2 { req, reply })
+        .dispatch(&group_key, move |reply| CosignerCommand::SignStep2 {
+            req,
+            reply,
+        })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -466,10 +487,15 @@ async fn broadcast_transaction(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, BroadcastTransaction, wallet_proto::BroadcastTransactionRequest {
-        user_id: user_id_bytes(&group_key),
-        tx_hex: str_field(&body, "tx_hex"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        BroadcastTransaction,
+        wallet_proto::BroadcastTransactionRequest {
+            user_id: user_id_bytes(&group_key),
+            tx_hex: str_field(&body, "tx_hex"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::fetch_history", fields(group_key = %group_key))]
@@ -478,11 +504,16 @@ async fn fetch_history(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, FetchHistory, wallet_proto::FetchHistoryRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        FetchHistory,
+        wallet_proto::FetchHistoryRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions", fields(group_key = %group_key))]
@@ -491,11 +522,16 @@ async fn fetch_recent_transactions(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, FetchRecentTransactions, wallet_proto::FetchRecentTransactionsRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        FetchRecentTransactions,
+        wallet_proto::FetchRecentTransactionsRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -508,11 +544,16 @@ async fn get_ark_info(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, GetArkInfo, wallet_proto::GetArkInfoRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        GetArkInfo,
+        wallet_proto::GetArkInfoRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::get_ark_address", fields(group_key = %group_key))]
@@ -521,11 +562,16 @@ async fn get_ark_address(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, GetArkAddress, wallet_proto::GetArkAddressRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        GetArkAddress,
+        wallet_proto::GetArkAddressRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::get_boarding_address", fields(group_key = %group_key))]
@@ -534,11 +580,16 @@ async fn get_boarding_address(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, GetBoardingAddress, wallet_proto::GetBoardingAddressRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        GetBoardingAddress,
+        wallet_proto::GetBoardingAddressRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::check_boarding_balance", fields(group_key = %group_key))]
@@ -547,11 +598,16 @@ async fn check_boarding_balance(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, CheckBoardingBalance, wallet_proto::CheckBoardingBalanceRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        CheckBoardingBalance,
+        wallet_proto::CheckBoardingBalanceRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::list_vtxos", fields(group_key = %group_key))]
@@ -560,11 +616,16 @@ async fn list_vtxos(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, ListVtxos, wallet_proto::ListVtxosRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        ListVtxos,
+        wallet_proto::ListVtxosRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::list_ark_transactions", fields(group_key = %group_key))]
@@ -573,11 +634,16 @@ async fn list_ark_transactions(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, ListArkTransactions, wallet_proto::ListArkTransactionsRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        ListArkTransactions,
+        wallet_proto::ListArkTransactionsRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::send_vtxo", fields(group_key = %group_key))]
@@ -595,7 +661,10 @@ async fn send_vtxo(
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
     match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::SendVtxo { req, reply })
+        .dispatch(&group_key, move |reply| CosignerCommand::SendVtxo {
+            req,
+            reply,
+        })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -615,13 +684,18 @@ async fn redeem_vtxo(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, RedeemVtxo, wallet_proto::RedeemVtxoRequest {
-        user_id: user_id_bytes(&group_key),
-        on_chain_address: str_field(&body, "on_chain_address"),
-        amount: u64_field(&body, "amount"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        RedeemVtxo,
+        wallet_proto::RedeemVtxoRequest {
+            user_id: user_id_bytes(&group_key),
+            on_chain_address: str_field(&body, "on_chain_address"),
+            amount: u64_field(&body, "amount"),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::settle", fields(group_key = %group_key))]
@@ -637,7 +711,10 @@ async fn settle(
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
     match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::Settle { req, reply })
+        .dispatch(&group_key, move |reply| CosignerCommand::Settle {
+            req,
+            reply,
+        })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -668,7 +745,10 @@ async fn settle_delegate(
             .unwrap_or(false),
     };
     match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::SettleDelegate { req, reply })
+        .dispatch(&group_key, move |reply| CosignerCommand::SettleDelegate {
+            req,
+            reply,
+        })
         .await
     {
         Ok(r) => Ok(Json(json!({
@@ -688,14 +768,19 @@ async fn submit_ark_send(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, SubmitArkSend, wallet_proto::SubmitArkSendRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-        signed_ark_tx_b64: str_field(&body, "signed_ark_tx_b64"),
-        signed_checkpoint_txs_b64: str_array_field(&body, "signed_checkpoint_txs_b64"),
-        spent_outpoints: str_array_field(&body, "spent_outpoints"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        SubmitArkSend,
+        wallet_proto::SubmitArkSendRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+            signed_ark_tx_b64: str_field(&body, "signed_ark_tx_b64"),
+            signed_checkpoint_txs_b64: str_array_field(&body, "signed_checkpoint_txs_b64"),
+            spent_outpoints: str_array_field(&body, "spent_outpoints"),
+        }
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::register_device_token", fields(group_key = %group_key))]
@@ -704,12 +789,17 @@ async fn register_device_token(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(reg, group_key, RegisterDeviceToken, wallet_proto::RegisterDeviceTokenRequest {
-        user_id: user_id_bytes(&group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-        fcm_token: str_field(&body, "fcm_token"),
-        platform: str_field(&body, "platform"),
-        app_version: str_field(&body, "app_version"),
-    })
+    dispatch_json!(
+        reg,
+        group_key,
+        RegisterDeviceToken,
+        wallet_proto::RegisterDeviceTokenRequest {
+            user_id: user_id_bytes(&group_key),
+            signature: hex_field(&body, "signature"),
+            timestamp_ms: i64_field(&body, "timestamp_ms"),
+            fcm_token: str_field(&body, "fcm_token"),
+            platform: str_field(&body, "platform"),
+            app_version: str_field(&body, "app_version"),
+        }
+    )
 }

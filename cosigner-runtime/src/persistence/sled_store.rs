@@ -18,28 +18,40 @@ impl SledStore {
 
 impl KvStore for SledStore {
     fn get(&self, tree: &str, key: &str) -> Result<Option<String>, PersistenceError> {
-        let tree = self.db.open_tree(tree).map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        let tree = self
+            .db
+            .open_tree(tree)
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         tree.get(key.as_bytes())
             .map(|opt| opt.map(|v| String::from_utf8_lossy(&v).to_string()))
             .map_err(|e| PersistenceError::Backend(e.to_string()))
     }
 
     fn put(&self, tree: &str, key: &str, value: &str) -> Result<(), PersistenceError> {
-        let tree = self.db.open_tree(tree).map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        let tree = self
+            .db
+            .open_tree(tree)
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         tree.insert(key.as_bytes(), value.as_bytes())
             .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn delete(&self, tree: &str, key: &str) -> Result<(), PersistenceError> {
-        let tree = self.db.open_tree(tree).map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        let tree = self
+            .db
+            .open_tree(tree)
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         tree.remove(key.as_bytes())
             .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         Ok(())
     }
 
     fn get_all(&self, tree: &str) -> Result<HashMap<String, String>, PersistenceError> {
-        let tree = self.db.open_tree(tree).map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        let tree = self
+            .db
+            .open_tree(tree)
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         let mut result = HashMap::new();
         for item in tree.iter() {
             let (k, v) = item.map_err(|e| PersistenceError::Backend(e.to_string()))?;
@@ -51,8 +63,12 @@ impl KvStore for SledStore {
     }
 
     fn clear(&self, tree: &str) -> Result<(), PersistenceError> {
-        let tree = self.db.open_tree(tree).map_err(|e| PersistenceError::Backend(e.to_string()))?;
-        tree.clear().map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        let tree = self
+            .db
+            .open_tree(tree)
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
+        tree.clear()
+            .map_err(|e| PersistenceError::Backend(e.to_string()))?;
         Ok(())
     }
 }

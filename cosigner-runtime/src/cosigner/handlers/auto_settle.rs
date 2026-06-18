@@ -8,9 +8,9 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
+use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::registry::CosignerInstance;
 use crate::shared::SharedServices;
 
 use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};
@@ -42,7 +42,13 @@ pub fn tick_auto_settle(
                     .vtxos
                     .iter()
                     .find(|e| &e.txid == t && e.vout == *v)
-                    .and_then(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+                    .and_then(|e| {
+                        if e.expires_at > 0 {
+                            Some(e.expires_at)
+                        } else {
+                            None
+                        }
+                    })
             })
             .min()
             .unwrap_or(0)
@@ -100,8 +106,7 @@ pub fn tick_auto_settle(
         }
     };
 
-    let (vtxo_txid, vtxo_vout) =
-        vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
+    let (vtxo_txid, vtxo_vout) = vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
     let total_amount: u64 = state.vtxos.iter().map(|e| e.amount).sum();
     state.vtxos.clear();
     let new_exit_delay = info.unilateral_exit_delay as u32;
