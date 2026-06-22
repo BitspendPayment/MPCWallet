@@ -22,7 +22,7 @@ use crate::wallet_proto::{
     DkgStep3Response,
 };
 
-use crate::ceremony::{drain_pairs_with_err, drain_with_err};
+use super::ceremony::{drain_pairs_with_err, drain_with_err};
 
 use super::handlers;
 use super::session::OnboardingSession;
@@ -33,14 +33,36 @@ const EVICT_MSG: &str = "onboarding session evicted: restart from step1";
 pub struct OnboardingManager {
     sessions: DashMap<String, Arc<Mutex<OnboardingSession>>>,
     shared: Arc<SharedServices>,
+    /// Per-actor registry, used to seed freshly-created policy into the guest + seal it after
+    /// DKG. `None` in unit tests that exercise the DKG handlers without the actor stack.
+    registry: Option<Arc<crate::cosigner::registry::CosignerRegistry>>,
     ttl: Duration,
 }
 
 impl OnboardingManager {
     pub fn new(shared: Arc<SharedServices>, ttl: Duration) -> Arc<Self> {
+        Self::new_inner(shared, None, ttl)
+    }
+
+    /// Production constructor: wires the registry so completed onboardings seed + seal the
+    /// policy into the per-actor guest (no plaintext key kept host-side long-term).
+    pub fn with_registry(
+        shared: Arc<SharedServices>,
+        registry: Arc<crate::cosigner::registry::CosignerRegistry>,
+        ttl: Duration,
+    ) -> Arc<Self> {
+        Self::new_inner(shared, Some(registry), ttl)
+    }
+
+    fn new_inner(
+        shared: Arc<SharedServices>,
+        registry: Option<Arc<crate::cosigner::registry::CosignerRegistry>>,
+        ttl: Duration,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sessions: DashMap::new(),
             shared,
+            registry,
             ttl,
         })
     }
@@ -119,9 +141,70 @@ impl OnboardingManager {
                 onboarding_session_event = "completed",
                 "onboarding session completed"
             );
+            // Seed the freshly-created policy into the per-actor guest and seal it, so the
+            // guest owns the keys and later cold spawns restore from the sealed snapshot.
+            // Best-effort: a failure here doesn't fail onboarding (the plaintext policy is
+            // still persisted as today; the guest is re-seeded on the first sign).
+            if let Some(registry) = self.registry.clone() {
+                self.seed_guest_after_onboarding(&registry, user_id).await;
+            }
         }
         rx.await
             .map_err(|_| Status::internal("onboarding session dropped reply"))?
+    }
+
+    /// Install the just-created policy into the per-actor guest + seal it (best-effort).
+    async fn seed_guest_after_onboarding(
+        self: &Arc<Self>,
+        registry: &Arc<crate::cosigner::registry::CosignerRegistry>,
+        user_id: &str,
+    ) {
+        // The policy is persisted under the GROUP KEY; the request user_id may be a member
+        // verifying share that resolves to it via `policy_owner_idx`.
+        let group_key = self
+            .shared
+            .persistence
+            .get("policy_owner_idx", user_id)
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| user_id.to_string());
+
+        let policy_json = match self.shared.persistence.get("policies", &group_key) {
+            Ok(Some(j)) => j,
+            _ => {
+                tracing::warn!("[{group_key}] onboarding seed: no policy to seed; skipping");
+                return;
+            }
+        };
+        let policy: crate::policy::PolicyState = match serde_json::from_str(&policy_json) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("[{group_key}] onboarding seed: bad policy json: {e}");
+                return;
+            }
+        };
+        let dkg_secret = self
+            .shared
+            .secret_store
+            .get_secret(&format!("dkg-secret.{group_key}"))
+            .ok()
+            .flatten();
+
+        let res: Result<(), Status> = registry
+            .dispatch(&group_key, |reply| {
+                crate::cosigner::command::CosignerCommand::SeedPolicy {
+                    key_package_json: policy.normal_policy.key_package_json,
+                    public_key_package_json: policy.normal_policy.public_key_package_json,
+                    user_signing_identifier_hex: policy.user_signing_identifier_hex,
+                    server_dkg_secret_hex: dkg_secret,
+                    reply,
+                }
+            })
+            .await;
+        match res {
+            Ok(()) => tracing::info!("[{group_key}] onboarding seeded policy into guest + sealed"),
+            Err(e) => tracing::warn!("[{group_key}] onboarding seed-into-guest failed: {e}"),
+        }
     }
 
     /// Run one eviction sweep: remove and drain any session whose

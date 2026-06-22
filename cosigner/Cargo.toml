@@ -3,13 +3,30 @@ name = "cosigner"
 version = "0.1.0"
 edition = "2021"
 
+# The long-lived, stateful cosigner guest as a native-async component (reactor): it exports
+# an async `handle(request) -> response` and imports async host capabilities (contract-gate,
+# ASP). All signing keys, the FROST ceremony, and per-user state live in the instance and
+# persist across handle() calls. This is the ONLY cosigner WASM component.
+
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
+cosigner-proto = { path = "../cosigner-proto" }
 threshold = { path = "../crates/threshold", features = ["std"] }
-ark = { path = "../crates/ark", features = ["std"] }
-wit-bindgen = "0.41"
+# Ark tx-building + signing math (wasm-buildable, no tonic/tokio). The guest drives the
+# Ark sessions itself; ASP network I/O is serviced by async host imports.
+ark = { path = "../crates/ark", features = ["signing"] }
+# Futures-based wasi:http client — the guest speaks gRPC to the ASP itself; the host's
+# custom h2 hook does the actual HTTP/2 transport. (Builds only on stable 1.96+ — its
+# wasi:io@0.2.12 must match libstd.)
+wstd = "0.6"
+# Incremental HTTP/2 DATA-frame reads for server-streaming gRPC (Settle event stream).
+http-body-util = "0.1"
+bytes = "1"
+prost = "0.13"
+wit-bindgen = "0.58"
 serde_json = "1"
 rand = "0.8"
-k256 = { version = "0.13", features = ["arithmetic"] }
+hex = "0.4"
+sha2 = "0.10"

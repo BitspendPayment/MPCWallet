@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use threshold::identifier::Identifier;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 
 // serde adapters: persist the threshold crypto types through their existing
@@ -39,22 +38,6 @@ mod pkp_json {
     }
 }
 
-mod id_hex {
-    use serde::{Deserialize, Deserializer, Serializer};
-    use threshold::identifier::Identifier;
-
-    pub fn serialize<S: Serializer>(id: &Identifier, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&hex::encode(id.serialize()))
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Identifier, D::Error> {
-        let h = String::deserialize(d)?;
-        let bytes = hex::decode(&h).map_err(serde::de::Error::custom)?;
-        let arr: [u8; 32] = bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("identifier must be 32 bytes"))?;
-        Identifier::deserialize(&arr).map_err(|e| serde::de::Error::custom(format!("{e:?}")))
-    }
-}
 
 mod arr32_hex {
     use serde::{Deserialize, Deserializer, Serializer};
@@ -110,62 +93,54 @@ pub struct NormalPolicy {
 /// compared directly against wire-provided verifying-key hex.
 pub type VerifyingKeyHex = String;
 
-/// A contract: a fresh contract key `V′` (derived by resharing `V`) bound to a
-/// WASM contract. Spending the cooperative leaf requires `V′`, so the cosigner is
-/// a mandatory signer and runs `contract_id`'s contract before co-signing.
+/// A contract bound to a WASM `contract_id`. NO distinct key: the wallet's normal key `V` is
+/// reused. The cosigner GATE is the sole binding — it co-signs a contract eVTXO spend only
+/// when (1) the WASM `evaluate` returns Allow and (2) the requesting verifying share is on the
+/// allowlist (`wallet_vk` ∪ `shares.keys()`).
 ///
-/// `V′` is a 2-of-2 with TWO signing pairings — the cosigner is the common party,
-/// and the counterparty is either the user or the always-online service:
-///   (user_share + cosigner_shareA)  ||  (service_share + cosigner_shareB)
-/// Each pairing's `CosignerShare` holds the cosigner's counter-share + the 2-entry
-/// `V′` PKP for that pairing. `service_share` is `None` until the service is
-/// onboarded (contract-create step 4).
+/// The WALLET signs contract spends with its existing normal `V` pairing (no per-contract
+/// counter-share needed — it falls through to `normal_policy` in `resolve_signing_key`). The
+/// always-online SERVICE gets a key-preserving REFRESH of `V` onto `{service, cosigner}` at
+/// create time, stored as the one `CosignerShare` in `shares`, so it can co-sign without the
+/// wallet online.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractPolicy {
     /// Contract that governs cooperative spends: sha256(component_wasm).
     #[serde(with = "arr32_hex")]
     pub contract_id: [u8; 32],
-    /// `V′` x-only public key (the cooperative-leaf / contract key).
-    #[serde(with = "arr32_hex")]
-    pub contract_pk: [u8; 32],
-    /// The cosigner's CANONICAL `V′` key package — its share at `cosigner_id`.
-    /// Used to refresh `V′` onto the service pairing.
-    #[serde(with = "kp_json")]
-    pub cosigner_key_package: KeyPackage,
-    /// The user's `V′` identifier (the non-cosigner shareholder), needed for the
-    /// Lagrange coefficient when refreshing onto the service.
-    #[serde(with = "id_hex")]
-    pub author_id: Identifier,
+    /// The WALLET's own verifying-share hex — an authorized signer that uses the normal `V`
+    /// pairing (no counter-share in `shares`). Included in the allowlist.
+    pub wallet_vk: VerifyingKeyHex,
     /// Unilateral-exit CSV delay (the exit leaf).
     pub exit_delay: u32,
     /// User-supplied exit-leaf owner x-only key, for the taptree.
     #[serde(with = "arr32_hex")]
     pub owner_pk: [u8; 32],
 
-    /// The cosigner's counter-share per signing pairing, keyed by the counterparty's
-    /// verifying key hex (compressed point). The author/user pairing (`cosigner_shareA`)
-    /// is present from creation; the always-online service pairing (`cosigner_shareB`)
-    /// is added at contract-create step 4.
+    /// The cosigner's `V` counter-share per service pairing, keyed by the service's verifying
+    /// key hex. Added by `ContractCreate` (refresh of `V` onto `{service, cosigner}`).
     pub shares: BTreeMap<VerifyingKeyHex, CosignerShare>,
 }
 
 impl ContractPolicy {
-    /// The verifying shares authorized to sign this contract — the counterparties with
-    /// an onboarded pairing (the user from creation, the service once added at step 4).
+    /// The verifying shares authorized to sign this contract: the wallet (signs with normal
+    /// `V`) plus every service pairing in `shares`. The gate co-signs only for these.
     pub fn authorized_verifying_keys(&self) -> Vec<VerifyingKeyHex> {
-        self.shares.keys().cloned().collect()
+        let mut keys = vec![self.wallet_vk.clone()];
+        keys.extend(self.shares.keys().cloned());
+        keys
     }
 
-    /// The cosigner's counter-share for the given recipient verifying key, or
-    /// `None` if it is not an (onboarded) recipient of this contract.
+    /// The cosigner's `V` counter-share for the given recipient verifying key, or `None` when
+    /// the recipient signs with the normal `V` pairing (the wallet) rather than a service share.
     pub fn share_for(&self, verifying_key_hex: &str) -> Option<&CosignerShare> {
         self.shares.get(verifying_key_hex)
     }
 }
 
-/// The cosigner's `V′` counter-share for one signing pairing. `public_key_package`
-/// is the 2-entry PKP `{recipient_id: P·G, cosigner_id: C·G}` whose group key is
-/// `V′`; `key_package` is the cosigner's own `C` key package.
+/// The cosigner's `V` counter-share for one service signing pairing. `public_key_package` is
+/// the 2-entry PKP `{service_id: P·G, cosigner_id: C·G}` whose group key is `V`; `key_package`
+/// is the cosigner's own `C` key package.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CosignerShare {
     #[serde(with = "kp_json")]

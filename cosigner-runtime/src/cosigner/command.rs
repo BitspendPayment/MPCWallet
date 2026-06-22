@@ -86,6 +86,19 @@ pub enum CosignerCommand {
         reply: Reply<RegisterDeviceTokenResponse>,
     },
 
+    // --- Policy seeding (onboarding / contract create) ---
+    /// Install freshly-computed policy material into the per-actor guest and seal it into
+    /// the guest's snapshot, so the guest owns the keys and every later cold spawn restores
+    /// them from the sealed blob (no plaintext key kept host-side). Sent by onboarding (and
+    /// contract-create) right after DKG, via `registry.dispatch`.
+    SeedPolicy {
+        key_package_json: String,
+        public_key_package_json: String,
+        user_signing_identifier_hex: Option<String>,
+        server_dkg_secret_hex: Option<String>,
+        reply: Reply<()>,
+    },
+
     // --- Auto-settle ---
     /// Tick from the global 60-second task. The actor checks its stored
     /// delegate intent and submits it if `now > earliest_expires_at - margin`.

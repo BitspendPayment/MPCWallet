@@ -6,7 +6,6 @@ use tonic::Status;
 
 use crate::auth::message::OP_REGISTER_DEVICE_TOKEN;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, DeviceToken};
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
@@ -22,14 +21,12 @@ const MAX_TOKEN_AGE_SECS: i64 = 60 * 24 * 60 * 60; // 60 days
     err
 )]
 pub fn register_device_token(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: RegisterDeviceTokenRequest,
 ) -> Result<RegisterDeviceTokenResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,

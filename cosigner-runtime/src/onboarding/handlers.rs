@@ -23,7 +23,7 @@ use threshold::identifier::Identifier;
 use threshold::random;
 use threshold::scalar::scalar_to_bytes;
 
-use crate::ceremony::{self, drain_pairs_with_err, Reply};
+use super::ceremony::{self, drain_pairs_with_err, Reply};
 use crate::cosigner::handlers::parsers;
 use crate::policy::store::persist_policy;
 use crate::policy::{NormalPolicy, PolicyState};

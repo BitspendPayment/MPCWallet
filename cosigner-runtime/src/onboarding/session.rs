@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use threshold::identifier::Identifier;
 
-use crate::ceremony::{CeremonyRounds, Reply};
+use super::ceremony::{CeremonyRounds, Reply};
 use crate::wallet_proto::{DkgStep1Response, DkgStep3Response};
 
 pub struct OnboardingSession {

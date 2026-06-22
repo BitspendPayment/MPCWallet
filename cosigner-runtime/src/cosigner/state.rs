@@ -85,6 +85,20 @@ pub struct CosignerState {
     pub owned_scripts: Vec<String>,
     /// Registered FCM/APNS device tokens. Pushes go to all of them.
     pub device_tokens: Vec<DeviceToken>,
+
+    /// Guest-routed delegate-settle marker: the threshold timestamp (`intent_valid_at`, i.e.
+    /// earliest VTXO expiry − safety margin) at/after which `TickAutoSettle` should drive the
+    /// guest's stored `ReadyToSettle` delegate. The delegate session itself lives in the
+    /// guest (durable via the sealed snapshot); this is the non-secret "when to fire" gate.
+    /// `Some(0)` means fire on the next tick (legacy short window). Cleared after settling.
+    pub guest_delegate_threshold: Option<i64>,
+
+    /// Non-secret policy metadata (FROST *public* key package JSON, signing identifier,
+    /// cosigner_id) loaded from persistence. Used for routing + address/amount derivation;
+    /// the signing keys themselves live in the guest. Formerly on `CosignerInstance`.
+    pub policy_state: Option<crate::policy::PolicyState>,
+    /// The user's UTXOs, for tx-parse / spent-amount calculation. Formerly on `CosignerInstance`.
+    pub utxo_state: Option<crate::policy::state::UtxoState>,
 }
 
 impl CosignerState {
@@ -98,6 +112,9 @@ impl CosignerState {
             ark_tx_history: Vec::new(),
             owned_scripts: Vec::new(),
             device_tokens: Vec::new(),
+            guest_delegate_threshold: None,
+            policy_state: None,
+            utxo_state: None,
         }
     }
 }

@@ -5,7 +5,6 @@ use tonic::Status;
 
 use crate::auth::message::{OP_FETCH_HISTORY, OP_FETCH_RECENT_TXS};
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::CosignerState;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
@@ -14,7 +13,6 @@ use super::helpers::{auth_check, ensure_policy_loaded};
 
 #[tracing::instrument(skip_all, name = "actor::broadcast_transaction", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn broadcast_transaction(
-    _user: &mut CosignerInstance,
     _state: &mut CosignerState,
     shared: &SharedServices,
     req: BroadcastTransactionRequest,
@@ -34,7 +32,6 @@ pub fn broadcast_transaction(
 
 #[tracing::instrument(skip_all, name = "actor::fetch_history", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn fetch_history(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: FetchHistoryRequest,
@@ -43,7 +40,6 @@ pub fn fetch_history(
     tracing::info!("[{user_id_hex}] FetchHistory");
 
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -52,13 +48,13 @@ pub fn fetch_history(
     )?;
 
     ensure_policy_loaded(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 
-    let (policy_state_clone, tweaked_map) = build_tweaked_map(user)?;
+    let (policy_state_clone, tweaked_map) = build_tweaked_map(state)?;
 
     let tweaked_fn = move |pkp_json: &str| -> Result<String, String> {
         tweaked_map
@@ -90,7 +86,6 @@ pub fn fetch_history(
 
 #[tracing::instrument(skip_all, name = "actor::fetch_recent_transactions", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn fetch_recent_transactions(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: FetchRecentTransactionsRequest,
@@ -99,7 +94,6 @@ pub fn fetch_recent_transactions(
     tracing::info!("[{user_id_hex}] FetchRecentTransactions");
 
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -108,13 +102,13 @@ pub fn fetch_recent_transactions(
     )?;
 
     ensure_policy_loaded(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 
-    let (policy_state_clone, tweaked_map) = build_tweaked_map(user)?;
+    let (policy_state_clone, tweaked_map) = build_tweaked_map(state)?;
     let tweaked_fn = move |pkp_json: &str| -> Result<String, String> {
         tweaked_map
             .get(pkp_json)
@@ -148,18 +142,17 @@ pub fn fetch_recent_transactions(
 }
 
 fn build_tweaked_map(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
 ) -> Result<(crate::policy::PolicyState, HashMap<String, String>), Status> {
-    let ps = user
+    let ps = state
         .policy_state
         .clone()
         .ok_or_else(|| Status::not_found("no policy state"))?;
 
     let mut map = HashMap::new();
 
-    let tweaked = user
-        .pub_key_package_tweak(&ps.normal_policy.public_key_package_json, None)
-        .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
+    let tweaked =
+        parsers::pub_key_package_tweak_json(&ps.normal_policy.public_key_package_json, None)?;
     let vk = parsers::extract_verifying_key(&tweaked)?;
     map.insert(ps.normal_policy.public_key_package_json.clone(), vk);
 

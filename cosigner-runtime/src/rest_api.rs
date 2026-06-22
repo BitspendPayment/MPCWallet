@@ -63,10 +63,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/u/{group_key}/dkg/step2", post(dkg_step2))
         .route("/u/{group_key}/dkg/step3", post(dkg_step3))
         // Contract creation (reshare V→V′ + service refresh)
-        .route("/u/{group_key}/contract/step1", post(contract_create_step1))
-        .route("/u/{group_key}/contract/step2", post(contract_create_step2))
-        .route("/u/{group_key}/contract/step3", post(contract_create_step3))
-        .route("/u/{group_key}/contract/step4", post(contract_create_step4))
+        .route("/u/{group_key}/contract/create", post(contract_create))
         // Signing
         .route("/u/{group_key}/sign/step1", post(sign_step1))
         .route("/u/{group_key}/sign/step2", post(sign_step2))
@@ -296,89 +293,31 @@ async fn dkg_step3(
 // Contract creation (reshare V→V′ + single service refresh)
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::contract_create_step1", fields(group_key = %group_key))]
-async fn contract_create_step1(
+#[tracing::instrument(skip_all, name = "rest::contract_create", fields(group_key = %group_key))]
+async fn contract_create(
     State(coord): State<Arc<ContractManager>>,
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ContractCreateStep1Request {
+    let req = wallet_proto::ContractCreateRequest {
         user_id: user_id_bytes(&group_key),
         identifier: hex_field(&body, "identifier"),
-        round1_package: str_field(&body, "round1_package"),
         contract_id: hex_field(&body, "contract_id"),
         contract_wasm: hex_field(&body, "contract_wasm"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
         server_pk: hex_field(&body, "server_pk"),
         exit_delay: i64_field(&body, "exit_delay") as u32,
         owner_pk: hex_field(&body, "owner_pk"),
         service_vk: hex_field(&body, "service_vk"),
-    };
-    match coord.create_contract_step_1(&group_key, req).await {
-        Ok(resp) => Ok(Json(json!({ "round1_packages": resp.round1_packages }))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
-
-#[tracing::instrument(skip_all, name = "rest::contract_create_step2", fields(group_key = %group_key))]
-async fn contract_create_step2(
-    State(coord): State<Arc<ContractManager>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ContractCreateStep2Request {
-        user_id: user_id_bytes(&group_key),
-        identifier: hex_field(&body, "identifier"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    match coord.create_contract_step_2(&group_key, req).await {
-        Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
-
-#[tracing::instrument(skip_all, name = "rest::contract_create_step3", fields(group_key = %group_key))]
-async fn contract_create_step3(
-    State(coord): State<Arc<ContractManager>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ContractCreateStep3Request {
-        user_id: user_id_bytes(&group_key),
-        identifier: hex_field(&body, "identifier"),
-        round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    match coord.create_contract_step_3(&group_key, req).await {
-        Ok(resp) => Ok(Json(json!({
-            "round2_packages_for_me": resp.round2_packages_for_me,
-            "contract_script_pubkey": to_hex(&resp.contract_script_pubkey),
-            "contract_group_id": to_hex(&resp.contract_group_id),
-        }))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
-
-#[tracing::instrument(skip_all, name = "rest::contract_create_step4", fields(group_key = %group_key))]
-async fn contract_create_step4(
-    State(coord): State<Arc<ContractManager>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ContractCreateStep4Request {
-        user_id: user_id_bytes(&group_key),
-        identifier: hex_field(&body, "identifier"),
-        contract_script_pubkey: hex_field(&body, "contract_script_pubkey"),
         a_at_cosigner: hex_field(&body, "a_at_cosigner"),
         a_at_service_point: hex_field(&body, "a_at_service_point"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
-    match coord.create_contract_step_4(&group_key, req).await {
-        Ok(resp) => Ok(Json(json!({ "ok": resp.ok }))),
+    match coord.create_contract(&group_key, req).await {
+        Ok(resp) => Ok(Json(json!({
+            "contract_script_pubkey": to_hex(&resp.contract_script_pubkey),
+            "b_at_service": to_hex(&resp.b_at_service),
+        }))),
         Err(status) => Err(status_to_response(status)),
     }
 }

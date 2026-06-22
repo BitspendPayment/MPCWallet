@@ -163,6 +163,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.auto_settle_safety_margin_secs,
         cfg.actor_idle_threshold_secs,
     );
+    if !cfg.asp_url.is_empty() {
+        shared.asp_url = Some(cfg.asp_url.clone());
+    }
 
     // Contracts are stored in the cosigner's own KV at eVTXO creation; the gate
     // resolves them from there. Gating is a no-op if the engine fails to init.
@@ -178,10 +181,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let shared = Arc::new(shared);
 
-    // WASM source: CLI > env > config default.
-    let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
-    tracing::info!("Loading WASM component from: {}", wasm_source);
-    let registry = cosigner::CosignerRegistry::new(&wasm_source, shared.clone())?;
+    // The cosigner-guest WASM component (the only one): CLI > env > config default.
+    let guest_wasm = args.wasm.unwrap_or(cfg.cosigner_guest_wasm_path.clone());
+    tracing::info!("Loading cosigner-guest WASM component from: {}", guest_wasm);
+    let registry = cosigner::CosignerRegistry::new(&guest_wasm, shared.clone())?;
 
     // Populate cross-user secondary indices from persistence so restore /
     // VTXO-stream lookups don't need to wake any actor.
@@ -286,7 +289,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TTL. Spawned independently of the per-user registry — the post-DKG
     // actor is lazy-spawned by the first sign/ark/refresh/policy call.
     let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
-    let onboarding_mgr = onboarding::OnboardingManager::new(shared.clone(), dkg_ttl);
+    let onboarding_mgr =
+        onboarding::OnboardingManager::with_registry(shared.clone(), registry.clone(), dkg_ttl);
     {
         let coord = onboarding_mgr.clone();
         tokio::spawn(async move {
@@ -294,15 +298,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Contract-creation (reshare V→V′ + service refresh) coordinator — same
-    // TTL/eviction model.
-    let contract_mgr = contract::ContractManager::new(shared.clone(), dkg_ttl);
-    {
-        let coord = contract_mgr.clone();
-        tokio::spawn(async move {
-            coord.run_eviction_loop().await;
-        });
-    }
+    // Contract-creation coordinator (stateless: a single refresh of V onto the service pairing).
+    let contract_mgr = contract::ContractManager::new(shared.clone());
 
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {

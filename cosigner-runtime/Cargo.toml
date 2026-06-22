@@ -13,8 +13,15 @@ sled-backend = ["sled"]
 enclave-backend = []
 
 [dependencies]
-wasmtime = { version = "29", features = ["component-model"] }
-wasmtime-wasi = "29"
+wasmtime = { version = "45", features = ["component-model", "async"] }
+wasmtime-wasi = "45"
+wasmtime-wasi-http = "45"
+cosigner-proto = { path = "../cosigner-proto" }
+# Custom h2 outgoing hook for the guest's wasi:http (the guest speaks gRPC over it).
+hyper = { version = "1", features = ["client", "server", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+http = "1"
 tonic = "0.12"
 tonic-web = "0.12"
 prost = "0.13"
@@ -78,6 +85,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 rand = "0.8"
 base64 = "0.22"
 dashmap = "6"
+anyhow = "1"
 
 [dev-dependencies]
 serde_json = "1"

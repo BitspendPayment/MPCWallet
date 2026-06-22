@@ -13,6 +13,5 @@ pub mod contract_gate;
 pub mod device_token;
 pub mod helpers;
 pub mod parsers;
-pub mod sign;
 pub mod tx;
 pub mod vtxo_stream;

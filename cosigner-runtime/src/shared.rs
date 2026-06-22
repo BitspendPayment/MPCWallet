@@ -17,6 +17,10 @@ pub struct SharedServices {
     pub contract_host: Option<Arc<ContractHost>>,
     pub bitcoin_history: Arc<tokio::sync::Mutex<BitcoinHistoryService>>,
     pub asp_client: Option<Arc<tokio::sync::Mutex<ark::client::AspClient>>>,
+    /// ASP gRPC endpoint URL (e.g. "http://localhost:7070"). Threaded to the WASM guest so
+    /// it can speak gRPC to arkd itself over the host's HTTP/2 hook. `None`/empty disables
+    /// guest-routed Ark flows. Set post-construction in `main` (see `contract_host`).
+    pub asp_url: Option<String>,
     /// Contract-signer service base URL (the always-online service holding the
     /// service-side share of contract keys). `None`/empty disables contract creation.
     pub service_url: Option<String>,
@@ -49,6 +53,7 @@ impl SharedServices {
             contract_host: None,
             bitcoin_history,
             asp_client: asp_client.map(|c| Arc::new(tokio::sync::Mutex::new(c))),
+            asp_url: None,
             service_url,
             fcm,
             auto_settle_safety_margin_secs,

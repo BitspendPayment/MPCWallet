@@ -5,12 +5,14 @@
 pub mod command;
 pub mod handle;
 pub mod handlers;
+pub mod guest_instance;
 pub mod registry;
 pub mod state;
 pub mod types;
 
 pub use command::CosignerCommand;
+pub use guest_instance::{GuestInstance, GuestInstanceCtx};
 pub use handle::CosignerHandle;
-pub use registry::{CosignerInstance, CosignerRegistry, CosignerWasiView};
+pub use registry::CosignerRegistry;
 pub use state::CosignerState;
 pub use types::ArkTxEntry;

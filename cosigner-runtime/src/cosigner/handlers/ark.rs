@@ -13,7 +13,6 @@ use crate::auth::message::{
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::handle::CosignerHandle;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::registry::CosignerRegistry;
 use crate::cosigner::state::CosignerState;
 use crate::shared::SharedServices;
@@ -49,7 +48,6 @@ fn fetch_asp_info(
 
 #[tracing::instrument(skip_all, name = "actor::get_ark_info", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_ark_info(
-    _user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: GetArkInfoRequest,
@@ -57,7 +55,6 @@ pub fn get_ark_info(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] GetArkInfo");
     auth_check(
-        _user,
         state,
         &req.user_id,
         &req.signature,
@@ -246,7 +243,6 @@ fn indexer_to_vtxo(v: ark::client::proto::IndexerVtxo) -> ark::client::proto::Vt
 
 #[tracing::instrument(skip_all, name = "actor::get_ark_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_ark_address(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     registry: &Arc<CosignerRegistry>,
@@ -255,7 +251,6 @@ pub fn get_ark_address(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] GetArkAddress");
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -266,7 +261,7 @@ pub fn get_ark_address(
     let info = fetch_asp_info(&asp)?;
 
     let owner_pk_hex = get_user_xonly_pubkey(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
@@ -287,7 +282,6 @@ pub fn get_ark_address(
 
 #[tracing::instrument(skip_all, name = "actor::get_boarding_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn get_boarding_address(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     registry: &Arc<CosignerRegistry>,
@@ -296,7 +290,6 @@ pub fn get_boarding_address(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] GetBoardingAddress");
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -306,7 +299,7 @@ pub fn get_boarding_address(
     let asp = require_asp(shared)?;
     let info = fetch_asp_info(&asp)?;
     let owner_pk_hex = get_user_xonly_pubkey(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
@@ -324,14 +317,12 @@ pub fn get_boarding_address(
 
 #[tracing::instrument(skip_all, name = "actor::check_boarding_balance", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn check_boarding_balance(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: CheckBoardingBalanceRequest,
 ) -> Result<CheckBoardingBalanceResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -342,7 +333,7 @@ pub fn check_boarding_balance(
     let info = fetch_asp_info(&asp)?;
 
     let owner_pk_hex = get_user_xonly_pubkey(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
@@ -382,14 +373,12 @@ pub fn check_boarding_balance(
 
 #[tracing::instrument(skip_all, name = "actor::list_vtxos", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn list_vtxos(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: ListVtxosRequest,
 ) -> Result<ListVtxosResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -402,7 +391,7 @@ pub fn list_vtxos(
     let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
 
     let owner_pk_hex = get_user_xonly_pubkey(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         &user_id_hex,
@@ -445,14 +434,12 @@ pub fn list_vtxos(
 
 #[tracing::instrument(skip_all, name = "actor::list_ark_transactions", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn list_ark_transactions(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     _shared: &SharedServices,
     req: ListArkTransactionsRequest,
 ) -> Result<ListArkTransactionsResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
+    let _user_id_hex = parsers::user_id_hex(&req.user_id);
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,

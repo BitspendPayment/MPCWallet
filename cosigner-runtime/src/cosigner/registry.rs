@@ -1,16 +1,13 @@
-//! Concurrent registry of per-user actors, plus the per-cosigner WASM instance
-//! and the tokio actor loop that owns + drives it.
+//! Concurrent registry of per-user actors plus the tokio actor loop that owns + drives each.
 //!
-//! `CosignerInstance` keeps all threshold-crypto state in WASM linear memory (only
-//! persistent host state — policy, UTXOs — is mirrored on the host). The registry
-//! is a `DashMap` of mpsc senders; lookup, dispatch, and stream fan-out are
-//! lock-free across distinct users. Each user has exactly one actor: `run_cosigner`
-//! is a tokio task that owns its `CosignerInstance` + `CosignerState` and processes
-//! commands serially. Per-command WASM work runs inside `spawn_blocking`, so an idle
-//! actor is just memory, not a thread. The instance + state live behind
-//! `Arc<parking_lot::Mutex<>>` so the panic-recovery path in `run_cosigner` can
-//! reseat a wedged WASM instance without losing user state (`parking_lot` doesn't
-//! poison on panic, so the recovery reseat is clean).
+//! All signing keys + the FROST ceremony live in the per-actor `cosigner-guest` component;
+//! the host keeps only non-secret `CosignerState` (policy, UTXOs, vtxos, history, sessions).
+//! The registry is a `DashMap` of mpsc senders; lookup, dispatch, and stream fan-out are
+//! lock-free across distinct users. Each user has exactly one actor: `run_cosigner` is a
+//! tokio task that owns its `CosignerState` and processes commands serially. Per-command
+//! host work runs inside `spawn_blocking`, so an idle actor is just memory, not a thread.
+//! `CosignerState` lives behind `Arc<parking_lot::Mutex<>>` (no poison on panic), so a caught
+//! handler panic leaves it consistent and the recv loop simply continues.
 
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -22,17 +19,25 @@ use futures::FutureExt;
 use parking_lot::Mutex;
 use tokio::sync::{mpsc, oneshot};
 use tonic::Status;
-use wasmtime::component::{Component, Linker, ResourceAny};
-use wasmtime::{Engine, Store};
-use wasmtime_wasi::{ResourceTable, WasiCtx, WasiCtxBuilder, WasiView};
+use wasmtime::component::{Component, Linker};
+use wasmtime::Engine;
 
-use crate::policy::{PolicyState, UtxoState};
 use crate::shared::SharedServices;
 
 use super::command::CosignerCommand;
+use super::guest_instance::GuestInstance;
 use super::handle::{CosignerHandle, OwnedHandle};
 use super::handlers;
 use super::state::{CosignerState, DeviceToken};
+use crate::wallet_proto::{
+    send_vtxo_response, settle_delegate_response, sign_step1_response, SendVtxoRequest,
+    SendVtxoResponse, SettleDelegateRequest, SettleDelegateResponse, SignStep1Request,
+    SignStep1Response, SignStep2Request, SignStep2Response,
+};
+use cosigner_proto::{
+    ApplyDelegateSigsWire, ArkTxEntryWire, GenerateDelegateWire, GuestCommand, GuestResponse,
+    SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
+};
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -46,9 +51,11 @@ fn now_secs() -> i64 {
 const MAILBOX_CAPACITY: usize = 256;
 
 pub struct CosignerRegistry {
-    engine: Engine,
-    component: Component,
-    linker: Linker<CosignerWasiView>,
+    /// Native-async stack for the long-lived `cosigner-guest` — the only WASM component.
+    /// It owns all signing keys, the FROST ceremony, and per-user state.
+    guest_engine: Engine,
+    guest_component: Component,
+    guest_linker: Linker<super::guest_instance::GuestInstanceCtx>,
     shared: Arc<SharedServices>,
     /// Active actors keyed by user_id_hex.
     actors: DashMap<String, OwnedHandle>,
@@ -60,28 +67,36 @@ pub struct CosignerRegistry {
 
 impl CosignerRegistry {
     pub fn new(
-        wasm_path: &str,
+        guest_wasm_path: &str,
         shared: Arc<SharedServices>,
     ) -> Result<Arc<Self>, Box<dyn std::error::Error>> {
-        let mut config = wasmtime::Config::new();
-        config.wasm_component_model(true);
-        let engine = Engine::new(&config)?;
-        let component = Component::from_file(&engine, wasm_path)?;
-        let mut linker = Linker::new(&engine);
-        wasmtime_wasi::add_to_linker_sync(&mut linker)?;
-        component::threshold::contract_gate::add_to_linker(
-            &mut linker,
-            |v: &mut CosignerWasiView| v,
-        )?;
+        let guest_engine = super::guest_instance::build_engine()?;
+        let guest_component = Component::from_file(&guest_engine, guest_wasm_path)?;
+        let guest_linker = super::guest_instance::build_linker(&guest_engine)?;
 
         Ok(Arc::new(Self {
-            engine,
-            component,
-            linker,
+            guest_engine,
+            guest_component,
+            guest_linker,
             shared,
             actors: DashMap::new(),
             script_idx: DashMap::new(),
         }))
+    }
+
+    /// Instantiate a fresh native-async `cosigner-guest` instance, wired to this
+    /// registry's shared services (so its `contract-gate` import enforces real
+    /// contracts). One per actor; its in-WASM state persists across `command` calls.
+    pub async fn spawn_guest_instance(
+        &self,
+    ) -> anyhow::Result<super::guest_instance::GuestInstance> {
+        super::guest_instance::GuestInstance::spawn(
+            &self.guest_engine,
+            &self.guest_component,
+            &self.guest_linker,
+            Some(self.shared.clone()),
+        )
+        .await
     }
 
     pub fn shared(&self) -> &Arc<SharedServices> {
@@ -106,16 +121,10 @@ impl CosignerRegistry {
         if let Some(entry) = self.actors.get(group_key) {
             return Ok(entry.handle.clone());
         }
-        // Slow path: instantiate WASM and spawn the actor task. State and
-        // instance are wrapped in `Arc<Mutex<>>` so the actor's panic-recovery
-        // path can rebuild the wedged WASM instance while keeping the
-        // `CosignerState` (vtxos, delegate_session, history, device_tokens)
-        // intact across a caught panic.
+        // Slow path: spawn the actor task. `CosignerState` is wrapped in `Arc<Mutex<>>` so the
+        // actor's panic-recovery path keeps user state (policy, vtxos, delegate, history,
+        // device_tokens) intact across a caught panic. All signing keys live in the guest.
         let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
-        let user = self
-            .new_user_instance()
-            .map_err(|e| Status::internal(format!("WASM init error: {e}")))?;
-        let user = Arc::new(Mutex::new(user));
 
         // Rehydrate persistable state from sled. `vtxos` is also reconciled
         // by the vtxo_stream subscription as events arrive, but loading the
@@ -207,7 +216,6 @@ impl CosignerRegistry {
         let registry = self.clone();
         let last_active_for_task = last_active.clone();
         let join = tokio::spawn(run_cosigner(
-            user,
             state,
             rx,
             shared,
@@ -262,26 +270,6 @@ impl CosignerRegistry {
             }
             None => false,
         }
-    }
-
-    /// Build a fresh `CosignerInstance` from the cached engine/component/linker.
-    /// Public(crate) so the actor's panic-recovery path can rebuild a wedged
-    /// WASM instance without losing the actor's `CosignerState`.
-    pub(crate) fn new_user_instance(&self) -> Result<CosignerInstance, Box<dyn std::error::Error>> {
-        let wasi_ctx = WasiCtxBuilder::new().inherit_stdio().build();
-        let view = CosignerWasiView::new(ResourceTable::new(), wasi_ctx, self.shared.clone());
-        let mut store = Store::new(&self.engine, view);
-        let bindings = ThresholdWorld::instantiate(&mut store, &self.component, &self.linker)?;
-        let iface = bindings.component_threshold_types();
-        let session = iface.session().call_constructor(&mut store)?;
-        Ok(CosignerInstance {
-            store,
-            bindings,
-            session: Some(session),
-            script_path_spend: false,
-            policy_state: None,
-            utxo_state: None,
-        })
     }
 
     /// Send a command to the user's actor and await the typed reply.
@@ -340,397 +328,11 @@ impl CosignerRegistry {
 }
 
 // ===========================================================================
-// Per-cosigner WASM instance + the tokio actor that owns and drives it.
-// (Merged from the former cosigner.rs — same actor model, one file.)
+// The tokio actor that owns the per-cosigner `CosignerState` and drives it.
+// All signing keys + ceremony live in the per-actor `cosigner-guest`.
 // ===========================================================================
 
-wasmtime::component::bindgen!({
-    path: "wit/world.wit",
-    world: "threshold-world",
-    async: false,
-});
-
-pub struct CosignerWasiView {
-    table: ResourceTable,
-    ctx: WasiCtx,
-    shared: Arc<SharedServices>,
-    /// Full transaction of the spend currently being signed. The host stashes it
-    /// before the guest computes its share; the `contract-gate` import reads it.
-    pub current_full_tx: Option<Vec<u8>>,
-}
-
-impl CosignerWasiView {
-    pub fn new(table: ResourceTable, ctx: WasiCtx, shared: Arc<SharedServices>) -> Self {
-        Self {
-            table,
-            ctx,
-            shared,
-            current_full_tx: None,
-        }
-    }
-}
-
-impl WasiView for CosignerWasiView {
-    fn table(&mut self) -> &mut ResourceTable {
-        &mut self.table
-    }
-    fn ctx(&mut self) -> &mut WasiCtx {
-        &mut self.ctx
-    }
-}
-
-// Host-side implementation of the `contract-gate` capability the guest imports:
-// evaluate the contract bound to the stashed spend in the isolated ContractEngine.
-impl component::threshold::contract_gate::Host for CosignerWasiView {
-    fn enforce(&mut self) -> Result<(), String> {
-        let tx = self.current_full_tx.clone().unwrap_or_default();
-        super::handlers::contract_gate::enforce_contracts(&self.shared, &tx)
-            .map_err(|s| s.message().to_string())
-    }
-}
-
-/// Per-cosigner WASM instance. All threshold-crypto state lives in WASM
-/// linear memory as `ResourceAny` handles; only persistent host state
-/// (policy, UTXOs) is mirrored on the host.
-pub struct CosignerInstance {
-    pub store: Store<CosignerWasiView>,
-    pub bindings: ThresholdWorld,
-
-    /// The `session` resource handle: the in-progress signing ceremony state
-    /// (commitments, shares, message, the single-use nonce) plus the signing ops.
-    /// Created once at instantiation; `reset` clears it per signing round.
-    pub session: Option<ResourceAny>,
-
-    /// True when the current signing session uses script-path (no tweak).
-    pub script_path_spend: bool,
-
-    pub policy_state: Option<PolicyState>,
-    pub utxo_state: Option<UtxoState>,
-}
-
-/// A WASM threshold error rendered as a string.
-fn threshold_err_to_string(e: &exports::component::threshold::types::ThresholdError) -> String {
-    use exports::component::threshold::types::ThresholdError;
-    match e {
-        ThresholdError::InvalidInput(msg) => format!("invalid input: {msg}"),
-        ThresholdError::CryptoError(msg) => format!("crypto error: {msg}"),
-        ThresholdError::SerializationError(msg) => format!("serialization error: {msg}"),
-    }
-}
-
-/// Threshold *signing* operations dispatched into the cosigner WASM guest's single
-/// `session` resource. Each fetches the session handle, calls the bindgen export, and
-/// flattens the wasmtime trap + `ThresholdError` results into a `String`. (Onboarding
-/// and contract creation run native-Rust, so only signing hits the guest.)
-impl CosignerInstance {
-    /// Generate the session's single-use signing nonce; the nonce is stored inside the
-    /// guest session, so [`Self::frost_sign`] takes no nonce arg. Returns commitments JSON.
-    pub fn new_nonce(&mut self, secret_hex: &str) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_new_nonce(&mut self.store, session, secret_hex)
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    pub fn frost_sign(
-        &mut self,
-        signing_package_json: &str,
-        key_package_json: &str,
-    ) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_frost_sign(&mut self.store, session, signing_package_json, key_package_json)
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    pub fn frost_aggregate(
-        &mut self,
-        signing_package_json: &str,
-        shares_json: &str,
-        public_key_package_json: &str,
-    ) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_frost_aggregate(
-                &mut self.store,
-                session,
-                signing_package_json,
-                shares_json,
-                public_key_package_json,
-            )
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    pub fn key_package_tweak(
-        &mut self,
-        kp_json: &str,
-        merkle_root: Option<&[u8]>,
-    ) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_key_package_tweak(&mut self.store, session, kp_json, merkle_root)
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    pub fn pub_key_package_tweak(
-        &mut self,
-        pkp_json: &str,
-        merkle_root: Option<&[u8]>,
-    ) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_pub_key_package_tweak(&mut self.store, session, pkp_json, merkle_root)
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    pub fn identifier_derive(&mut self, message: &[u8]) -> Result<String, String> {
-        let session = self.session.ok_or("no session")?;
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_identifier_derive(&mut self.store, session, message)
-            .map_err(|e| e.to_string())?
-            .map_err(|e| threshold_err_to_string(&e))
-    }
-
-    // ----- session state accessors (the one session created at instantiation) -----
-
-    pub fn signing_session_reset(&mut self, h: ResourceAny) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_reset(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_user_hiding_hex(
-        &mut self,
-        h: ResourceAny,
-        hex: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_user_hiding_hex(&mut self.store, h, hex)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_user_hiding_hex(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_user_hiding_hex(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_user_binding_hex(
-        &mut self,
-        h: ResourceAny,
-        hex: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_user_binding_hex(&mut self.store, h, hex)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_user_binding_hex(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_user_binding_hex(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_message_to_sign(
-        &mut self,
-        h: ResourceAny,
-        msg_hex: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_message_to_sign(&mut self.store, h, msg_hex)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_message_to_sign(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_message_to_sign(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_has_message(&mut self, h: ResourceAny) -> Result<bool, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_has_message(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_server_commitments_json(
-        &mut self,
-        h: ResourceAny,
-        json: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_server_commitments_json(&mut self.store, h, json)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_server_commitments_json(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_server_commitments_json(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_has_server_commitments(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<bool, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_has_server_commitments(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_insert_commitment(
-        &mut self,
-        h: ResourceAny,
-        id_hex: &str,
-        commitments_json: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_insert_commitment(&mut self.store, h, id_hex, commitments_json)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_commitments_json(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_commitments_json(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_insert_share(
-        &mut self,
-        h: ResourceAny,
-        id_hex: &str,
-        share_hex: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_insert_share(&mut self.store, h, id_hex, share_hex)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_has_share(
-        &mut self,
-        h: ResourceAny,
-        id_hex: &str,
-    ) -> Result<bool, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_has_share(&mut self.store, h, id_hex)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_share_count(&mut self, h: ResourceAny) -> Result<u32, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_share_count(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_shares_json(&mut self, h: ResourceAny) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_shares_json(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_current_policy_id(
-        &mut self,
-        h: ResourceAny,
-        id: &str,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_current_policy_id(&mut self.store, h, id)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_get_current_policy_id(
-        &mut self,
-        h: ResourceAny,
-    ) -> Result<String, String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_get_current_policy_id(&mut self.store, h)
-            .map_err(|e| e.to_string())
-    }
-
-    pub fn signing_session_set_pending_amount(
-        &mut self,
-        h: ResourceAny,
-        amount: i64,
-    ) -> Result<(), String> {
-        let iface = self.bindings.component_threshold_types();
-        iface
-            .session()
-            .call_set_pending_amount(&mut self.store, h, amount)
-            .map_err(|e| e.to_string())
-    }
-}
-
-/// Lock `user` and `state` inside `spawn_blocking`, run `f`, return the typed
+/// Lock `state` inside `spawn_blocking`, run `f`, return the typed
 /// result. `(user, state)` ownership stays with the actor task across this
 /// call; the mutex guards only protect against panic-recovery reseating the
 /// instance.
@@ -740,19 +342,14 @@ impl CosignerInstance {
 /// caller's oneshot reply fires with an error instead of hanging. The actor
 /// task itself stays alive — its outer `catch_unwind` in `run_cosigner` reseats
 /// the wedged WASM instance and drains in-flight rendezvous replies.
-async fn run_blocking<F, T>(
-    user: Arc<Mutex<CosignerInstance>>,
-    state: Arc<Mutex<CosignerState>>,
-    f: F,
-) -> Result<T, Status>
+async fn run_blocking<F, T>(state: Arc<Mutex<CosignerState>>, f: F) -> Result<T, Status>
 where
-    F: FnOnce(&mut CosignerInstance, &mut CosignerState) -> Result<T, Status> + Send + 'static,
+    F: FnOnce(&mut CosignerState) -> Result<T, Status> + Send + 'static,
     T: Send + 'static,
 {
     let outcome = tokio::task::spawn_blocking(move || {
-        let mut user = user.lock();
         let mut state = state.lock();
-        f(&mut user, &mut state)
+        f(&mut state)
     })
     .await;
     match outcome {
@@ -771,12 +368,12 @@ where
 /// reply oneshot. Captures the current span and re-enters it inside
 /// `spawn_blocking` so the handler's instrumented span stays in the trace tree.
 macro_rules! dispatch {
-    ($user:ident, $state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
+    ($state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
         let span = tracing::Span::current();
-        let res = run_blocking($user.clone(), $state.clone(), move |user, state| {
+        let res = run_blocking($state.clone(), move |state| {
             let _enter = span.enter();
-            $handler(user, state, &s, $req)
+            $handler(state, &s, $req)
         })
         .await;
         let _ = $reply.send(res);
@@ -786,13 +383,13 @@ macro_rules! dispatch {
 /// Like `dispatch!` but also passes a registry handle. Only used by the two
 /// ark address handlers that need to update `script_idx` for VTXO routing.
 macro_rules! dispatch_with_registry {
-    ($user:ident, $state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
+    ($state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
         let s = $shared.clone();
         let r = $registry.clone();
         let span = tracing::Span::current();
-        let res = run_blocking($user.clone(), $state.clone(), move |user, state| {
+        let res = run_blocking($state.clone(), move |state| {
             let _enter = span.enter();
-            $handler(user, state, &s, &r, $req)
+            $handler(state, &s, &r, $req)
         })
         .await;
         let _ = $reply.send(res);
@@ -800,13 +397,17 @@ macro_rules! dispatch_with_registry {
 }
 
 pub async fn run_cosigner(
-    user: Arc<Mutex<CosignerInstance>>,
     state: Arc<Mutex<CosignerState>>,
     mut rx: mpsc::Receiver<CosignerCommand>,
     shared: Arc<SharedServices>,
     registry: Arc<CosignerRegistry>,
     last_active: Arc<AtomicI64>,
 ) {
+    // Per-actor native-async guest (lazily spawned on the first sign). Its in-WASM state
+    // (keys + ceremony) persists across commands. ALL signing routes through it.
+    let mut guest: Option<GuestInstance> = None;
+    let mut guest_policy_installed = false;
+
     while let Some(cmd) = rx.recv().await {
         // Per issue #30 design choice: every recv() event counts as activity.
         // This includes TickAutoSettle / stream events, which means actors in
@@ -818,6 +419,106 @@ pub async fn run_cosigner(
             break;
         }
 
+        // Intercept signing: every spend (script-path, key-path tweak, contract) routes
+        // through the native-async guest where the keys live. Runs outside the
+        // catch_unwind below because the guest path surfaces errors as replies.
+        let cmd = match cmd {
+            CosignerCommand::SignStep1 { req, reply } => {
+                route_sign_step1(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            CosignerCommand::SignStep2 { req, reply } => {
+                route_sign_step2(
+                    req,
+                    reply,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            // SendVtxo: the session + signing live in the guest (keys never leave it); the
+            // host only translates its VTXO projection in/out. Falls back to the legacy
+            // host handler when the ASP URL isn't configured for the guest.
+            CosignerCommand::SendVtxo { req, reply } if shared.asp_url.is_some() => {
+                route_send_vtxo(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            // Delegate-settle: the cosigner secret + session live in the guest; the host
+            // only relays. Falls back to the legacy host handler without ASP config.
+            CosignerCommand::SettleDelegate { req, reply } if shared.asp_url.is_some() => {
+                route_settle_delegate(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            // Auto-settle tick: if this actor has a guest-routed delegate pending, drive it in
+            // the guest. Otherwise fall through to the legacy host tick.
+            CosignerCommand::TickAutoSettle
+                if shared.asp_url.is_some() && state.lock().guest_delegate_threshold.is_some() =>
+            {
+                route_tick_auto_settle(
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            // Seed freshly-computed policy material into the guest and seal it (onboarding /
+            // contract-create). After this the keys live in the guest's sealed snapshot.
+            CosignerCommand::SeedPolicy {
+                key_package_json,
+                public_key_package_json,
+                user_signing_identifier_hex,
+                server_dkg_secret_hex,
+                reply,
+            } => {
+                route_seed_policy(
+                    key_package_json,
+                    public_key_package_json,
+                    user_signing_identifier_hex,
+                    server_dkg_secret_hex,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            other => other,
+        };
+
         // Gap 2: wrap each command dispatch in `catch_unwind`. After Gap 1's
         // fix, handler panics already reach us as `Err(Status::internal(...))`
         // via `run_blocking`. This outer catch is belt-and-suspenders against
@@ -828,13 +529,11 @@ pub async fn run_cosigner(
         //      don't hang on a reply that will never come.
         //   3. Keep the recv loop running for the next command.
         //
-        // `AssertUnwindSafe` is necessary because `CosignerInstance` (wasmtime
-        // Store) isn't naturally UnwindSafe. The safety claim is sound: we
-        // unconditionally rebuild the instance after a caught panic, so no
-        // potentially-inconsistent wasm state survives the boundary.
+        // `AssertUnwindSafe` is sound here: `parking_lot::Mutex` doesn't poison on panic, and
+        // `CosignerState` holds only plain data (no wasm Store), so a caught panic leaves it
+        // consistent and the recv loop simply continues with the next command.
         let dispatch_outcome = AssertUnwindSafe(dispatch_one(
             cmd,
-            user.clone(),
             state.clone(),
             shared.clone(),
             registry.clone(),
@@ -843,16 +542,738 @@ pub async fn run_cosigner(
         .await;
 
         if dispatch_outcome.is_err() {
-            tracing::error!("actor caught unwind during dispatch; rebuilding WASM instance");
-            match registry.new_user_instance() {
-                Ok(fresh) => {
-                    *user.lock() = fresh;
+            tracing::error!("actor caught unwind during dispatch; continuing");
+        }
+    }
+}
+
+/// Drop the guest so the next normal sign respawns it from a clean state. Called when a
+/// guest command traps/errors (the in-WASM ceremony may be wedged).
+fn reseat_guest(guest: &mut Option<GuestInstance>, installed: &mut bool) {
+    *guest = None;
+    *installed = false;
+}
+
+/// Phase 4: opaque sealed-state tree (one blob per group key). The host stores it but
+/// cannot read it (identity-sealed JSON today; enclave AEAD later). Keyed by group key.
+const SEALED_STATE_TREE: &str = "sealed_state";
+
+/// Persist the guest's snapshot blob after a state mutation (best-effort).
+async fn persist_guest_snapshot(
+    guest: &mut GuestInstance,
+    shared: &SharedServices,
+    group_key: &str,
+) {
+    match guest.command(GuestCommand::Snapshot).await {
+        Ok(GuestResponse::Snapshot { blob }) => {
+            if let Err(e) =
+                shared
+                    .persistence
+                    .put(SEALED_STATE_TREE, group_key, &hex::encode(blob))
+            {
+                tracing::warn!("persist sealed_state/{group_key} failed: {e}");
+            }
+        }
+        Ok(other) => tracing::warn!("snapshot: unexpected response {other:?}"),
+        Err(e) => tracing::warn!("snapshot command failed: {e}"),
+    }
+}
+
+/// Restore the guest's state from a persisted snapshot, if one exists (on spawn/reseat).
+/// Returns `true` when a snapshot was restored — meaning the guest now holds its policy +
+/// keys from the sealed blob, so the caller can SKIP `InstallPolicy` (no plaintext key read).
+/// `false` when there's no stored blob (first run) or restore failed.
+async fn restore_guest_snapshot(
+    guest: &mut GuestInstance,
+    shared: &SharedServices,
+    group_key: &str,
+) -> bool {
+    let stored = shared.persistence.get(SEALED_STATE_TREE, group_key);
+    let Ok(Some(hex_blob)) = stored else {
+        return false;
+    };
+    let Ok(blob) = hex::decode(&hex_blob) else {
+        tracing::warn!("sealed_state/{group_key}: corrupt hex; ignoring");
+        return false;
+    };
+    match guest.command(GuestCommand::RestoreSnapshot { blob }).await {
+        Ok(GuestResponse::Restored) => {
+            tracing::info!("restored guest snapshot for {group_key}");
+            true
+        }
+        Ok(other) => {
+            tracing::warn!("restore: unexpected response {other:?}");
+            false
+        }
+        Err(e) => {
+            tracing::warn!("restore command failed: {e}");
+            false
+        }
+    }
+}
+
+/// Route `SignStep1`: non-contract spends (raw script-path AND key-path-tweaked) go to the
+/// native-async guest where the keys live — every spend type (script-path, key-path tweak,
+/// contract). The contract gate is enforced inside the guest's sign step2.
+#[allow(clippy::too_many_arguments)]
+async fn route_sign_step1(
+    req: SignStep1Request,
+    reply: oneshot::Sender<Result<SignStep1Response, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    // Routing decision + the policy material to install, computed under the locks. No
+    // `.await` is held across the parking_lot guards.
+    let decision = {
+        let cosigner_id = state.lock().cosigner_id.clone();
+        let mut state_guard = state.lock();
+        if let Err(e) = handlers::helpers::ensure_policy_loaded(
+            &mut state_guard,
+            shared.persistence.as_ref(),
+            shared.secret_store.as_ref(),
+            &cosigner_id,
+        ) {
+            let _ = reply.send(Err(e));
+            return;
+        }
+        let Some(policy) = state_guard.policy_state.as_ref() else {
+            let _ = reply.send(Err(Status::not_found("no policy state")));
+            return;
+        };
+        // The guest now handles every spend type: raw FROST (script-path), BIP-341 key-path
+        // tweak, AND contract spends (its sign step2 calls the `contract-gate` host import to
+        // enforce the bound contract before producing a share). Always route to the guest;
+        // the legacy in-WASM sign path is gone.
+        (
+            policy.normal_policy.key_package_json.clone(),
+            policy.normal_policy.public_key_package_json.clone(),
+            policy.user_signing_identifier_hex.clone(),
+            policy.cosigner_id.clone(),
+            policy.server_dkg_secret_hex.clone(),
+        )
+    };
+
+    let (key_package_json, public_key_package_json, user_identifier_hex, group_key, server_dkg_secret_hex) =
+        decision;
+
+    // Lazily spawn the guest, then install the policy once.
+    if guest.is_none() {
+        match registry.spawn_guest_instance().await {
+            Ok(g) => {
+                *guest = Some(g);
+                *guest_policy_installed = false;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Status::internal(format!("guest spawn: {e}"))));
+                return;
+            }
+        }
+    }
+    if !*guest_policy_installed {
+        let gk = group_key.clone();
+        // Restore-FIRST: a sealed snapshot carries the keys AND durable state (VTXOs/history/
+        // delegate), so when it restores we skip `InstallPolicy` entirely — no plaintext key
+        // is read on this path.
+        if restore_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await {
+            *guest_policy_installed = true;
+        } else {
+            // First run (no snapshot yet): install from the policy material, then immediately
+            // seal so every later cold spawn restores from the snapshot instead.
+            let result = guest
+                .as_mut()
+                .unwrap()
+                .command(GuestCommand::InstallPolicy {
+                    group_key,
+                    key_package_json,
+                    public_key_package_json,
+                    user_signing_identifier_hex: user_identifier_hex,
+                    server_dkg_secret_hex,
+                })
+                .await;
+            match result {
+                Ok(GuestResponse::PolicyInstalled) => *guest_policy_installed = true,
+                Ok(other) => {
+                    let _ = reply.send(Err(Status::internal(format!("InstallPolicy: {other:?}"))));
+                    reseat_guest(guest, guest_policy_installed);
+                    return;
                 }
                 Err(e) => {
-                    tracing::error!("failed to rebuild WASM instance: {e}; actor exiting");
-                    break;
+                    let _ = reply.send(Err(Status::internal(format!("InstallPolicy: {e}"))));
+                    reseat_guest(guest, guest_policy_installed);
+                    return;
                 }
             }
+            persist_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await;
+        }
+    }
+
+    let wire = SignStep1Wire {
+        user_id: req.user_id,
+        hiding_commitment: req.hiding_commitment,
+        binding_commitment: req.binding_commitment,
+        message_to_sign: req.message_to_sign,
+        signature: req.signature,
+        full_transaction: req.full_transaction,
+        timestamp_ms: req.timestamp_ms,
+        script_path_spend: req.script_path_spend,
+    };
+    let result = guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::FrostSignStep1(wire))
+        .await;
+    match result {
+        Ok(GuestResponse::SignStep1 {
+            commitments,
+            message_to_sign,
+        }) => {
+            let mut response = SignStep1Response::default();
+            for c in commitments {
+                response.commitments.insert(
+                    c.identifier_hex,
+                    sign_step1_response::Commitment {
+                        hiding: c.hiding,
+                        binding: c.binding,
+                    },
+                );
+            }
+            response.message_to_sign = message_to_sign;
+            let _ = reply.send(Ok(response));
+        }
+        Ok(GuestResponse::Error(msg)) => {
+            let _ = reply.send(Err(Status::internal(msg)));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Ok(other) => {
+            let _ = reply.send(Err(Status::internal(format!("sign_step1: {other:?}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::internal(format!("guest sign_step1: {e}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+    }
+}
+
+/// Route `SignStep2` through the per-actor guest (the only sign path).
+async fn route_sign_step2(
+    req: SignStep2Request,
+    reply: oneshot::Sender<Result<SignStep2Response, Status>>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    if guest.is_none() {
+        // The guest is established in step1; if it's gone (e.g. reseated mid-ceremony) the
+        // client must restart from step1. The legacy in-WASM sign path no longer exists.
+        let _ = reply.send(Err(Status::internal(
+            "guest unavailable for sign step2; restart from step1",
+        )));
+        return;
+    }
+
+    let wire = SignStep2Wire {
+        user_id: req.user_id,
+        signature_share: req.signature_share,
+        signature: req.signature,
+        timestamp_ms: req.timestamp_ms,
+    };
+    let result = guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::FrostSignStep2(wire))
+        .await;
+    match result {
+        Ok(GuestResponse::SignStep2 { r_point, z_scalar }) => {
+            let _ = reply.send(Ok(SignStep2Response { r_point, z_scalar }));
+        }
+        Ok(GuestResponse::Error(msg)) => {
+            let _ = reply.send(Err(Status::internal(msg)));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Ok(other) => {
+            let _ = reply.send(Err(Status::internal(format!("sign_step2: {other:?}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::internal(format!("guest sign_step2: {e}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+    }
+}
+
+/// Seed freshly-computed policy material (from onboarding / contract-create) into the
+/// per-actor guest and seal it into the guest's snapshot. After this the keys live in the
+/// guest's sealed blob, so later cold spawns restore them without a host-side plaintext key.
+#[allow(clippy::too_many_arguments)]
+async fn route_seed_policy(
+    key_package_json: String,
+    public_key_package_json: String,
+    user_signing_identifier_hex: Option<String>,
+    server_dkg_secret_hex: Option<String>,
+    reply: oneshot::Sender<Result<(), Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    let group_key = state.lock().cosigner_id.clone();
+    // Host-side projection (routing + address derivation). The secret key_package also lives
+    // here in-memory until the plaintext policy store is removed in a later step.
+    {
+        let mut s = state.lock();
+        s.policy_state = Some(crate::policy::PolicyState {
+            cosigner_id: group_key.clone(),
+            user_signing_identifier_hex,
+            server_dkg_secret_hex,
+            normal_policy: crate::policy::NormalPolicy {
+                id: "normal".to_string(),
+                key_package_json,
+                public_key_package_json,
+            },
+            contracts: Default::default(),
+        });
+    }
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+    let _ = reply.send(Ok(()));
+}
+
+/// Ensure the per-actor guest is spawned and its policy installed. On error, returns a
+/// `Status` for the caller to reply with (the guest is reseated on install failure).
+async fn ensure_guest_with_policy(
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) -> Result<(), Status> {
+    let (
+        key_package_json,
+        public_key_package_json,
+        user_identifier_hex,
+        group_key,
+        server_dkg_secret_hex,
+    ) = {
+        let cosigner_id = state.lock().cosigner_id.clone();
+        let mut state_guard = state.lock();
+        handlers::helpers::ensure_policy_loaded(
+            &mut state_guard,
+            shared.persistence.as_ref(),
+            shared.secret_store.as_ref(),
+            &cosigner_id,
+        )?;
+        let policy = state_guard
+            .policy_state
+            .as_ref()
+            .ok_or_else(|| Status::not_found("no policy state"))?;
+        (
+            policy.normal_policy.key_package_json.clone(),
+            policy.normal_policy.public_key_package_json.clone(),
+            policy.user_signing_identifier_hex.clone(),
+            policy.cosigner_id.clone(),
+            policy.server_dkg_secret_hex.clone(),
+        )
+    };
+
+    if guest.is_none() {
+        let g = registry
+            .spawn_guest_instance()
+            .await
+            .map_err(|e| Status::internal(format!("guest spawn: {e}")))?;
+        *guest = Some(g);
+        *guest_policy_installed = false;
+    }
+    if !*guest_policy_installed {
+        let gk = group_key.clone();
+        // Restore-FIRST: a sealed snapshot carries keys + durable state, so skip the plaintext
+        // `InstallPolicy` when it restores.
+        if restore_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await {
+            *guest_policy_installed = true;
+        } else {
+            // First run (no snapshot): install from policy material, then seal immediately so
+            // later cold spawns restore from the snapshot instead.
+            let result = guest
+                .as_mut()
+                .unwrap()
+                .command(GuestCommand::InstallPolicy {
+                    group_key,
+                    key_package_json,
+                    public_key_package_json,
+                    user_signing_identifier_hex: user_identifier_hex,
+                    server_dkg_secret_hex,
+                })
+                .await;
+            match result {
+                Ok(GuestResponse::PolicyInstalled) => *guest_policy_installed = true,
+                Ok(other) => {
+                    reseat_guest(guest, guest_policy_installed);
+                    return Err(Status::internal(format!("InstallPolicy: {other:?}")));
+                }
+                Err(e) => {
+                    reseat_guest(guest, guest_policy_installed);
+                    return Err(Status::internal(format!("InstallPolicy: {e}")));
+                }
+            }
+            persist_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await;
+        }
+    }
+    Ok(())
+}
+
+/// Route `SendVtxo` through the guest. Phase 1 (no signatures): build the step1 wire from
+/// the host VTXO projection, get sighashes. Phase 2 (signatures present): sign + submit in
+/// the guest, then apply the result to the host VTXO/history projection. The session and
+/// keys live entirely in the guest; the host only moves bytes and updates its projection.
+#[allow(clippy::too_many_arguments)]
+async fn route_send_vtxo(
+    req: SendVtxoRequest,
+    reply: oneshot::Sender<Result<SendVtxoResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    let Some(asp_url) = shared.asp_url.clone() else {
+        let _ = reply.send(Err(Status::unavailable("ASP not configured (set ASP_URL)")));
+        return;
+    };
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        let _ = reply.send(Err(e));
+        return;
+    }
+
+    if req.signed_messages.is_empty() {
+        // Phase 1: push the VTXO set into the guest, then build → sighashes.
+        let built = {
+            let st = state.lock();
+            handlers::ark_send::build_send_step1_wire(&st, asp_url, &req)
+        };
+        let (wire, vtxos) = match built {
+            Ok(w) => w,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        match guest
+            .as_mut()
+            .unwrap()
+            .command(GuestCommand::SetVtxos { vtxos })
+            .await
+        {
+            Ok(GuestResponse::VtxosSet) => {}
+            Ok(other) => {
+                let _ = reply.send(Err(Status::internal(format!("SetVtxos: {other:?}"))));
+                reseat_guest(guest, guest_policy_installed);
+                return;
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Status::internal(format!("guest SetVtxos: {e}"))));
+                reseat_guest(guest, guest_policy_installed);
+                return;
+            }
+        }
+        let result = guest
+            .as_mut()
+            .unwrap()
+            .command(GuestCommand::SendVtxoStep1(wire))
+            .await;
+        match result {
+            Ok(GuestResponse::SendVtxoSighashes { messages_to_sign }) => {
+                let _ = reply.send(Ok(SendVtxoResponse {
+                    status: send_vtxo_response::Status::SigningRequired as i32,
+                    messages_to_sign,
+                    script_path_spend: true,
+                    ark_txid: String::new(),
+                    error_message: String::new(),
+                }));
+            }
+            Ok(GuestResponse::Error(msg)) => {
+                let _ = reply.send(Err(Status::internal(msg)));
+                reseat_guest(guest, guest_policy_installed);
+            }
+            Ok(other) => {
+                let _ = reply.send(Err(Status::internal(format!("send_vtxo step1: {other:?}"))));
+                reseat_guest(guest, guest_policy_installed);
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Status::internal(format!("guest send_vtxo step1: {e}"))));
+                reseat_guest(guest, guest_policy_installed);
+            }
+        }
+    } else {
+        // Phase 2: sign + submit in the guest, then apply to the host projection.
+        let wire = SendVtxoStep2Wire {
+            user_id: req.user_id.clone(),
+            signature: req.signature.clone(),
+            timestamp_ms: req.timestamp_ms,
+            asp_url,
+            signed_messages: req.signed_messages.clone(),
+        };
+        let result = guest
+            .as_mut()
+            .unwrap()
+            .command(GuestCommand::SendVtxoStep2(wire))
+            .await;
+        match result {
+            Ok(GuestResponse::SendVtxoSubmitted { ark_txid, change }) => {
+                // Mirror the send into the guest's owned history (it owns the data for the
+                // sealed snapshot); the host projection is still updated for live queries.
+                let entry = ArkTxEntryWire {
+                    tx_type: "send".to_string(),
+                    amount_sats: -(req.amount as i64),
+                    txid: ark_txid.clone(),
+                    timestamp: now_secs(),
+                };
+                let resp = {
+                    let mut st = state.lock();
+                    handlers::ark_send::apply_send_result(&mut st, shared, &req, ark_txid, change)
+                };
+                let _ = guest
+                    .as_mut()
+                    .unwrap()
+                    .command(GuestCommand::AppendHistory { entry })
+                    .await;
+                // Phase 4: the send mutated guest VTXOs + history — persist the snapshot.
+                let group_key = state.lock().cosigner_id.clone();
+                persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+                let _ = reply.send(Ok(resp));
+            }
+            Ok(GuestResponse::Error(msg)) => {
+                let _ = reply.send(Err(Status::internal(msg)));
+                reseat_guest(guest, guest_policy_installed);
+            }
+            Ok(other) => {
+                let _ = reply.send(Err(Status::internal(format!("send_vtxo step2: {other:?}"))));
+                reseat_guest(guest, guest_policy_installed);
+            }
+            Err(e) => {
+                let _ = reply.send(Err(Status::internal(format!("guest send_vtxo step2: {e}"))));
+                reseat_guest(guest, guest_policy_installed);
+            }
+        }
+    }
+}
+
+/// Route `SettleDelegate` through the guest. Phase 1 (no signatures): push VTXOs + build the
+/// delegate (self-refresh) → sighashes. Phase 2 (signatures): insert them (→ ReadyToSettle),
+/// then either store for the auto-settle tick (`store_only`, snapshot persisted) or drive the
+/// batch immediately. The cosigner secret + session never leave the guest.
+#[allow(clippy::too_many_arguments)]
+async fn route_settle_delegate(
+    req: SettleDelegateRequest,
+    reply: oneshot::Sender<Result<SettleDelegateResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    let Some(asp_url) = shared.asp_url.clone() else {
+        let _ = reply.send(Err(Status::unavailable("ASP not configured (set ASP_URL)")));
+        return;
+    };
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+
+    if req.signed_messages.is_empty() {
+        // Phase 1: push the VTXO set + host-computed renewal deadline, then build the delegate.
+        let prep = {
+            let st = state.lock();
+            handlers::ark_send::build_delegate_step1(&st, shared)
+        };
+        let (vtxos, intent_valid_at) = match prep {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = reply.send(Err(e));
+                return;
+            }
+        };
+        match guest
+            .as_mut()
+            .unwrap()
+            .command(GuestCommand::SetVtxos { vtxos })
+            .await
+        {
+            Ok(GuestResponse::VtxosSet) => {}
+            other => {
+                let _ = reply.send(Err(Status::internal(format!("SetVtxos: {other:?}"))));
+                reseat_guest(guest, guest_policy_installed);
+                return;
+            }
+        }
+        let wire = GenerateDelegateWire {
+            user_id: req.user_id,
+            signature: req.signature,
+            timestamp_ms: req.timestamp_ms,
+            asp_url,
+            intent_valid_at,
+        };
+        match guest
+            .as_mut()
+            .unwrap()
+            .command(GuestCommand::GenerateDelegate(wire))
+            .await
+        {
+            Ok(GuestResponse::DelegateSighashes { messages_to_sign }) => {
+                let _ = reply.send(Ok(SettleDelegateResponse {
+                    status: settle_delegate_response::Status::SigningRequired as i32,
+                    messages_to_sign,
+                    script_path_spend: true,
+                    commitment_txid: String::new(),
+                    error_message: String::new(),
+                }));
+            }
+            Ok(GuestResponse::Error(msg)) => {
+                let _ = reply.send(Err(Status::internal(msg)));
+                reseat_guest(guest, guest_policy_installed);
+            }
+            other => {
+                let _ = reply.send(Err(Status::internal(format!("GenerateDelegate: {other:?}"))));
+                reseat_guest(guest, guest_policy_installed);
+            }
+        }
+        return;
+    }
+
+    // Phase 2: insert the client's signatures → ReadyToSettle.
+    let apply = ApplyDelegateSigsWire {
+        user_id: req.user_id,
+        signature: req.signature,
+        timestamp_ms: req.timestamp_ms,
+        signed_messages: req.signed_messages,
+    };
+    match guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::ApplyDelegateSigs(apply))
+        .await
+    {
+        Ok(GuestResponse::DelegateReady) => {}
+        Ok(GuestResponse::Error(msg)) => {
+            let _ = reply.send(Err(Status::internal(msg)));
+            reseat_guest(guest, guest_policy_installed);
+            return;
+        }
+        other => {
+            let _ = reply.send(Err(Status::internal(format!("ApplyDelegateSigs: {other:?}"))));
+            reseat_guest(guest, guest_policy_installed);
+            return;
+        }
+    }
+
+    if req.store_only {
+        // Auto-settle path: persist the durable ReadyToSettle delegate + record the host-side
+        // "when to fire" marker (earliest VTXO expiry − margin) for TickAutoSettle.
+        {
+            let mut st = state.lock();
+            let earliest = st
+                .vtxos
+                .iter()
+                .filter_map(|e| (e.expires_at > 0).then_some(e.expires_at))
+                .min()
+                .unwrap_or(0);
+            let margin = shared.auto_settle_safety_margin_secs;
+            st.guest_delegate_threshold = Some((earliest - margin).max(0));
+        }
+        persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+        let _ = reply.send(Ok(SettleDelegateResponse {
+            status: settle_delegate_response::Status::Delegated as i32,
+            messages_to_sign: vec![],
+            script_path_spend: false,
+            commitment_txid: String::new(),
+            error_message: String::new(),
+        }));
+        return;
+    }
+
+    // Manual path: drive the batch immediately in the guest.
+    match guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::SettleDelegate { asp_url })
+        .await
+    {
+        Ok(GuestResponse::SettleSubmitted { commitment_txid, .. }) => {
+            persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+            let _ = reply.send(Ok(SettleDelegateResponse {
+                status: settle_delegate_response::Status::Settled as i32,
+                messages_to_sign: vec![],
+                script_path_spend: false,
+                commitment_txid,
+                error_message: String::new(),
+            }));
+        }
+        Ok(GuestResponse::Error(msg)) => {
+            let _ = reply.send(Err(Status::internal(msg)));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        other => {
+            let _ = reply.send(Err(Status::internal(format!("SettleDelegate drive: {other:?}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+    }
+}
+
+/// Guest-routed auto-settle: if a stored delegate's threshold has arrived, drive it in the
+/// guest. Fire-and-forget (no reply). `ensure_guest_with_policy` restores the delegate from
+/// the snapshot if the actor was reseated; an alive actor already holds it.
+async fn route_tick_auto_settle(
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    let Some(threshold) = state.lock().guest_delegate_threshold else {
+        return;
+    };
+    if now_secs() < threshold {
+        return;
+    }
+    let Some(asp_url) = shared.asp_url.clone() else { return };
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        tracing::warn!("auto-settle (guest): ensure guest failed: {e}");
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+    match guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::SettleDelegate { asp_url })
+        .await
+    {
+        Ok(GuestResponse::SettleSubmitted { commitment_txid, .. }) => {
+            state.lock().guest_delegate_threshold = None;
+            persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+            tracing::info!("auto-settle (guest): commitment_txid={commitment_txid}");
+        }
+        Ok(GuestResponse::Error(msg)) => {
+            tracing::warn!("auto-settle (guest): {msg}");
+            reseat_guest(guest, guest_policy_installed);
+        }
+        other => {
+            tracing::warn!("auto-settle (guest): unexpected {other:?}");
+            reseat_guest(guest, guest_policy_installed);
         }
     }
 }
@@ -862,7 +1283,6 @@ pub async fn run_cosigner(
 /// directly in `run_cosigner` (it breaks the loop) and never reaches here.
 async fn dispatch_one(
     cmd: CosignerCommand,
-    user: Arc<Mutex<CosignerInstance>>,
     state: Arc<Mutex<CosignerState>>,
     shared: Arc<SharedServices>,
     registry: Arc<CosignerRegistry>,
@@ -877,17 +1297,28 @@ async fn dispatch_one(
         }
 
         // -------- Signing --------
-        CosignerCommand::SignStep1 { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::sign::sign_step1);
+        // Both steps are intercepted in run_cosigner and routed to the guest (the only sign
+        // path); reaching these arms would be a bug.
+        CosignerCommand::SignStep1 { reply, .. } => {
+            let _ = reply.send(Err(Status::internal(
+                "SignStep1 reached dispatch_one; should be routed to the guest",
+            )));
         }
-        CosignerCommand::SignStep2 { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::sign::sign_step2);
+        CosignerCommand::SignStep2 { reply, .. } => {
+            let _ = reply.send(Err(Status::internal(
+                "SignStep2 reached dispatch_one; should be routed to the guest",
+            )));
+        }
+        // Intercepted in run_cosigner (spawns guest + installs + seals); reaching here is a bug.
+        CosignerCommand::SeedPolicy { reply, .. } => {
+            let _ = reply.send(Err(Status::internal(
+                "SeedPolicy reached dispatch_one; should be intercepted in run_cosigner",
+            )));
         }
 
         // -------- Transactions --------
         CosignerCommand::BroadcastTransaction { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -896,11 +1327,10 @@ async fn dispatch_one(
             );
         }
         CosignerCommand::FetchHistory { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::tx::fetch_history);
+            dispatch!(state, shared, req, reply, handlers::tx::fetch_history);
         }
         CosignerCommand::FetchRecentTransactions { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -911,11 +1341,10 @@ async fn dispatch_one(
 
         // -------- Ark (lookups) --------
         CosignerCommand::GetArkInfo { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::ark::get_ark_info);
+            dispatch!(state, shared, req, reply, handlers::ark::get_ark_info);
         }
         CosignerCommand::GetArkAddress { req, reply } => {
             dispatch_with_registry!(
-                user,
                 state,
                 shared,
                 registry,
@@ -926,7 +1355,6 @@ async fn dispatch_one(
         }
         CosignerCommand::GetBoardingAddress { req, reply } => {
             dispatch_with_registry!(
-                user,
                 state,
                 shared,
                 registry,
@@ -937,7 +1365,6 @@ async fn dispatch_one(
         }
         CosignerCommand::CheckBoardingBalance { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -946,11 +1373,10 @@ async fn dispatch_one(
             );
         }
         CosignerCommand::ListVtxos { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::ark::list_vtxos);
+            dispatch!(state, shared, req, reply, handlers::ark::list_vtxos);
         }
         CosignerCommand::ListArkTransactions { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -960,7 +1386,6 @@ async fn dispatch_one(
         }
         CosignerCommand::SendVtxo { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -970,7 +1395,6 @@ async fn dispatch_one(
         }
         CosignerCommand::RedeemVtxo { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -979,11 +1403,10 @@ async fn dispatch_one(
             );
         }
         CosignerCommand::Settle { req, reply } => {
-            dispatch!(user, state, shared, req, reply, handlers::ark_send::settle);
+            dispatch!(state, shared, req, reply, handlers::ark_send::settle);
         }
         CosignerCommand::SettleDelegate { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -993,7 +1416,6 @@ async fn dispatch_one(
         }
         CosignerCommand::SubmitArkSend { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -1004,7 +1426,6 @@ async fn dispatch_one(
         // -------- Push registration --------
         CosignerCommand::RegisterDeviceToken { req, reply } => {
             dispatch!(
-                user,
                 state,
                 shared,
                 req,
@@ -1017,9 +1438,9 @@ async fn dispatch_one(
         CosignerCommand::TickAutoSettle => {
             let s = shared.clone();
             let span = tracing::info_span!("actor::tick_auto_settle");
-            let res = run_blocking(user.clone(), state.clone(), move |user, state| {
+            let res = run_blocking(state.clone(), move |state| {
                 let _enter = span.enter();
-                handlers::auto_settle::tick_auto_settle(user, state, &s)
+                handlers::auto_settle::tick_auto_settle(state, &s)
             })
             .await;
             if let Err(e) = res {
@@ -1037,14 +1458,11 @@ async fn dispatch_one(
             let s = shared.clone();
             let span = tracing::info_span!("actor::vtxo_stream_update", user_id = %user_id_hex);
             let user_id_for_push = user_id_hex.clone();
-            let user_lock = user.clone();
             let state_lock = state.clone();
             let blocking_outcome = tokio::task::spawn_blocking(move || {
                 let _enter = span.enter();
-                let mut user = user_lock.lock();
                 let mut state = state_lock.lock();
                 let added = match handlers::vtxo_stream::apply_stream_update(
-                    &mut user,
                     &mut state,
                     &s,
                     &user_id_hex,
@@ -1088,14 +1506,11 @@ async fn dispatch_one(
             let s = shared.clone();
             let span = tracing::info_span!("actor::indexer_update", user_id = %user_id_hex);
             let user_id_for_push = user_id_hex.clone();
-            let user_lock = user.clone();
             let state_lock = state.clone();
             let blocking_outcome = tokio::task::spawn_blocking(move || {
                 let _enter = span.enter();
-                let mut user = user_lock.lock();
                 let mut state = state_lock.lock();
                 let added = match handlers::vtxo_stream::apply_stream_update(
-                    &mut user,
                     &mut state,
                     &s,
                     &user_id_hex,

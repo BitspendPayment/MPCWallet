@@ -12,7 +12,6 @@ use crate::contract::crypto_host;
 wasmtime::component::bindgen!({
     path: "wit/contract.wit",
     world: "contract",
-    async: false,
 });
 
 // `EvalContext` and `Verdict` are already at this module's root (the world's
@@ -118,7 +117,11 @@ impl ContractEngine {
         // wasmtime_wasi::add_to_linker_sync, so any contract importing wasi:*
         // fails to instantiate below.
         let mut linker = Linker::new(&self.engine);
-        if let Err(e) = self::bitcoin::contract::crypto::add_to_linker(&mut linker, |s| s) {
+        if let Err(e) = self::bitcoin::contract::crypto::add_to_linker::<
+            ContractState,
+            wasmtime::component::HasSelf<ContractState>,
+        >(&mut linker, |s: &mut ContractState| s)
+        {
             return Verdict::Deny(format!("linker setup: {e}"));
         }
 

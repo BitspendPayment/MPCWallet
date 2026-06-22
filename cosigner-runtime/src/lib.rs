@@ -3,7 +3,6 @@
 
 pub mod auth;
 pub mod bitcoin;
-pub mod ceremony;
 pub mod config;
 pub mod contract;
 pub mod cosigner;

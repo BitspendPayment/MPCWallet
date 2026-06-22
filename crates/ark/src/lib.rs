@@ -2,7 +2,7 @@
 
 extern crate alloc;
 
-#[cfg(feature = "client")]
+#[cfg(feature = "signing")]
 pub mod client;
 
 use alloc::vec::Vec;

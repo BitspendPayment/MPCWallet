@@ -1,21 +1,18 @@
-//! Shared helpers for actor command handlers. Each function takes plain
-//! references to `CosignerInstance`, `CosignerState`, and shared services so handlers
-//! can compose without locking.
+//! Shared helpers for actor command handlers. Each function takes plain references to
+//! `CosignerState` and shared services so handlers can compose without locking.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::CosignerState;
 use crate::persistence::{KvStore, SecretStore};
 use crate::policy::PolicyState;
 
-/// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature
-/// against the URL `user_id` (owner pubkey) via the actor's WASM session.
+/// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature against the URL
+/// `user_id` (owner pubkey) host-side via the `threshold` crate.
 pub fn auth_check(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     user_id_bytes: &[u8],
     signature: &[u8],
@@ -25,20 +22,17 @@ pub fn auth_check(
     let user_id_hex = hex::encode(user_id_bytes);
     timestamp_check(state, timestamp_ms, &user_id_hex, operation)?;
 
-    let pk_hex = hex::encode(user_id_bytes);
-    let sig_hex = hex::encode(signature);
     let auth_message = build_auth_message(operation, timestamp_ms, &user_id_hex);
 
-    let session = user
-        .session
-        .as_ref()
-        .ok_or_else(|| Status::internal("no session"))?;
-    let iface = user.bindings.component_threshold_types();
-    let is_valid = iface
-        .session()
-        .call_verify_schnorr_signature(&mut user.store, *session, &pk_hex, &auth_message, &sig_hex)
-        .map_err(|e| Status::internal(format!("WASM error: {e}")))?
-        .map_err(|_| Status::internal("signature verification failed"))?;
+    // BIP-340 Schnorr verification of the auth message (pure public crypto; the user_id IS the
+    // 33-byte pubkey). Host-side via the `threshold` crate — no legacy WASM component involved.
+    let pk: &[u8; 33] = user_id_bytes
+        .try_into()
+        .map_err(|_| Status::unauthenticated("user_id must be a 33-byte public key"))?;
+    let sig: &[u8; 64] = signature
+        .try_into()
+        .map_err(|_| Status::unauthenticated("signature must be 64 bytes"))?;
+    let is_valid = threshold::auth::verify_schnorr_signature(pk, &auth_message, sig);
 
     if !is_valid {
         tracing::warn!("[{user_id_hex}] Signature verification failed for {operation}");
@@ -85,7 +79,6 @@ pub fn is_authorized_share(authorized_shares: &[String], claimed_share_hex: &str
 /// both the pubkey the signature is checked against and the identity in the
 /// canonical message, so this reduces to the per-key `auth_check`.
 pub fn auth_check_group(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     claimed_share_bytes: &[u8],
     authorized_shares: &[String],
@@ -101,7 +94,6 @@ pub fn auth_check_group(
         ));
     }
     auth_check(
-        user,
         state,
         claimed_share_bytes,
         signature,
@@ -119,19 +111,19 @@ pub fn auth_check_group(
 /// verifying-share key. This lets the actor for the owner pubkey find its
 /// policy on respawn, and lets clients use either identity in the URL.
 pub fn ensure_policy_loaded(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<(), Status> {
-    if user.policy_state.is_some() {
+    if state.policy_state.is_some() {
         return Ok(());
     }
-    if try_load_policy(user, persistence, secret_store, user_id_hex)? {
+    if try_load_policy(state, persistence, secret_store, user_id_hex)? {
         return Ok(());
     }
     if let Ok(Some(canonical)) = persistence.get("policy_owner_idx", user_id_hex) {
-        if try_load_policy(user, persistence, secret_store, &canonical)? {
+        if try_load_policy(state, persistence, secret_store, &canonical)? {
             tracing::info!("[{user_id_hex}] Resolved via policy_owner_idx → {canonical}");
             return Ok(());
         }
@@ -144,7 +136,7 @@ pub fn ensure_policy_loaded(
 /// Try to load a policy under the given key. Returns Ok(true) on hit,
 /// Ok(false) on miss; bubble parse errors as warnings, treated as miss.
 fn try_load_policy(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     key: &str,
@@ -155,7 +147,7 @@ fn try_load_policy(
                 if let Ok(Some(secret)) = secret_store.get_secret(&format!("dkg-secret.{key}")) {
                     ps.server_dkg_secret_hex = Some(secret);
                 }
-                user.policy_state = Some(ps);
+                state.policy_state = Some(ps);
                 tracing::info!("[{key}] Loaded policy from persistence");
                 return Ok(true);
             }
@@ -172,13 +164,13 @@ pub use crate::policy::store::persist_policy;
 /// Fetch the user's group x-only pubkey (64 hex chars) for Ark address derivation.
 /// The compressed key from the policy is 33 bytes (66 hex); strip the parity byte.
 pub fn get_user_xonly_pubkey(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<String, Status> {
-    ensure_policy_loaded(user, persistence, secret_store, user_id_hex)?;
-    let ps = user
+    ensure_policy_loaded(state, persistence, secret_store, user_id_hex)?;
+    let ps = state
         .policy_state
         .as_ref()
         .ok_or_else(|| Status::not_found("no policy state"))?;
@@ -199,13 +191,13 @@ pub fn get_user_xonly_pubkey(
 
 /// Return `(xonly_owner_pk_hex, server_dkg_secret_hex)` from the user's policy.
 pub fn get_user_ark_keys(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     persistence: &dyn KvStore,
     secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<(String, String), Status> {
-    ensure_policy_loaded(user, persistence, secret_store, user_id_hex)?;
-    let ps = user
+    ensure_policy_loaded(state, persistence, secret_store, user_id_hex)?;
+    let ps = state
         .policy_state
         .as_ref()
         .ok_or_else(|| Status::not_found("no policy state"))?;
@@ -404,7 +396,7 @@ pub fn now_secs() -> i64 {
 
 /// Calculate spent amount from a transaction (PSBT or raw tx) for policy eval.
 pub fn calculate_spent_amount(
-    user: &mut CosignerInstance,
+    state: &mut CosignerState,
     full_tx: &[u8],
     pkp_json: &str,
 ) -> Result<i64, Status> {
@@ -457,16 +449,15 @@ pub fn calculate_spent_amount(
             .map_err(|e| Status::internal(format!("invalid ARK_AMOUNT value: {e}")))?;
         return Ok(amount);
     }
-    let tweaked_pkp_json = user
-        .pub_key_package_tweak(pkp_json, None)
-        .map_err(|e| Status::internal(format!("tweak error: {e}")))?;
+    let tweaked_pkp_json =
+        crate::cosigner::handlers::parsers::pub_key_package_tweak_json(pkp_json, None)?;
     let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(&tweaked_pkp_json)?;
     let script_hex = crate::bitcoin::tx_parser::derive_p2tr_script_hex(&vk_hex)
         .map_err(|e| Status::internal(format!("P2TR derivation: {e}")))?;
     let spent = crate::bitcoin::tx_parser::calculate_spent_amount(
         full_tx,
         &script_hex,
-        user.utxo_state
+        state.utxo_state
             .as_ref()
             .map(|u| &u.utxos[..])
             .unwrap_or(&[]),

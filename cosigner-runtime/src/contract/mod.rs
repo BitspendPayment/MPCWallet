@@ -8,10 +8,8 @@ mod engine;
 mod handler;
 pub mod manager;
 mod registry;
-pub mod session;
 
 pub use manager::ContractManager;
-pub use session::ContractSession;
 
 pub use engine::{
     ContractEngine, EvalContext, Outpoint, PrevoutInfo, Transaction, Txin, Txout, Verdict,

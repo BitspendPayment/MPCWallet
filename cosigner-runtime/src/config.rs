@@ -23,8 +23,9 @@ pub struct ServerConfig {
     pub supervisor_url: String,
     /// Enclave management token for supervisor API auth.
     pub enclave_mgmt_token: String,
-    /// Path to the cosigner WASM component file.
-    pub cosigner_wasm_path: String,
+    /// Path to the long-lived, stateful `cosigner-guest` WASM component (the only one;
+    /// it owns all signing keys + ceremony + per-user state).
+    pub cosigner_guest_wasm_path: String,
     /// Auto-settle threshold: submit a stored delegate intent when
     /// `now > earliest_expires_at - this`. Default 30 minutes.
     pub auto_settle_safety_margin_secs: i64,
@@ -72,7 +73,7 @@ impl ServerConfig {
             supervisor_url: env::var("SUPERVISOR_URL")
                 .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
             enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
-            cosigner_wasm_path: env::var("COSIGNER_WASM_PATH").unwrap_or_else(|_| {
+            cosigner_guest_wasm_path: env::var("COSIGNER_GUEST_WASM_PATH").unwrap_or_else(|_| {
                 "../cosigner/target/wasm32-wasip2/release/cosigner.wasm".to_string()
             }),
             auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")

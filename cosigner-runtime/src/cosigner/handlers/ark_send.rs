@@ -7,11 +7,12 @@ use tonic::Status;
 
 use crate::auth::message::{OP_REDEEM_VTXO, OP_SEND_VTXO, OP_SETTLE, OP_SETTLE_DELEGATE};
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, DelegateRecord, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
+
+use cosigner_proto::{SendVtxoStep1Wire, VtxoInputWire};
 
 use super::helpers::{
     auth_check, delete_user_delegate, get_user_ark_keys, get_user_xonly_pubkey, now_secs,
@@ -61,12 +62,136 @@ fn parse_signatures(messages: &[Vec<u8>]) -> Result<Vec<[u8; 64]>, Status> {
 }
 
 // =============================================================================
+// send_vtxo — guest-routed helpers (the session + signing live in the WASM guest;
+// these only translate the host's VTXO projection in/out of the guest wires).
+// =============================================================================
+
+/// Phase 1: build the guest's `SendVtxoStep1` wire from the host VTXO projection + ASP
+/// config. Auth is enforced inside the guest. Returns a gRPC precondition error if there
+/// are no VTXOs or insufficient balance (nicer than surfacing the guest's build error).
+/// Returns `(step1_wire, vtxos_to_push)`: the wire no longer carries VTXOs (the guest reads
+/// its own store), so the caller pushes `vtxos_to_push` via `SetVtxos` first.
+pub fn build_send_step1_wire(
+    state: &CosignerState,
+    asp_url: String,
+    req: &SendVtxoRequest,
+) -> Result<(SendVtxoStep1Wire, Vec<VtxoInputWire>), Status> {
+    if state.vtxos.is_empty() {
+        return Err(Status::failed_precondition("no VTXOs available for sending"));
+    }
+    let total_available: u64 = state.vtxos.iter().map(|e| e.amount).sum();
+    if total_available < req.amount {
+        return Err(Status::failed_precondition(format!(
+            "insufficient balance: have {} sats, need {} sats",
+            total_available, req.amount
+        )));
+    }
+    let vtxos = state
+        .vtxos
+        .iter()
+        .map(|e| VtxoInputWire {
+            txid: e.txid.clone(),
+            vout: e.vout,
+            amount_sats: e.amount,
+            exit_delay: e.exit_delay,
+        })
+        .collect();
+    let wire = SendVtxoStep1Wire {
+        user_id: req.user_id.clone(),
+        signature: req.signature.clone(),
+        timestamp_ms: req.timestamp_ms,
+        asp_url,
+        recipient_ark_address: req.recipient_ark_address.clone(),
+        amount: req.amount,
+    };
+    Ok((wire, vtxos))
+}
+
+/// Guest-routed delegate-settle Phase 1 prep: the VTXOs to push into the guest + the
+/// host-computed intent renewal deadline (earliest VTXO expiry − safety margin). The guest
+/// computes the self-refresh output itself; the host only supplies what it alone knows.
+pub fn build_delegate_step1(
+    state: &CosignerState,
+    shared: &SharedServices,
+) -> Result<(Vec<VtxoInputWire>, Option<u64>), Status> {
+    if state.vtxos.is_empty() {
+        return Err(Status::failed_precondition("no VTXOs to settle"));
+    }
+    let vtxos = state
+        .vtxos
+        .iter()
+        .map(|e| VtxoInputWire {
+            txid: e.txid.clone(),
+            vout: e.vout,
+            amount_sats: e.amount,
+            exit_delay: e.exit_delay,
+        })
+        .collect();
+    let earliest = state
+        .vtxos
+        .iter()
+        .filter_map(|e| (e.expires_at > 0).then_some(e.expires_at))
+        .min()
+        .unwrap_or(0);
+    let margin = shared.auto_settle_safety_margin_secs;
+    let intent_valid_at = if earliest > margin {
+        Some((earliest - margin) as u64)
+    } else {
+        None
+    };
+    Ok((vtxos, intent_valid_at))
+}
+
+/// Phase 2: apply the guest's `SendVtxoStep2` result to the host VTXO/history projection
+/// (drop spent VTXOs, add the guest-reported change, invalidate delegate, record history)
+/// and produce the `Settled` gRPC response.
+pub fn apply_send_result(
+    state: &mut CosignerState,
+    shared: &SharedServices,
+    req: &SendVtxoRequest,
+    ark_txid: String,
+    change: Option<(String, u32, u64, u32)>,
+) -> SendVtxoResponse {
+    let user_id_hex = parsers::user_id_hex(&req.user_id);
+    state.vtxos.clear();
+    state.delegate_session = None;
+    delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
+    if let Some((txid, vout, amount, exit_delay)) = change {
+        tracing::info!(
+            "[{user_id_hex}] SendVtxo: change VTXO txid={txid}, vout={vout}, amount={amount}, exit_delay={exit_delay}"
+        );
+        state.vtxos.push(VtxoEntry {
+            txid,
+            vout,
+            amount,
+            exit_delay,
+            created_at: now_secs(),
+            expires_at: 0,
+        });
+    }
+    save_user_vtxos(shared.persistence.as_ref(), &user_id_hex, &state.vtxos);
+    state.ark_tx_history.push(ArkTxEntry {
+        tx_type: "send".into(),
+        amount_sats: -(req.amount as i64),
+        txid: ark_txid.clone(),
+        timestamp: now_secs(),
+    });
+    save_user_ark_history(shared.persistence.as_ref(), &user_id_hex, &state.ark_tx_history);
+    SendVtxoResponse {
+        status: send_vtxo_response::Status::Settled as i32,
+        messages_to_sign: vec![],
+        script_path_spend: false,
+        ark_txid,
+        error_message: String::new(),
+    }
+}
+
+// =============================================================================
 // send_vtxo
 // =============================================================================
 
 #[tracing::instrument(skip_all, name = "actor::send_vtxo", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn send_vtxo(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: SendVtxoRequest,
@@ -78,7 +203,6 @@ pub fn send_vtxo(
         req.amount
     );
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -94,7 +218,7 @@ pub fn send_vtxo(
         // Phase 1: build session, return sighashes.
         (None, false) | (Some(_), false) => {
             let owner_pk_hex = get_user_xonly_pubkey(
-                user,
+                state,
                 shared.persistence.as_ref(),
                 shared.secret_store.as_ref(),
                 &user_id_hex,
@@ -245,7 +369,6 @@ pub fn send_vtxo(
 
 #[tracing::instrument(skip_all, name = "actor::redeem_vtxo", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn redeem_vtxo(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: RedeemVtxoRequest,
@@ -257,7 +380,6 @@ pub fn redeem_vtxo(
         req.amount
     );
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -274,7 +396,6 @@ pub fn redeem_vtxo(
 
 #[tracing::instrument(skip_all, name = "actor::settle", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn settle(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: SettleRequest,
@@ -282,7 +403,6 @@ pub fn settle(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] Settle");
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -311,7 +431,7 @@ pub fn settle(
         // Phase 1: build session by scanning boarding UTXOs.
         (None, false) => {
             let (owner_pk_hex, dkg_secret_hex) = get_user_ark_keys(
-                user,
+                state,
                 shared.persistence.as_ref(),
                 shared.secret_store.as_ref(),
                 &user_id_hex,
@@ -544,7 +664,6 @@ enum SettleOutcome {
 
 #[tracing::instrument(skip_all, name = "actor::settle_delegate", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn settle_delegate(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: SettleDelegateRequest,
@@ -552,7 +671,6 @@ pub fn settle_delegate(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] SettleDelegate");
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,
@@ -568,7 +686,7 @@ pub fn settle_delegate(
         // Phase 1: generate delegate.
         (None, false) => {
             let (owner_pk_hex, dkg_secret_hex) = get_user_ark_keys(
-                user,
+                state,
                 shared.persistence.as_ref(),
                 shared.secret_store.as_ref(),
                 &user_id_hex,
@@ -830,7 +948,6 @@ pub fn settle_delegate(
 
 #[tracing::instrument(skip_all, name = "actor::submit_ark_send", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
 pub fn submit_ark_send(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     req: SubmitArkSendRequest,
@@ -840,7 +957,6 @@ pub fn submit_ark_send(
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] SubmitArkSend");
     auth_check(
-        user,
         state,
         &req.user_id,
         &req.signature,

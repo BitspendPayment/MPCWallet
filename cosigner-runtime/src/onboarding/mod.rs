@@ -3,6 +3,7 @@
 //! `policy_state` to sled on step3 success. The long-lived per-user actor in
 //! `CosignerRegistry` is spawned lazily on the first post-onboarding request.
 
+mod ceremony;
 mod handlers;
 pub mod manager;
 pub mod session;

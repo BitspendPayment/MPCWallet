@@ -8,7 +8,6 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
 use crate::shared::SharedServices;
@@ -18,7 +17,6 @@ use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};
 /// Per-actor tick. No-ops when there is nothing to do.
 #[tracing::instrument(skip_all, name = "actor::tick_auto_settle", err)]
 pub fn tick_auto_settle(
-    _user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
 ) -> Result<(), Status> {

@@ -8,14 +8,13 @@ service MPCWallet {
   rpc DKGStep2 (DKGStep2Request) returns (DKGStep2Response);
   rpc DKGStep3 (DKGStep3Request) returns (DKGStep3Response);
 
-  // Contract creation. Reshare V→V′ between user + cosigner (steps 1-3), then a
-  // single refresh of V′ onto the always-online SERVICE pairing (step 4), giving a
-  // 2-of-2 V′ with two signing pairings: (user + cosigner_shareA) || (service +
-  // cosigner_shareB). No ECIES, no async pickup — the service is always online.
-  rpc ContractCreateStep1 (ContractCreateStep1Request) returns (ContractCreateStep1Response);
-  rpc ContractCreateStep2 (ContractCreateStep2Request) returns (ContractCreateStep2Response);
-  rpc ContractCreateStep3 (ContractCreateStep3Request) returns (ContractCreateStep3Response);
-  rpc ContractCreateStep4 (ContractCreateStep4Request) returns (ContractCreateStep4Response);
+  // Contract creation. NO reshare and NO new key: the wallet's existing 2-of-2 key V is
+  // reused; the contract is enforced by the cosigner gate (WASM evaluate + verifying-share
+  // allowlist), not by a distinct key. A single step REFRESHES V onto the always-online
+  // {service, cosigner} pairing (key unchanged) so the service can co-sign. The wallet sends
+  // a@service DIRECTLY to the service via AssembleContractShare (only the POINT a@service·G
+  // reaches the cosigner).
+  rpc ContractCreate (ContractCreateRequest) returns (ContractCreateResponse);
 
   // SERVICE-side API (served by the external contract-signer service, NOT the
   // cosigner). Both the wallet (role=user, a@service) and the cosigner
@@ -465,65 +464,25 @@ message RegisterDeviceTokenResponse {
 // the always-online service (the user sends a@service DIRECTLY to the service via
 // AssembleContractShare, so only the POINT a@service·G reaches the cosigner).
 // ---------------------------------------------------------------------------
-message ContractCreateStep1Request {
+message ContractCreateRequest {
   bytes user_id = 1;
-  bytes identifier = 2;
-  string round1_package = 3;   // user's reshare dealer round1 (dkg_reshare_part1)
-  bytes contract_id = 4;       // sha256(component_wasm): the contract bound to V′
-  bytes signature = 5;         // Schnorr auth signature
-  int64 timestamp_ms = 6;      // replay protection
-  bytes server_pk = 7;         // ASP signer x-only pubkey (cooperative leaf)
-  uint32 exit_delay = 8;       // unilateral-exit CSV delay (exit leaf)
-  bytes contract_wasm = 9;     // contract component bytes; cosigner verifies sha256==contract_id
-  bytes owner_pk = 10;         // user-supplied unilateral-exit x-only key (exit leaf)
-  bytes service_vk = 11;       // the always-online service's verifying key (33B)
+  bytes identifier = 2;         // the wallet's V FROST identifier
+  bytes contract_id = 3;        // sha256(component_wasm): the contract bound to this eVTXO
+  bytes contract_wasm = 4;      // contract component bytes; cosigner verifies sha256==contract_id
+  bytes server_pk = 5;          // ASP signer x-only pubkey (cooperative leaf)
+  uint32 exit_delay = 6;        // unilateral-exit CSV delay (exit leaf)
+  bytes owner_pk = 7;           // user-supplied unilateral-exit x-only key (exit leaf)
+  bytes service_vk = 8;         // the always-online service's verifying key (33B)
+  bytes a_at_cosigner = 9;      // wallet's refresh slice of V to the cosigner (scalar, 32B)
+  bytes a_at_service_point = 10; // wallet's refresh slice of V to the service, as POINT (33B)
+  bytes signature = 11;         // Schnorr auth signature
+  int64 timestamp_ms = 12;      // replay protection
 }
 
-message ContractCreateStep1Response {
-  map<string, string> round1_packages = 1;   // both dealers' reshare round1 packages
-}
-
-message ContractCreateStep2Request {
-  bytes user_id = 1;
-  bytes identifier = 2;
-  bytes signature = 3;
-  int64 timestamp_ms = 4;
-}
-
-message ContractCreateStep2Response {
-  map<string, string> all_round1_packages = 1;
-}
-
-message ContractCreateStep3Request {
-  bytes user_id = 1;
-  bytes identifier = 2;
-  map<string, string> round2_packages_for_others = 3; // user's reshare round2 to cosigner
-  bytes signature = 4;
-  int64 timestamp_ms = 5;
-}
-
-message ContractCreateStep3Response {
-  map<string, string> round2_packages_for_me = 1; // cosigner's reshare round2 to user
-  bytes contract_script_pubkey = 2;               // registered scriptPubKey (derived from V′)
-  bytes contract_group_id = 3;                     // V′ (compressed verifying key hex bytes)
-}
-
-// Step 4: the user, having finalized V′ from step3, refreshes V′ onto the service
-// pairing and hands the cosigner ONLY: a@cosigner (scalar, used to form
-// cosigner_shareB) and a@service·G (point, used to form the service verifying
-// share). The scalar a@service goes DIRECTLY to the service (AssembleContractShare),
-// never to the cosigner — so the cosigner can never reconstruct V′.
-message ContractCreateStep4Request {
-  bytes user_id = 1;
-  bytes identifier = 2;
-  bytes contract_script_pubkey = 3;   // the contract this finalizes
-  bytes a_at_cosigner = 4;            // a@cosigner scalar (32B)
-  bytes a_at_service_point = 5;       // a@service·G compressed point (33B)
-  bytes signature = 6;
-  int64 timestamp_ms = 7;
-}
-message ContractCreateStep4Response {
-  bool ok = 1;
+message ContractCreateResponse {
+  bytes contract_script_pubkey = 1; // registered eVTXO scriptPubKey (cooperative leaf = V)
+  bytes b_at_service = 2;           // cosigner's refresh half for the service (scalar, 32B)
+  ContractContext context = 3;      // delivered by the wallet to the service
 }
 
 // SERVICE-side API. Served by the external contract-signer service. Both the

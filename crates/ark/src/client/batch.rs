@@ -18,7 +18,8 @@
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use ark_core::batch::{generate_nonce_tree, sign_batch_tree_tx, NonceKps, OnChainInput, aggregate_nonces};
+use ark_core::batch::{NonceKps, OnChainInput};
+use ark_core::batch::{aggregate_nonces, generate_nonce_tree, sign_batch_tree_tx};
 use ark_core::intent::IntentMessage;
 use ark_core::server::PartialSigTree;
 use ark_core::{BoardingOutput, TxGraph, TxGraphChunk, VTXO_TAPROOT_KEY};
@@ -37,8 +38,10 @@ use bitcoin::{
     TxIn, TxOut, Txid, Witness, XOnlyPublicKey,
 };
 
+#[cfg(feature = "client")]
 use crate::client::asp_client::AspClient;
 use crate::client::proto;
+#[cfg(feature = "client")]
 use crate::client::proto::get_event_stream_response::Event;
 
 // ---------------------------------------------------------------------------
@@ -106,6 +109,7 @@ pub struct SettleSession {
     // -- batch state --
     batch_id: Option<String>,
     batch_expiry: Option<Sequence>,
+    #[cfg(feature = "client")]
     event_stream: Option<tonic::Streaming<proto::GetEventStreamResponse>>,
     tx_graph_chunks: Vec<TxGraphChunk>,
     tx_graph: Option<TxGraph>,
@@ -324,6 +328,7 @@ impl SettleSession {
             cosigner_kp,
             batch_id: None,
             batch_expiry: None,
+            #[cfg(feature = "client")]
             event_stream: None,
             tx_graph_chunks: Vec::new(),
             tx_graph: None,
@@ -338,9 +343,10 @@ impl SettleSession {
 }
 
 // ---------------------------------------------------------------------------
-// Phase transitions
+// Phase transitions (ASP transport — host only)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "client")]
 impl SettleSession {
     /// Submit FROST signatures for the intent proof and register with the ASP.
     ///
@@ -576,9 +582,10 @@ impl SettleSession {
 }
 
 // ---------------------------------------------------------------------------
-// Event handlers
+// Event handlers (ASP transport — host only)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "client")]
 impl SettleSession {
     async fn handle_batch_started(
         &mut self,
@@ -1438,9 +1445,211 @@ impl DelegateSettleSession {
 }
 
 // ---------------------------------------------------------------------------
-// DelegateSettleSession – batch driving
+// DelegateSettleSession – batch driving, transport-free step methods.
+//
+// These are the signing-available halves of `settle()`: each consumes one
+// decoded batch event, runs the MuSig2 / forfeit math (using the secret
+// cosigner key + nonces), mutates session state, and RETURNS the unary gRPC
+// payload to submit (if any) — without doing any I/O. The WASM guest drives
+// the event loop (ServerStream + grpc::unary) over these; the host's `settle()`
+// (below) inlines both halves against `AspClient`.
+// ---------------------------------------------------------------------------
+impl DelegateSettleSession {
+    /// Pre-loop: the registration payload `(proof_b64, message_json)` and the
+    /// event-stream topics (VTXO input outpoints + cosigner pubkey hex).
+    pub fn register_payload(&self) -> Result<(String, String, Vec<String>), String> {
+        let proof_b64 = encode_psbt_b64(&self.delegate.intent.proof);
+        let message_json = self
+            .delegate
+            .intent
+            .serialize_message()
+            .map_err(|e| format!("serialize intent message: {e}"))?;
+
+        let mut topics = Vec::new();
+        for input in &self.delegate.intent.proof.unsigned_tx.input {
+            topics.push(input.previous_output.to_string());
+        }
+        let cosigner_bytes = self.delegate_cosigner_kp.public_key().serialize();
+        let cosigner_topic: String = cosigner_bytes.iter().map(|b| format!("{b:02x}")).collect();
+        topics.push(cosigner_topic);
+
+        Ok((proof_b64, message_json, topics))
+    }
+
+    /// BatchStarted: record batch id + expiry. The guest then submits
+    /// ConfirmRegistration with the intent id from RegisterIntent.
+    pub fn on_batch_started(&mut self, event: proto::BatchStartedEvent) -> Result<(), String> {
+        self.batch_id = Some(event.id.clone());
+        if event.batch_expiry > 0 {
+            self.batch_expiry = Some(
+                ark_core::server::parse_sequence_number(event.batch_expiry)
+                    .map_err(|e| format!("parse batch_expiry: {e}"))?,
+            );
+        }
+        Ok(())
+    }
+
+    /// TreeTx: accumulate a tree chunk into the vtxo (0) or connector (1) graph.
+    pub fn on_tree_tx(&mut self, event: proto::TreeTxEvent) -> Result<(), String> {
+        let psbt = decode_psbt_b64(&event.tx)?;
+        let children: HashMap<u32, Txid> = event
+            .children
+            .into_iter()
+            .map(|(vout, txid_str)| {
+                let txid: Txid = txid_str
+                    .parse()
+                    .map_err(|e| format!("invalid child txid: {e}"))?;
+                Ok((vout, txid))
+            })
+            .collect::<Result<_, String>>()?;
+        let txid = if event.txid.is_empty() {
+            None
+        } else {
+            Some(
+                event
+                    .txid
+                    .parse()
+                    .map_err(|e| format!("invalid txid: {e}"))?,
+            )
+        };
+        let chunk = TxGraphChunk {
+            txid,
+            tx: psbt,
+            children,
+        };
+        match event.batch_index {
+            0 => self.vtxo_graph_chunks.push(chunk),
+            1 => self.connector_graph_chunks.push(chunk),
+            n => return Err(format!("unsupported TreeTx batch_index: {n}")),
+        }
+        Ok(())
+    }
+
+    /// TreeSigningStarted: build the VTXO graph, generate ephemeral nonces, and
+    /// return `(batch_id, cosigner_pk_hex, nonce_map)` to submit.
+    pub fn on_tree_signing_started(
+        &mut self,
+        event: proto::TreeSigningStartedEvent,
+    ) -> Result<(String, String, HashMap<String, String>), String> {
+        let commitment_psbt = decode_psbt_b64(&event.unsigned_commitment_tx)?;
+        if self.vtxo_graph_chunks.is_empty() {
+            return Err("no VTXO tree tx chunks collected".into());
+        }
+        let vtxo_graph = TxGraph::new(self.vtxo_graph_chunks.drain(..).collect())
+            .map_err(|e| format!("TxGraph::new: {e}"))?;
+
+        let cosigner_pk = self.delegate_cosigner_kp.public_key();
+        let nonce_kps = {
+            let mut rng = rand::thread_rng();
+            generate_nonce_tree(&mut rng, &vtxo_graph, cosigner_pk, &commitment_psbt)
+                .map_err(|e| format!("generate_nonce_tree: {e}"))?
+        };
+        let nonce_map = nonce_kps.to_nonce_pks().encode();
+        let batch_id = self.batch_id.as_ref().ok_or("no batch_id")?.clone();
+        let cosigner_pk_hex = cosigner_pk.to_string();
+
+        self.nonce_kps = Some(nonce_kps);
+        self.vtxo_graph = Some(vtxo_graph);
+        self.commitment_psbt = Some(commitment_psbt);
+
+        Ok((batch_id, cosigner_pk_hex, nonce_map))
+    }
+
+    /// TreeNonces: accumulate; once every tree node has nonces, MuSig2-sign all
+    /// tree txs and return `(batch_id, cosigner_pk_hex, sig_map)`. Returns `None`
+    /// while still waiting for more nonces.
+    pub fn on_tree_nonces(
+        &mut self,
+        event: proto::TreeNoncesEvent,
+    ) -> Result<Option<(String, String, HashMap<String, String>)>, String> {
+        let txid: Txid = event
+            .txid
+            .parse()
+            .map_err(|e| format!("invalid txid: {e}"))?;
+        self.pending_nonces.insert(txid, event.nonces);
+
+        let vtxo_graph = self.vtxo_graph.as_ref().ok_or("no vtxo_graph")?;
+        let expected = vtxo_graph.nb_of_nodes();
+        if self.pending_nonces.len() < expected {
+            return Ok(None);
+        }
+
+        let batch_id = self.batch_id.as_ref().ok_or("no batch_id")?.clone();
+        let commitment_psbt = self.commitment_psbt.as_ref().ok_or("no commitment_psbt")?;
+        let nonce_kps = self.nonce_kps.as_mut().ok_or("no nonce_kps")?;
+        let batch_expiry = self.batch_expiry.ok_or("no batch_expiry")?;
+
+        let mut combined_sigs = PartialSigTree::default();
+        for (tree_txid, _) in vtxo_graph.as_map() {
+            let raw_nonces = self
+                .pending_nonces
+                .get(&tree_txid)
+                .ok_or_else(|| format!("missing nonces for {tree_txid}"))?;
+            let tree_tx_nonce_pks = ark_core::server::TreeTxNoncePks::decode(raw_nonces.clone())
+                .map_err(|e| format!("decode TreeTxNoncePks: {e}"))?;
+            let agg_nonce = aggregate_nonces(tree_tx_nonce_pks);
+            let partial_sig = sign_batch_tree_tx(
+                tree_txid,
+                batch_expiry,
+                self.forfeit_pk,
+                &self.delegate_cosigner_kp,
+                agg_nonce,
+                vtxo_graph,
+                commitment_psbt,
+                nonce_kps,
+            )
+            .map_err(|e| format!("sign_batch_tree_tx: {e}"))?;
+            combined_sigs.0.extend(partial_sig.0);
+        }
+
+        let sig_map = combined_sigs.encode();
+        let cosigner_pk_hex = self.delegate_cosigner_kp.public_key().to_string();
+        self.pending_nonces.clear();
+        Ok(Some((batch_id, cosigner_pk_hex, sig_map)))
+    }
+
+    /// BatchFinalization: complete the delegated forfeit txs from the connector
+    /// graph leaves. Returns the signed forfeit b64s to submit, or `None` when
+    /// there are no connectors (nothing to forfeit).
+    pub fn on_batch_finalization(
+        &mut self,
+        _event: proto::BatchFinalizationEvent,
+    ) -> Result<Option<Vec<String>>, String> {
+        if self.connector_graph_chunks.is_empty() {
+            return Ok(None);
+        }
+        let connectors_graph = TxGraph::new(self.connector_graph_chunks.drain(..).collect())
+            .map_err(|e| format!("TxGraph::new (connectors): {e}"))?;
+        let connector_leaves = connectors_graph.leaves();
+        let completed_forfeits = ark_core::batch::complete_delegate_forfeit_txs(
+            &self.delegate.forfeit_psbts,
+            &connector_leaves,
+        )
+        .map_err(|e| format!("complete_delegate_forfeit_txs: {e}"))?;
+        let signed_forfeits: Vec<String> =
+            completed_forfeits.iter().map(encode_psbt_b64).collect();
+        Ok(Some(signed_forfeits))
+    }
+
+    /// BatchFinalized: mark done and return `(commitment_txid, vtxo_outpoint)`.
+    pub fn on_batch_finalized(
+        &mut self,
+        event: proto::BatchFinalizedEvent,
+    ) -> (String, Option<(String, u32)>) {
+        self.phase = DelegatePhase::Done;
+        let vtxo_outpoint = self.vtxo_graph.as_ref().map(|g| {
+            let leaf = first_tree_leaf(g);
+            (leaf.unsigned_tx.compute_txid().to_string(), 0u32)
+        });
+        (event.commitment_txid, vtxo_outpoint)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DelegateSettleSession – batch driving (ASP transport — host only)
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "client")]
 impl DelegateSettleSession {
     /// Drive the entire batch protocol autonomously.
     ///

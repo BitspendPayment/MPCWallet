@@ -1,0 +1,13 @@
+[package]
+name = "cosigner-proto"
+version = "0.1.0"
+edition = "2021"
+
+# Shared wire protocol between the cosigner WASM guest (long-lived, stateful) and the
+# cosigner-runtime host. Defined once here so both sides agree on the framing + enums.
+# Pure serde types; no threshold/ark/wasmtime deps so it builds for both the host and
+# the wasm32-wasip2 guest.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

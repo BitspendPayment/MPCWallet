@@ -3,7 +3,6 @@
 
 use tonic::Status;
 
-use crate::cosigner::registry::CosignerInstance;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
 use crate::shared::SharedServices;
@@ -51,7 +50,6 @@ fn resolve_exit_delay(
 /// block, including the history append. No separate "active session" gate
 /// is needed.
 pub fn apply_stream_update(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     user_id_hex: &str,
@@ -89,7 +87,7 @@ pub fn apply_stream_update(
     }
 
     let owner_pk = get_user_xonly_pubkey(
-        user,
+        state,
         shared.persistence.as_ref(),
         shared.secret_store.as_ref(),
         user_id_hex,

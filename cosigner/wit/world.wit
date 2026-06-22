@@ -1,111 +1,29 @@
-package component:threshold@0.1.0;
+package cosigner:guest@0.1.0;
 
-interface types {
-    /// Error type for threshold operations.
-    variant threshold-error {
-        invalid-input(string),
-        crypto-error(string),
-        serialization-error(string),
-    }
-
-    // -----------------------------------------------------------------------
-    // Session — the per-instance signing session: ceremony state (commitments,
-    // shares, message, the single-use nonce) plus the signing/key/identifier ops.
-    // -----------------------------------------------------------------------
-
-    resource session {
-        constructor();
-        reset: func();
-
-        // ----- ceremony state -----
-
-        // User commitments
-        set-user-hiding-hex: func(hex: string);
-        get-user-hiding-hex: func() -> string;
-        set-user-binding-hex: func(hex: string);
-        get-user-binding-hex: func() -> string;
-
-        // Message
-        set-message-to-sign: func(msg-hex: string);
-        get-message-to-sign: func() -> string;
-        has-message: func() -> bool;
-
-        // Server commitments
-        set-server-commitments-json: func(json: string);
-        get-server-commitments-json: func() -> string;
-        has-server-commitments: func() -> bool;
-
-        // Commitment list: id -> commitments_json
-        insert-commitment: func(id-hex: string, commitments-json: string);
-        get-commitments-json: func() -> string;
-
-        // Signature shares: id -> share_hex
-        insert-share: func(id-hex: string, share-hex: string);
-        has-share: func(id-hex: string) -> bool;
-        share-count: func() -> u32;
-        get-shares-json: func() -> string;
-
-        // Policy metadata
-        set-current-policy-id: func(id: string);
-        get-current-policy-id: func() -> string;
-        set-pending-amount: func(amount: s64);
-        get-pending-amount: func() -> s64;
-
-        // ----- signing ops (the nonce is held inside the session) -----
-
-        /// Generate this session's single-use signing nonce from the signer's secret
-        /// share; stores it internally and returns the commitments JSON.
-        new-nonce: func(secret-hex: string) -> result<string, threshold-error>;
-
-        /// Compute a FROST signature share using the session's stored nonce.
-        frost-sign: func(signing-package-json: string, key-package-json: string)
-            -> result<string, threshold-error>;
-
-        /// Aggregate signature shares into the final signature.
-        frost-aggregate: func(signing-package-json: string, shares-json: string,
-            public-key-package-json: string) -> result<string, threshold-error>;
-
-        // ----- key / identifier ops -----
-
-        /// Apply taproot tweak to a KeyPackage.
-        key-package-tweak: func(kp-json: string, merkle-root: option<list<u8>>)
-            -> result<string, threshold-error>;
-
-        /// Apply taproot tweak to a PublicKeyPackage.
-        pub-key-package-tweak: func(pkp-json: string, merkle-root: option<list<u8>>)
-            -> result<string, threshold-error>;
-
-        /// Derive an identifier from arbitrary bytes (SHA-256).
-        identifier-derive: func(message: list<u8>) -> result<string, threshold-error>;
-
-        /// Verify a BIP-340 Schnorr signature (used for request authentication).
-        verify-schnorr-signature: func(pk-hex: string, message: list<u8>, sig-hex: string)
-            -> result<bool, threshold-error>;
-    }
-
-    /// Opaque handle for an auth signer (reusable).
-    resource auth-signer {
-        /// Create an AuthSigner from a 64-char hex secret key.
-        /// Returns the compressed public key hex (66 chars).
-        constructor(secret-hex: string);
-
-        /// Sign a message. Returns signature hex (128 chars).
-        sign: func(message: list<u8>) -> result<string, threshold-error>;
-
-        /// Get the compressed public key hex (66 chars).
-        public-key: func() -> result<string, threshold-error>;
-    }
-}
-
-/// Host-provided capability: gate the spend currently being signed against its
-/// bound contract. The host evaluates the contract wasm in an isolated sandbox
-/// over the transaction it holds for this signing session. `Err(reason)` means
-/// the cosigner MUST NOT produce its signature share.
 interface contract-gate {
-    enforce: func() -> result<_, string>;
+  // Host capability: evaluate the contract bound to the spend being signed, over the
+  // full transaction the guest holds, in the host's isolated sandbox. The guest calls
+  // this from inside FROST signing and refuses to produce its share on Deny.
+  enforce: func(full-tx: list<u8>) -> result<_, string>;
 }
 
-world threshold-world {
-    import contract-gate;
-    export types;
+interface asp-gate {
+  // ASP gRPC transport — host only. The guest owns the Ark flow + keys and drives it,
+  // delegating each network round-trip to the host (which holds the tonic AspClient).
+  record submit-tx-response {
+    ark-txid: string,
+    signed-checkpoint-txs: list<string>,
+  }
+  // Returns serialized ArkInfo (JSON bytes); the guest deserializes it.
+  get-info: func() -> result<list<u8>, string>;
+  submit-tx: func(ark-tx-b64: string, checkpoint-txs-b64: list<string>) -> result<submit-tx-response, string>;
+  finalize-tx: func(ark-txid: string, final-checkpoint-txs-b64: list<string>) -> result<_, string>;
+}
+
+world cosigner-guest {
+  import contract-gate;
+  import asp-gate;
+  // Single async request/response entry point. Request/response bodies are
+  // serialized cosigner-proto GuestCommand/GuestResponse.
+  export handle: func(request: list<u8>) -> list<u8>;
 }

@@ -5,8 +5,21 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use tonic::Status;
+use threshold::keys::PublicKeyPackage;
 
 use crate::policy::PolicyState;
+
+/// Tweak a public key package (BIP-341 key-path; pure public math, no secret) and return its
+/// JSON. Host-side replacement for the legacy in-WASM `pub_key_package_tweak` call — used only
+/// for address/script derivation and verification, never signing.
+pub fn pub_key_package_tweak_json(
+    pkp_json: &str,
+    merkle_root: Option<&[u8]>,
+) -> Result<String, Status> {
+    let pkp = PublicKeyPackage::from_json(pkp_json)
+        .map_err(|e| Status::internal(format!("bad public key package JSON: {e}")))?;
+    Ok(pkp.tweak(merkle_root).to_json())
+}
 
 pub fn user_id_hex(user_id: &[u8]) -> String {
     hex::encode(user_id)
