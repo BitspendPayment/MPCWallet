@@ -113,11 +113,14 @@ message SignStep1Request {
   bytes full_transaction = 6;
   int64 timestamp_ms = 7; // Unix timestamp in milliseconds for replay protection
   bool script_path_spend = 8; // If true, skip taproot tweak (script-path signing)
-  // For a contract eVTXO spend: user_id routes to the contract actor (GroupID=V′),
-  // and claimed_share is the spending recipient's own verifying share (the cosigner
-  // authenticates it via auth_check_group + selects recipient_shares[claimed_share]).
-  // Empty for a normal wallet (claimed share = user_id).
-  bytes claimed_share = 9;
+  reserved 9; // was claimed_share — user_id now always carries the signer's verifying
+              // share (user or service); routing is by the URL group_key.
+  // Service-driven eVTXO spend THROUGH arkd (Tier 2): the second leg (the `ark_tx`
+  // that spends the checkpoint output). `full_transaction` carries the checkpoint
+  // PSBT (leg 1, spends the eVTXO). When set, a pairing actor's conditioning verifies
+  // `message_to_sign` is the sighash of leg 1 OR leg 2, with leg 2 chained to leg 1's
+  // checkpoint. Empty for an on-chain single-leg spend (the cosigner overrides the msg).
+  bytes ark_tx = 10;
 }
 
 
@@ -136,8 +139,7 @@ message SignStep2Request {
    bytes signature_share = 3;
    bytes signature = 4; // Schnorr signature over auth message for authentication
    int64 timestamp_ms = 5; // Unix timestamp in milliseconds for replay protection
-   // Contract eVTXO spend: the recipient's own verifying share (see SignStep1Request).
-   bytes claimed_share = 6;
+   reserved 6; // was claimed_share (see SignStep1Request)
 }
 
 message UtxoInfo {
@@ -490,7 +492,7 @@ message ContractCreateResponse {
 // half=b@service + context) deliver their refresh halves; the service sums them
 // into its V′ secret share. `context` is set only by the cosigner.
 message AssembleContractShareRequest {
-  bytes contract_group_id = 1;  // V′ — correlation key
+  bytes contract_group_id = 1;  // correlation key = the registered scriptPubKey
   bytes half_scalar = 2;        // a@service (user) or b@service (cosigner), 32B
   string role = 3;              // "user" | "cosigner"
   ContractContext context = 4;  // set by the cosigner only

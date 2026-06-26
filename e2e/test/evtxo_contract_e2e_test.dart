@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:app_core/ark/ark_evtxo_spend.dart';
 import 'package:app_core/client.dart';
+import 'package:app_core/rest_wallet_api.dart';
 import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:e2e/regtest_helper.dart';
@@ -96,7 +97,8 @@ class ArkdAdmin {
 /// Spawn the cosigner-runtime against the regtest fixtures. The contract gate
 /// resolves contracts from the cosigner's own storage (populated at eVTXO
 /// creation), so no registry env is needed.
-Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
+Future<Process> startCosignerRuntime(int port, Directory dataDir,
+    {Map<String, String> extraEnv = const {}}) async {
   final serverReady = Completer<void>();
   final serverFailed = Completer<void>();
   final env = {
@@ -108,6 +110,7 @@ Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
     'BITCOIN_NETWORK': 'regtest',
     'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
     'HOME': dataDir.path,
+    ...extraEnv,
   };
   final proc = await Process.start(
     '../cosigner-runtime/target/release/cosigner-runtime',
@@ -148,13 +151,50 @@ Future<Process> startCosignerRuntime(int port, Directory dataDir) async {
   return proc;
 }
 
+/// Start the dummy always-online contract-signer service and return (process, vk).
+Future<(Process, Uint8List)> startContractService(int port) async {
+  final ready = Completer<void>();
+  final failed = Completer<void>();
+  final proc = await Process.start(
+    '../e2e/contract-service/target/release/contract-service',
+    ['--port', port.toString()],
+  );
+  void watch(Stream<List<int>> s) {
+    s.transform(utf8.decoder).listen((data) {
+      print('[Service]: $data');
+      if (!ready.isCompleted && data.contains('listening on')) ready.complete();
+    }, onDone: () {
+      if (!ready.isCompleted && !failed.isCompleted) failed.complete();
+    });
+  }
+
+  watch(proc.stdout);
+  watch(proc.stderr);
+  try {
+    await Future.any([
+      ready.future,
+      failed.future.then((_) => throw Exception('contract-service failed')),
+    ]).timeout(Duration(seconds: 30),
+        onTimeout: () => throw Exception('contract-service not ready in time'));
+  } catch (e) {
+    proc.kill();
+    rethrow;
+  }
+  final info = await http.get(Uri.parse('http://127.0.0.1:$port/info'));
+  final vkHex = jsonDecode(info.body)['service_vk'] as String;
+  return (proc, Uint8List.fromList(BytesUtils.fromHexString(vkHex)));
+}
+
 void main() {
   late RegtestHelper btc;
   late ArkdAdmin arkd;
   late Directory tempDir;
   late Directory serverTempDir;
   Process? serverProcess;
+  Process? serviceProcess;
   late int serverPort;
+  late int servicePort;
+  late Uint8List serviceVk;
 
   setUpAll(() async {
     print('--- eVTXO Contract E2E Setup ---');
@@ -199,17 +239,25 @@ void main() {
       print('  Warning: could not fund ASP: $e');
     }
 
-    // 4. cosigner-runtime (contract gate enabled)
+    // 4. contract-signer service (the cosigner needs SERVICE_URL at boot).
+    final svcSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    servicePort = svcSocket.port;
+    await svcSocket.close();
+    (serviceProcess, serviceVk) = await startContractService(servicePort);
+
+    // 5. cosigner-runtime (contract gate enabled)
     final portSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     serverPort = portSocket.port;
     await portSocket.close();
     serverTempDir = await Directory.systemTemp.createTemp('mpc_evtxo_server_');
-    serverProcess = await startCosignerRuntime(serverPort, serverTempDir);
-    print('--- Setup Complete (port $serverPort) ---');
+    serverProcess = await startCosignerRuntime(serverPort, serverTempDir,
+        extraEnv: {'SERVICE_URL': 'http://127.0.0.1:$servicePort'});
+    print('--- Setup Complete (port $serverPort, service $servicePort) ---');
   });
 
   tearDownAll(() async {
     serverProcess?.kill();
+    serviceProcess?.kill();
     try {
       await serverTempDir.delete(recursive: true);
     } catch (_) {}
@@ -244,10 +292,14 @@ void main() {
     final contractId = Uint8List.fromList(QuickCrypto.sha256Hash(wasmBytes));
     print('3. contract_id=${BytesUtils.toHexString(contractId).substring(0, 16)}...');
 
-    // 4. Derive the eVTXO key (resharing → V′). The cosigner validates
-    //    sha256(wasm)==contract_id, persists the wasm, and registers the spk.
-    final evtxo =
-        await client.createEvtxoKey(contractId, wasmBytes, serverPk, exitDelay);
+    // 4. Create the contract eVTXO (single ContractCreate; coop leaf = V). The
+    //    cosigner validates sha256(wasm)==contract_id, refreshes V onto the
+    //    {service, cosigner} pairing (cosigner → b@service via SERVICE_URL, wallet →
+    //    a@service via serviceApi), and registers the spk.
+    final serviceApi = RestWalletApi('http://127.0.0.1:$servicePort');
+    final evtxo = await client.createEvtxoKey(
+        contractId, wasmBytes, serverPk, exitDelay,
+        serviceVk: serviceVk, serviceApi: serviceApi);
     final vPrimeXonly = _xonlyOf(evtxo.publicKeyPackage);
     final fundingAddr = _bcrtP2trFromSpk(evtxo.scriptPubkey);
     print('4. eVTXO key created; funding address=$fundingAddr');

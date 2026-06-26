@@ -154,6 +154,7 @@ async fn full_2of2_sign_via_registry() {
             public_key_package_json: pkp.to_json(),
         },
         contracts: Default::default(),
+        contract_pairing: None,
     };
     shared
         .persistence
@@ -182,7 +183,7 @@ async fn full_2of2_sign_via_registry() {
         full_transaction: vec![],
         timestamp_ms: ts1,
         script_path_spend: true, // raw FROST (no taproot tweak)
-        claimed_share: vec![],
+        ark_tx: vec![],
     };
     let resp1 = registry
         .dispatch(&group_key, |reply| CosignerCommand::SignStep1 { req: req1, reply })
@@ -216,7 +217,6 @@ async fn full_2of2_sign_via_registry() {
             .sign(&build_auth_message(OP_SIGN_STEP2, ts2, &user_id_hex))
             .to_vec(),
         timestamp_ms: ts2,
-        claimed_share: vec![],
     };
     let resp2 = registry
         .dispatch(&group_key, |reply| CosignerCommand::SignStep2 { req: req2, reply })

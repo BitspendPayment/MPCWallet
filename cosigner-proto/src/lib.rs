@@ -59,6 +59,22 @@ pub enum GuestCommand {
         /// signing. Installed into the guest so the host need not hold it (enclave goal).
         /// `None` until the host is migrated to supply it.
         server_dkg_secret_hex: Option<String>,
+        /// Set ONLY for a `{service, cosigner}` pairing actor — the eVTXO it may co-sign + the
+        /// params to rebuild that eVTXO's cooperative-leaf sighash in the guest (Plan A 1C).
+        contract_pairing: Option<ContractPairingWire>,
+    },
+    /// Contract create: key-preservingly REFRESH the guest's own key `V` onto a
+    /// `{receiver, cosigner}` pairing — entirely inside the guest, so the host never reads
+    /// `V`. The wallet (other holder of `V`) supplies its slice `a@cosigner` (scalar) +
+    /// `a@receiver·G` (point); the guest mints its counter-share + the receiver's half.
+    /// Returns the PUBLIC pairing PKP, the receiver's half scalar, and the cosigner's own
+    /// pairing key package (relayed by the host to seed the pairing actor — never persisted).
+    ContractRefresh {
+        receiver_id_hex: String,
+        receiver_partial_point: Vec<u8>, // a@receiver·G (33B compressed)
+        wallet_id_hex: String,
+        a_at_cosigner: Vec<u8>, // wallet's slice to the cosigner (32B scalar)
+        min_signers: u32,
     },
     /// FROST cooperative sign, round 1: the guest stores the client's commitments,
     /// generates its own nonce, and returns the combined commitments to sign over.
@@ -148,6 +164,10 @@ pub struct SnapshotState {
     pub public_key_package_json: String,
     pub user_signing_identifier_hex: Option<String>,
     pub ark_cosigner_secret_hex: Option<String>,
+    /// Pairing-actor conditioning params (Plan A 1C), so the guest stays authoritative about what
+    /// it co-signs across cold spawns. `None` for a normal wallet actor.
+    #[serde(default)]
+    pub contract_pairing: Option<ContractPairingWire>,
     pub vtxos: Vec<VtxoInputWire>,
     pub history: Vec<ArkTxEntryWire>,
     /// A `ReadyToSettle` delegate session serialized via ark `PersistedDelegate` (JSON), if
@@ -203,6 +223,21 @@ pub struct SignStep1Wire {
     pub timestamp_ms: i64,
     /// True ⇒ raw FROST (no taproot tweak).
     pub script_path_spend: bool,
+    /// Service spend THROUGH arkd — the second leg's `ark_tx` PSBT. When set (and the actor is a
+    /// pairing actor), the guest accepts `message_to_sign` if it equals leg 1 OR leg 2; empty ⇒
+    /// single-leg, the guest OVERRIDES `message_to_sign` with the rebuilt cooperative-leaf sighash.
+    pub ark_tx: Vec<u8>,
+}
+
+/// Binds a `{service, cosigner}` pairing actor to the single eVTXO it may co-sign — carried into
+/// the guest (Plan A 1C: the guest rebuilds the cooperative-leaf sighash itself).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractPairingWire {
+    pub evtxo_spk_hex: String,
+    pub contract_id: Vec<u8>,
+    pub server_pk: Vec<u8>,
+    pub owner_pk: Vec<u8>,
+    pub exit_delay: u32,
 }
 
 /// FROST sign round-2 request (mirrors the gRPC `SignStep2Request`).
@@ -229,6 +264,14 @@ pub enum GuestResponse {
     Pong,
     /// Reply to [`GuestCommand::InstallPolicy`].
     PolicyInstalled,
+    /// Reply to [`GuestCommand::ContractRefresh`]: the PUBLIC pairing PKP, the receiver's
+    /// half scalar (32B), and the cosigner's pairing key package (JSON; host relays it to
+    /// seed the pairing actor, never persists it).
+    ContractRefreshed {
+        pairing_public_key_package_json: String,
+        receiver_half: Vec<u8>,
+        my_key_package_json: String,
+    },
     /// Reply to [`GuestCommand::FrostSignStep1`].
     SignStep1 {
         commitments: Vec<CommitmentWire>,

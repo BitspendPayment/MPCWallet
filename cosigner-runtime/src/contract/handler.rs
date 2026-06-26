@@ -7,19 +7,13 @@
 //! `normal_policy` at sign time); the always-online SERVICE co-signs with the `V` counter-share
 //! produced by the refresh here. Owned and invoked by [`super::ContractManager`].
 
-use std::collections::BTreeMap;
-
-use rand::rngs::OsRng;
 use tonic::Status;
 
-use threshold::dkg;
-use threshold::identifier::Identifier;
-use threshold::keys::KeyPackage;
 
 use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
 use crate::policy::store::persist_policy;
-use crate::policy::{ContractPolicy, CosignerShare, PolicyState};
+use crate::policy::{ContractPolicy, PolicyState};
 use crate::shared::SharedServices;
 use crate::wallet_proto::{ContractContext, ContractCreateRequest, ContractCreateResponse};
 
@@ -30,9 +24,10 @@ use crate::wallet_proto::{ContractContext, ContractCreateRequest, ContractCreate
 pub fn contract_create(
     shared: &SharedServices,
     req: ContractCreateRequest,
+    refresh: crate::cosigner::command::ContractRefreshOutput,
 ) -> Result<ContractCreateResponse, Status> {
     let user_id_hex = parsers::user_id_hex(&req.user_id);
-    tracing::info!("[{user_id_hex}] ContractCreate (refresh V onto service)");
+    tracing::info!("[{user_id_hex}] ContractCreate (V refreshed onto service IN-GUEST)");
 
     // --- contract id / wasm: verify sha256(wasm) == contract_id, validate + store ---
     if req.contract_id.len() != 32 {
@@ -61,10 +56,9 @@ pub fn contract_create(
         )
         .map_err(|e| Status::internal(format!("store contract wasm: {e}")))?;
 
-    // --- the wallet's existing key V is the cooperative-leaf key (no V′) ---
+    // --- the wallet's existing key V is the cooperative-leaf key (read only its PUBLIC x-only;
+    //     the refresh itself ran inside the guest, so the host never touches V's secret) ---
     let policy = load_policy(shared, &user_id_hex)?;
-    let cosigner_v_kp = KeyPackage::from_json(&policy.normal_policy.key_package_json)
-        .map_err(|e| Status::internal(format!("normal kp: {e}")))?;
     let v_coop_xonly = xonly_from_vk(&parsers::extract_verifying_key(
         &policy.normal_policy.public_key_package_json,
     )?);
@@ -86,48 +80,17 @@ pub fn contract_create(
     )?;
     let spk_hex = hex::encode(&spk);
 
-    // --- key-preserving REFRESH of V onto {service, cosigner} ---
-    // The wallet (the only other current holder of V) dealt `a@cosigner` to us and the POINT
-    // `a@service·G` for the service (we never see the scalar `a@service`, so we can't
-    // reconstruct V). `refresh_to_receiver` mints our counter-share + the service's half.
+    // --- the key-preserving REFRESH of V onto {service, cosigner} already ran INSIDE the guest
+    //     (see `route_contract_refresh`); `refresh` carries only PUBLIC material + the receiver's
+    //     half + the cosigner's pairing key package as an OPAQUE JSON string (never parsed here). ---
     if req.service_vk.len() != 33 {
         return Err(Status::invalid_argument("service_vk must be 33 bytes"));
     }
     let service_vk = req.service_vk.clone();
     let service_vk_hex = hex::encode(&service_vk);
-    let service_id = Identifier::derive(&service_vk)
-        .map_err(|e| Status::internal(format!("derive service id: {e:?}")))?;
-    let wallet_id = {
-        let arr: [u8; 32] = req
-            .identifier
-            .as_slice()
-            .try_into()
-            .map_err(|_| Status::invalid_argument("identifier must be 32 bytes"))?;
-        Identifier::deserialize(&arr).map_err(|e| Status::internal(format!("bad identifier: {e}")))?
-    };
-    let a_at_cosigner: [u8; 32] = req
-        .a_at_cosigner
-        .clone()
-        .try_into()
-        .map_err(|_| Status::invalid_argument("a_at_cosigner must be 32 bytes"))?;
-    let a_at_service_point: [u8; 33] = req
-        .a_at_service_point
-        .clone()
-        .try_into()
-        .map_err(|_| Status::invalid_argument("a_at_service_point must be 33 bytes"))?;
 
-    let mut id_partial_share = BTreeMap::new();
-    id_partial_share.insert(wallet_id, a_at_cosigner);
-    let receiver = dkg::Receiver {
-        id: service_id,
-        partial_verifying_share: a_at_service_point,
-    };
-    let pairing =
-        dkg::refresh_to_receiver(&cosigner_v_kp, &receiver, &id_partial_share, 2, &mut OsRng)
-            .map_err(|e| Status::internal(format!("refresh_to_receiver: {e:?}")))?;
-    let pkp_b_json = pairing.pairing_pkp.to_json();
-
-    // --- persist ContractPolicy: gate metadata + the service V counter-share ---
+    // --- persist ContractPolicy: PUBLIC gate metadata + the authorized-service allowlist
+    //     (no counter-share — the cosigner's pairing key lives only in the pairing actor's guest) ---
     let mut owner_pk = [0u8; 32];
     owner_pk.copy_from_slice(&req.owner_pk);
     let contract_policy = ContractPolicy {
@@ -135,17 +98,17 @@ pub fn contract_create(
         wallet_vk: user_id_hex.clone(),
         exit_delay: req.exit_delay,
         owner_pk,
-        shares: BTreeMap::from([(
-            service_vk_hex,
-            CosignerShare {
-                key_package: pairing.my_kp,
-                public_key_package: pairing.pairing_pkp.clone(),
-            },
-        )]),
+        authorized_service_vks: vec![service_vk_hex],
     };
     let mut policy = load_policy(shared, &user_id_hex)?;
-    policy.contracts.insert(spk_hex, contract_policy);
+    policy.contracts.insert(spk_hex.clone(), contract_policy);
     persist_policy(shared, &user_id_hex, &policy)?;
+
+    // --- the {service, cosigner} pairing ACTOR (Tier 2 service-driven co-sign) ---
+    // A SEPARATE actor keyed by the eVTXO spk. Plan A 1C: the host persists NOTHING for it — its
+    // pairing key AND its conditioning params (`contract_pairing`) are eager-sealed into the
+    // actor's own guest by `manager::create_contract`, which is then the single source of truth.
+    // The guest alone decides what the pairing may co-sign (a spend of this one eVTXO).
 
     // --- service-delivery context (the wallet relays this to the always-online service) ---
     let context = ContractContext {
@@ -154,15 +117,15 @@ pub fn contract_create(
         exit_delay: req.exit_delay,
         owner_pk: req.owner_pk.clone(),
         server_pk: req.server_pk.clone(),
-        public_key_package_json: pkp_b_json,
+        public_key_package_json: refresh.pairing_public_key_package_json,
         service_vk,
         cosigner_group_key: hex::decode(&policy.cosigner_id).unwrap_or_default(),
     };
 
-    tracing::info!("[{user_id_hex}] ContractCreate complete (V reused; service pairing refreshed)");
+    tracing::info!("[{user_id_hex}] ContractCreate complete (V reused; service pairing refreshed in-guest)");
     Ok(ContractCreateResponse {
         contract_script_pubkey: spk.to_vec(),
-        b_at_service: pairing.receiver_half.to_vec(),
+        b_at_service: refresh.receiver_half,
         context: Some(context),
     })
 }

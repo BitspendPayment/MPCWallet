@@ -7,8 +7,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::Status;
 use threshold::keys::PublicKeyPackage;
 
-use crate::policy::PolicyState;
-
 /// Tweak a public key package (BIP-341 key-path; pure public math, no secret) and return its
 /// JSON. Host-side replacement for the legacy in-WASM `pub_key_package_tweak` call — used only
 /// for address/script derivation and verification, never signing.
@@ -127,31 +125,6 @@ pub fn build_signing_package_json(
         "message": message_hex,
     });
     Ok(pkg.to_string())
-}
-
-/// Resolve the `(key_package_json, public_key_package_json)` a signing session
-/// uses for `policy_id`, consistently across sign_step1 and sign_step2:
-/// - `"evtxo:<spk_hex>"` -> the cosigner's `V′` counter-share for `recipient_verifying_key`
-///   (the user or the service) in that contract (contract-gated, pairing-specific),
-/// - empty / unknown -> the normal policy.
-/// A contract spend by an unknown recipient falls through to the normal key, which
-/// fails aggregation loudly rather than co-signing with the wrong key.
-pub fn resolve_signing_key(
-    policy_state: &PolicyState,
-    policy_id: &str,
-    recipient_verifying_key: &str,
-) -> (String, String) {
-    if let Some(spk_hex) = policy_id.strip_prefix("evtxo:") {
-        if let Some(cp) = policy_state.contracts.get(spk_hex) {
-            if let Some(cs) = cp.share_for(recipient_verifying_key) {
-                return (cs.key_package.to_json(), cs.public_key_package.to_json());
-            }
-        }
-    }
-    (
-        policy_state.normal_policy.key_package_json.clone(),
-        policy_state.normal_policy.public_key_package_json.clone(),
-    )
 }
 
 /// Parse a JSON object of string-wrapped values into a HashMap.

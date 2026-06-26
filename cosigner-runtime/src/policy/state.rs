@@ -1,42 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
-
-use threshold::keys::{KeyPackage, PublicKeyPackage};
-
-// serde adapters: persist the threshold crypto types through their existing
-// Dart-compatible `to_json`/`from_json` (as a nested JSON object / hex string),
-// so the policy holds the real types instead of pre-serialized String blobs.
-mod kp_json {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use threshold::keys::KeyPackage;
-
-    pub fn serialize<S: Serializer>(kp: &KeyPackage, s: S) -> Result<S::Ok, S::Error> {
-        let v: serde_json::Value =
-            serde_json::from_str(&kp.to_json()).map_err(serde::ser::Error::custom)?;
-        v.serialize(s)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<KeyPackage, D::Error> {
-        let v = serde_json::Value::deserialize(d)?;
-        KeyPackage::from_json(&v.to_string())
-            .map_err(|e| serde::de::Error::custom(format!("{e:?}")))
-    }
-}
-
-mod pkp_json {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use threshold::keys::PublicKeyPackage;
-
-    pub fn serialize<S: Serializer>(pkp: &PublicKeyPackage, s: S) -> Result<S::Ok, S::Error> {
-        let v: serde_json::Value =
-            serde_json::from_str(&pkp.to_json()).map_err(serde::ser::Error::custom)?;
-        v.serialize(s)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<PublicKeyPackage, D::Error> {
-        let v = serde_json::Value::deserialize(d)?;
-        PublicKeyPackage::from_json(&v.to_string())
-            .map_err(|e| serde::de::Error::custom(format!("{e:?}")))
-    }
-}
+use std::collections::HashMap;
 
 
 mod arr32_hex {
@@ -76,6 +39,34 @@ pub struct PolicyState {
     /// service).
     #[serde(default)]
     pub contracts: HashMap<String, ContractPolicy>,
+    /// Set ONLY on a `{service, cosigner}` pairing actor (Tier 2 service co-sign).
+    /// Its presence marks this actor as a service co-signer that may sign nothing
+    /// EXCEPT a contract-approved spend of the one eVTXO named here: the sign path
+    /// rebuilds the cooperative-leaf sighash from these params and signs only that,
+    /// so a compromised service cannot co-sign a `V` spend of the wallet's normal
+    /// funds. `normal_policy` holds the cosigner's pairing counter-share + the V PKP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contract_pairing: Option<ContractPairing>,
+}
+
+/// Association binding a `{service, cosigner}` pairing actor to the single eVTXO it
+/// co-signs. All params needed to reconstruct the eVTXO cooperative-leaf script (and
+/// thus the script-path sighash) host-side, independent of the spend PSBT.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContractPairing {
+    /// The eVTXO scriptPubKey hex this actor is allowed to co-sign spends of.
+    pub evtxo_spk_hex: String,
+    /// sha256(component_wasm) — the gate's contract id (also the leaf hashlock seed).
+    #[serde(with = "arr32_hex")]
+    pub contract_id: [u8; 32],
+    /// ASP signer x-only key (cooperative leaf).
+    #[serde(with = "arr32_hex")]
+    pub server_pk: [u8; 32],
+    /// Exit-leaf owner x-only key (part of the taptree).
+    #[serde(with = "arr32_hex")]
+    pub owner_pk: [u8; 32],
+    /// Unilateral-exit CSV delay (part of the taptree).
+    pub exit_delay: u32,
 }
 
 /// Normal (default) spending policy.
@@ -96,20 +87,19 @@ pub type VerifyingKeyHex = String;
 /// A contract bound to a WASM `contract_id`. NO distinct key: the wallet's normal key `V` is
 /// reused. The cosigner GATE is the sole binding — it co-signs a contract eVTXO spend only
 /// when (1) the WASM `evaluate` returns Allow and (2) the requesting verifying share is on the
-/// allowlist (`wallet_vk` ∪ `shares.keys()`).
+/// allowlist (`wallet_vk` ∪ `authorized_service_vks`).
 ///
-/// The WALLET signs contract spends with its existing normal `V` pairing (no per-contract
-/// counter-share needed — it falls through to `normal_policy` in `resolve_signing_key`). The
-/// always-online SERVICE gets a key-preserving REFRESH of `V` onto `{service, cosigner}` at
-/// create time, stored as the one `CosignerShare` in `shares`, so it can co-sign without the
-/// wallet online.
+/// The WALLET signs contract spends with its existing normal `V` pairing. The always-online
+/// SERVICE gets a key-preserving REFRESH of `V` onto `{service, cosigner}` at create time; the
+/// cosigner's counter-share lives in the SEPARATE pairing actor's guest (Plan A — never stored
+/// here), so this struct holds only the gate's PUBLIC metadata + the authorized-signer allowlist.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractPolicy {
     /// Contract that governs cooperative spends: sha256(component_wasm).
     #[serde(with = "arr32_hex")]
     pub contract_id: [u8; 32],
     /// The WALLET's own verifying-share hex — an authorized signer that uses the normal `V`
-    /// pairing (no counter-share in `shares`). Included in the allowlist.
+    /// pairing. Included in the allowlist.
     pub wallet_vk: VerifyingKeyHex,
     /// Unilateral-exit CSV delay (the exit leaf).
     pub exit_delay: u32,
@@ -117,36 +107,20 @@ pub struct ContractPolicy {
     #[serde(with = "arr32_hex")]
     pub owner_pk: [u8; 32],
 
-    /// The cosigner's `V` counter-share per service pairing, keyed by the service's verifying
-    /// key hex. Added by `ContractCreate` (refresh of `V` onto `{service, cosigner}`).
-    pub shares: BTreeMap<VerifyingKeyHex, CosignerShare>,
+    /// Service verifying keys authorized to co-sign this contract (the gate allowlist). Each has
+    /// a `{service, cosigner}` pairing whose cosigner counter-share lives in its own guest actor.
+    #[serde(default, alias = "shares")]
+    pub authorized_service_vks: Vec<VerifyingKeyHex>,
 }
 
 impl ContractPolicy {
-    /// The verifying shares authorized to sign this contract: the wallet (signs with normal
-    /// `V`) plus every service pairing in `shares`. The gate co-signs only for these.
+    /// The verifying shares authorized to sign this contract: the wallet (normal `V`) plus every
+    /// authorized service. The gate co-signs only for these.
     pub fn authorized_verifying_keys(&self) -> Vec<VerifyingKeyHex> {
         let mut keys = vec![self.wallet_vk.clone()];
-        keys.extend(self.shares.keys().cloned());
+        keys.extend(self.authorized_service_vks.iter().cloned());
         keys
     }
-
-    /// The cosigner's `V` counter-share for the given recipient verifying key, or `None` when
-    /// the recipient signs with the normal `V` pairing (the wallet) rather than a service share.
-    pub fn share_for(&self, verifying_key_hex: &str) -> Option<&CosignerShare> {
-        self.shares.get(verifying_key_hex)
-    }
-}
-
-/// The cosigner's `V` counter-share for one service signing pairing. `public_key_package` is
-/// the 2-entry PKP `{service_id: P·G, cosigner_id: C·G}` whose group key is `V`; `key_package`
-/// is the cosigner's own `C` key package.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CosignerShare {
-    #[serde(with = "kp_json")]
-    pub key_package: KeyPackage,
-    #[serde(with = "pkp_json")]
-    pub public_key_package: PublicKeyPackage,
 }
 
 /// Per-user UTXO cache.

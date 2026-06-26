@@ -11,6 +11,7 @@ wit_bindgen::generate!({
     async: true,
 });
 
+mod conditioning;
 mod grpc;
 mod state;
 

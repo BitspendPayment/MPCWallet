@@ -13,8 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rand::rngs::OsRng;
 
 use cosigner_proto::{
-    ApplyDelegateSigsWire, ArkTxEntryWire, CommitmentWire, GuestCommand, GuestResponse,
-    SendVtxoStep1Wire, SignStep1Wire, SignStep2Wire, SnapshotState, VtxoInputWire,
+    ApplyDelegateSigsWire, ArkTxEntryWire, CommitmentWire, ContractPairingWire, GuestCommand,
+    GuestResponse, SendVtxoStep1Wire, SignStep1Wire, SignStep2Wire, SnapshotState, VtxoInputWire,
 };
 
 use ark::client::batch::{DelegateSettleSession, PersistedDelegate};
@@ -22,6 +22,7 @@ use ark::client::send::{SendSession, SendVtxoInput};
 use ark::client::types::ArkInfo;
 
 use threshold::commitment::SigningPackage;
+use threshold::dkg;
 use threshold::identifier::Identifier;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::nonce::{self, SigningCommitments, SigningNonce};
@@ -46,6 +47,9 @@ struct Policy {
     key_package: KeyPackage,
     public_key_package: PublicKeyPackage,
     user_signing_identifier: Option<Identifier>,
+    /// Set ONLY for a `{service, cosigner}` pairing actor: the guest then rebuilds + binds the
+    /// cooperative-leaf sighash itself in `sign_step1` (Plan A 1C). `None` for a normal wallet.
+    contract_pairing: Option<crate::conditioning::ContractPairing>,
 }
 
 /// In-flight FROST ceremony state (cleared between rounds).
@@ -109,6 +113,7 @@ impl GuestState {
                 .as_ref()
                 .map(|id| hex::encode(id.serialize())),
             ark_cosigner_secret_hex: self.ark_cosigner_secret_hex.clone(),
+            contract_pairing: policy.contract_pairing.as_ref().map(pairing_to_wire),
             vtxos: self.vtxos.clone(),
             history: self.history.clone(),
             // Persist a ReadyToSettle delegate (to_persisted errors for other phases → None),
@@ -139,6 +144,7 @@ impl GuestState {
             key_package,
             public_key_package,
             user_signing_identifier,
+            contract_pairing: snap.contract_pairing.map(pairing_from_wire).transpose()?,
         });
         self.ark_cosigner_secret_hex = snap.ark_cosigner_secret_hex;
         self.vtxos = snap.vtxos;
@@ -289,12 +295,27 @@ impl GuestState {
                 public_key_package_json,
                 user_signing_identifier_hex,
                 server_dkg_secret_hex,
+                contract_pairing,
             } => self.install_policy(
                 group_key,
                 &key_package_json,
                 &public_key_package_json,
                 user_signing_identifier_hex.as_deref(),
                 server_dkg_secret_hex,
+                contract_pairing,
+            ),
+            GuestCommand::ContractRefresh {
+                receiver_id_hex,
+                receiver_partial_point,
+                wallet_id_hex,
+                a_at_cosigner,
+                min_signers,
+            } => self.contract_refresh(
+                &receiver_id_hex,
+                &receiver_partial_point,
+                &wallet_id_hex,
+                &a_at_cosigner,
+                min_signers as usize,
             ),
             GuestCommand::ApplyDelegateSigs(req) => self.apply_delegate_sigs(req),
             GuestCommand::SetVtxos { vtxos } => {
@@ -350,6 +371,50 @@ impl GuestState {
         result.unwrap_or_else(GuestResponse::Error)
     }
 
+    /// Key-preserving REFRESH of this guest's `V` onto a `{receiver, cosigner}` pairing,
+    /// computed entirely in the guest so `V` never leaves it (Plan A). Returns the public
+    /// pairing PKP + the receiver's half + the cosigner's pairing key package (the host relays
+    /// the latter to seed the pairing actor; it is never persisted host-side).
+    fn contract_refresh(
+        &mut self,
+        receiver_id_hex: &str,
+        receiver_partial_point: &[u8],
+        wallet_id_hex: &str,
+        a_at_cosigner: &[u8],
+        min_signers: usize,
+    ) -> Result<GuestResponse, String> {
+        let policy = self.policy.as_ref().ok_or("no policy installed")?;
+        let receiver_id = parse_identifier_hex(receiver_id_hex)?;
+        let wallet_id = parse_identifier_hex(wallet_id_hex)?;
+        let partial_point: [u8; 33] = receiver_partial_point
+            .try_into()
+            .map_err(|_| "receiver_partial_point must be 33 bytes")?;
+        let a_at_cos: [u8; 32] = a_at_cosigner
+            .try_into()
+            .map_err(|_| "a_at_cosigner must be 32 bytes")?;
+
+        let mut id_partial_share = BTreeMap::new();
+        id_partial_share.insert(wallet_id, a_at_cos);
+        let receiver = dkg::Receiver {
+            id: receiver_id,
+            partial_verifying_share: partial_point,
+        };
+        let pairing = dkg::refresh_to_receiver(
+            &policy.key_package,
+            &receiver,
+            &id_partial_share,
+            min_signers,
+            &mut OsRng,
+        )
+        .map_err(|e| format!("refresh_to_receiver: {e:?}"))?;
+        Ok(GuestResponse::ContractRefreshed {
+            pairing_public_key_package_json: pairing.pairing_pkp.to_json(),
+            receiver_half: pairing.receiver_half.to_vec(),
+            my_key_package_json: pairing.my_kp.to_json(),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn install_policy(
         &mut self,
         group_key: String,
@@ -357,6 +422,7 @@ impl GuestState {
         public_key_package_json: &str,
         user_signing_identifier_hex: Option<&str>,
         server_dkg_secret_hex: Option<String>,
+        contract_pairing: Option<ContractPairingWire>,
     ) -> Result<GuestResponse, String> {
         let key_package =
             KeyPackage::from_json(key_package_json).map_err(|e| format!("bad key package: {e}"))?;
@@ -371,6 +437,7 @@ impl GuestState {
             key_package,
             public_key_package,
             user_signing_identifier,
+            contract_pairing: contract_pairing.map(pairing_from_wire).transpose()?,
         });
         self.ark_cosigner_secret_hex = server_dkg_secret_hex;
         Ok(GuestResponse::PolicyInstalled)
@@ -399,9 +466,39 @@ impl GuestState {
             policy.key_package.clone()
         };
 
+        // Plan A 1C: a `{service, cosigner}` pairing actor is AUTHORITATIVE about WHAT it signs.
+        // The guest rebuilds the eVTXO cooperative-leaf sighash from its OWN sealed params and binds
+        // to it — single-leg (on-chain): OVERRIDE the message with leg 1; two-leg (arkd, `ark_tx`
+        // present): require the requested message to be leg 1 OR leg 2. A normal actor signs the
+        // requested message. (Replaces the former host-side `pairing_coop_sighash` override.)
+        let message = match policy.contract_pairing.as_ref() {
+            None => req.message_to_sign.clone(),
+            Some(pairing) => {
+                let leg1 = crate::conditioning::pairing_coop_sighash(
+                    pairing,
+                    &policy.public_key_package,
+                    &req.full_transaction,
+                )?;
+                if req.ark_tx.is_empty() {
+                    leg1.to_vec()
+                } else {
+                    let leg2 =
+                        crate::conditioning::arktx_leg_sighash(&req.full_transaction, &req.ark_tx)?;
+                    if req.message_to_sign == leg1 || req.message_to_sign == leg2 {
+                        req.message_to_sign.clone()
+                    } else {
+                        return Err(
+                            "pairing co-sign: message is neither leg-1 nor leg-2 of an eVTXO spend"
+                                .into(),
+                        );
+                    }
+                }
+            }
+        };
+
         // Fresh round.
         let mut ceremony = Ceremony {
-            message: req.message_to_sign.clone(),
+            message,
             tweaked,
             full_transaction: req.full_transaction.clone(),
             ..Default::default()
@@ -541,6 +638,30 @@ fn parse_identifier_hex(h: &str) -> Result<Identifier, String> {
         .try_into()
         .map_err(|_| "identifier must be 32 bytes")?;
     Identifier::deserialize(&arr).map_err(|e| format!("bad identifier: {e}"))
+}
+
+fn arr32(v: &[u8], what: &str) -> Result<[u8; 32], String> {
+    v.try_into().map_err(|_| format!("{what} must be 32 bytes"))
+}
+
+fn pairing_from_wire(w: ContractPairingWire) -> Result<crate::conditioning::ContractPairing, String> {
+    Ok(crate::conditioning::ContractPairing {
+        evtxo_spk_hex: w.evtxo_spk_hex,
+        contract_id: arr32(&w.contract_id, "contract_id")?,
+        server_pk: arr32(&w.server_pk, "server_pk")?,
+        owner_pk: arr32(&w.owner_pk, "owner_pk")?,
+        exit_delay: w.exit_delay,
+    })
+}
+
+fn pairing_to_wire(p: &crate::conditioning::ContractPairing) -> ContractPairingWire {
+    ContractPairingWire {
+        evtxo_spk_hex: p.evtxo_spk_hex.clone(),
+        contract_id: p.contract_id.to_vec(),
+        server_pk: p.server_pk.to_vec(),
+        owner_pk: p.owner_pk.to_vec(),
+        exit_delay: p.exit_delay,
+    }
 }
 
 /// Build the off-chain send transactions (SendVtxoStep1): derive change address, run

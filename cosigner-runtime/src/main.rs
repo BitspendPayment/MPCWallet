@@ -298,8 +298,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Contract-creation coordinator (stateless: a single refresh of V onto the service pairing).
-    let contract_mgr = contract::ContractManager::new(shared.clone());
+    // Contract-creation coordinator: refreshes V onto the service pairing INSIDE the wallet's
+    // guest (Plan A — the host never reads V), so it needs the actor registry to dispatch.
+    let contract_mgr = contract::ContractManager::new(shared.clone(), registry.clone());
 
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {

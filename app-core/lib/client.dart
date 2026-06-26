@@ -385,20 +385,18 @@ class MpcClient {
     // Use HW VK as temporary session key during restore
     final tempUserId = Uint8List.fromList(hwVerifyingKey);
 
-    // 3. Send Round1 packages to server with is_restore flag
+    // 3. Send Round1 packages to server.
     final hwR1Json = jsonEncode(restoreInit.round1Package.toJson());
 
     final reqWallet = DKGStep1Request()
       ..userId = tempUserId
       ..identifier = walletIdentifier.serialize()
-      ..round1Package = '' // passive receiver
-      ..isRestore = true;
+      ..round1Package = ''; // passive receiver
 
     final reqHw = DKGStep1Request()
       ..userId = tempUserId
       ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json
-      ..isRestore = true;
+      ..round1Package = hwR1Json;
 
     final step1Futures = await Future.wait(
         [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
@@ -510,16 +508,26 @@ class MpcClient {
     return _normalPolicy?.publicKeyPackage;
   }
 
-  // --- eVTXO KEY RESHARE ---
+  // --- CONTRACT eVTXO CREATION ---
 
-  /// Create a contract eVTXO key `V′` via a 2-of-2 RESHARE {author, cosigner}: the
-  /// author (this wallet) and the cosigner each deal a fresh non-zero Δ on top of
-  /// the main key V, yielding `V′ = V + Δ_author + Δ_cosigner` (≠ V) bound to the
-  /// contract. The fresh key can later be re-shared to other participants for a
-  /// multi-user contract. The cosigner validates `sha256(contractWasm)==contractId`,
-  /// stores the wasm, finalizes V′, derives + registers the eVTXO spk from V′ + the
-  /// ASP `serverPk`/`exitDelay`. Returns the spk plus the author's V′ key package +
-  /// the V′ PKP (used to spend the contract's cooperative leaf).
+  /// Create a contract eVTXO bound to [contractId]. The cooperative leaf reuses the
+  /// wallet's EXISTING key `V` (no new key): a single key-preserving REFRESH places a
+  /// co-signing share of `V` onto the always-online `{service, cosigner}` pairing so
+  /// the service can co-sign when the wallet is offline, while the cosigner GATES every
+  /// spend by [contractWasm]. The wallet computes its refresh slices locally from `V`
+  /// and sends `a@cosigner` (scalar) + `a@service·G` (point) to the cosigner; the scalar
+  /// `a@service` goes DIRECTLY to the service (the cosigner never sees it, so it cannot
+  /// reconstruct `V`). The cosigner validates `sha256(contractWasm)==contractId`, stores
+  /// the wasm, mints its own counter-share + the service's half, and registers the eVTXO
+  /// spk (coop leaf = `V`) from `serverPk`/[exitDelay]/[ownerPk].
+  ///
+  /// [serviceVk] is the always-online service's verifying key (33 bytes). [ownerPk] is
+  /// the unilateral-exit-leaf x-only key; defaults to the wallet's own `V` x-only. When
+  /// [serviceApi] is supplied, the wallet delivers its `a@service` half to that service
+  /// (role="user"); otherwise the caller is responsible for delivering it.
+  ///
+  /// Returns the registered eVTXO scriptPubKey plus the wallet's `V` key package + PKP,
+  /// which are used to spend the contract's cooperative leaf.
   Future<
       ({
         Uint8List scriptPubkey,
@@ -529,192 +537,68 @@ class MpcClient {
     Uint8List contractId,
     Uint8List contractWasm,
     Uint8List serverPk,
-    int exitDelay,
-  ) async {
+    int exitDelay, {
+    required Uint8List serviceVk,
+    Uint8List? ownerPk,
+    WalletApi? serviceApi,
+  }) async {
     if (!isInitialized || _userId == null) {
       throw StateError('Client not initialized (DKG not run).');
     }
 
-    final oldKp = _normalPolicy!.keyPackage;
-    final oldPkp = _normalPolicy!.publicKeyPackage;
-    final authorId = oldKp.identifier;
+    final vKp = _normalPolicy!.keyPackage;
+    final vPkp = _normalPolicy!.publicKeyPackage;
+    final walletId = vKp.identifier;
+    final cosignerId =
+        vPkp.verifyingShares.keys.firstWhere((id) => id != walletId);
+    final serviceId = threshold.Identifier.derive(serviceVk);
     final ts = Int64(DateTime.now().millisecondsSinceEpoch);
 
-    // 1. Author deals a fresh non-zero Δ_author under its EXISTING identifier.
-    final (r1Secret, r1Pkg) = threshold.dkgResharePart1(authorId, 2, 2);
+    // Exit-leaf owner defaults to the wallet's own V x-only (drop the parity byte).
+    final vCompressed = threshold.elemSerializeCompressed(vPkp.verifyingKey.E);
+    final ownerXonly = ownerPk ?? Uint8List.fromList(vCompressed.sublist(1));
 
-    // Step 1 — send the author's round1 (dealer) + the contract/ASP params. The
-    // cosigner self-deals Δ_cosigner and returns both dealers' round1 packages.
-    final step1Resp = await _stub.evtxoKeygenStep1(EvtxoKeygenStep1Request()
+    // Key-preserving refresh of V onto {service, cosigner}: a@service (scalar) to the
+    // service, a@cosigner (scalar) + a@service·G (point) to the cosigner.
+    final idSet = <threshold.Identifier>[walletId, cosignerId];
+    final slope = threshold.modNRandom();
+    final (aAtService, aAtCosigner) =
+        threshold.refreshShareToId(vKp, idSet, serviceId, cosignerId, slope);
+    final aAtServicePoint =
+        threshold.elemSerializeCompressed(threshold.elemBaseMul(aAtService));
+
+    final resp = await _stub.contractCreate(ContractCreateRequest()
       ..userId = _userId!
-      ..identifier = authorId.serialize()
-      ..round1Package = jsonEncode(r1Pkg.toJson())
+      ..identifier = walletId.serialize()
       ..contractId = contractId
       ..contractWasm = contractWasm
       ..serverPk = serverPk
       ..exitDelay = exitDelay
-      ..signature = Uint8List(0) // eVTXO-keygen path is unauthenticated for now
+      ..ownerPk = ownerXonly
+      ..serviceVk = serviceVk
+      ..aAtCosigner = threshold.bigIntToBytes(aAtCosigner)
+      ..aAtServicePoint = aAtServicePoint
+      ..signature = Uint8List(0) // contract-create path is unauthenticated for now
       ..timestampMs = ts);
 
-    // The cosigner's round1 package (the other dealer).
-    final round1Pkgs = <threshold.Identifier, threshold.Round1Package>{};
-    step1Resp.round1Packages.forEach((k, v) {
-      if (v.isEmpty) return;
-      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      if (id == authorId) return; // skip our own
-      round1Pkgs[id] = threshold.Round1Package.fromJson(jsonDecode(v));
-    });
-
-    // Author computes its round2 share for the cosigner.
-    final (r2Secret, sharesFromAuthor) =
-        threshold.dkgPart2(r1Secret, round1Pkgs);
-
-    // Step 2 — trigger the cosigner to compute its round2 share for the author.
-    await _stub.evtxoKeygenStep2(EvtxoKeygenStep2Request()
-      ..userId = _userId!
-      ..identifier = authorId.serialize()
-      ..signature = Uint8List(0)
-      ..timestampMs = ts);
-
-    // Step 3 — send the author's round2 share; the cosigner finalizes V′, registers
-    // the eVTXO, and returns its round2 share for the author + the spk.
-    final step3Resp = await _stub.evtxoKeygenStep3(EvtxoKeygenStep3Request()
-      ..userId = _userId!
-      ..identifier = authorId.serialize()
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromAuthor))
-      ..signature = Uint8List(0)
-      ..timestampMs = ts);
-
-    // Author finalizes the reshare → its V′ key package + the V′ PKP. Final
-    // shareholders = both dealers {author, cosigner}.
-    final sharesForAuthor = _parseShares(step3Resp.round2PackagesForMe);
-    final finalIds = <threshold.Identifier>[authorId, ...round1Pkgs.keys];
-    final (evtxoKp, evtxoPkp) = threshold.dkgResharePart3(
-      r2Secret,
-      round1Pkgs,
-      sharesForAuthor,
-      oldPkp,
-      oldKp,
-      finalIds,
-    );
+    // Deliver the wallet's own half a@service DIRECTLY to the always-online service
+    // (role="user"); the cosigner already delivered its b@service half. The service
+    // sums the two into its V co-signing share. The correlation key is the registered
+    // scriptPubKey (matches the cosigner's delivery).
+    if (serviceApi != null) {
+      await serviceApi.assembleContractShare(AssembleContractShareRequest()
+        ..contractGroupId = Uint8List.fromList(resp.contractScriptPubkey)
+        ..halfScalar = threshold.bigIntToBytes(aAtService)
+        ..role = 'user');
+    }
 
     return (
-      scriptPubkey: Uint8List.fromList(step3Resp.evtxoScriptPubkey),
-      keyPackage: evtxoKp,
-      publicKeyPackage: evtxoPkp,
+      scriptPubkey: Uint8List.fromList(resp.contractScriptPubkey),
+      keyPackage: vKp,
+      publicKeyPackage: vPkp,
     );
   }
 
-  // --- MULTI-USER CONTRACT ONBOARDING ---
-
-  /// Author onboards [recipientVk] to the contract eVTXO [evtxoScriptPubkey]. Computes
-  /// the author's key-preserving refresh half onto the participant's identifier
-  /// (`id_i = derive(recipientVk)`) and submits it to the contract cosigner, which
-  /// forms the participant's counter-share `C_i` + the 2-entry V′ PKP and holds both
-  /// ECIES halves for the participant to pick up. Neither side learns `P_i`.
-  /// [evtxoKeyPkg]/[evtxoPkp] = the author's V′ share + V′ PKP from [createEvtxoKey].
-  Future<void> onboardParticipant({
-    required Uint8List evtxoScriptPubkey,
-    required Uint8List recipientVk,
-    required threshold.KeyPackage evtxoKeyPkg,
-    required threshold.PublicKeyPackage evtxoPkp,
-  }) async {
-    final authorId = evtxoKeyPkg.identifier;
-    // The cosigner's id is the other entry of the 2-entry V′ PKP.
-    final cosignerId =
-        evtxoPkp.verifyingShares.keys.firstWhere((id) => id != authorId);
-    final idSet = <threshold.Identifier>[authorId, cosignerId];
-    final participantId = threshold.Identifier.derive(recipientVk);
-    final slope = threshold.modNRandom();
-
-    final (aAtP, aAtC) = threshold.refreshShareToId(
-        evtxoKeyPkg, idSet, participantId, cosignerId, slope);
-    final aAtParticipantPoint =
-        Uint8List.fromList(hex.decode(threshold.elemBaseMul(aAtP)));
-    final eciesA = threshold.eciesEncrypt(threshold.bigIntToBytes(aAtP), recipientVk);
-    final vPrime = threshold.elemSerializeCompressed(evtxoPkp.verifyingKey.E);
-
-    final auth = _authHelper!.signForEvtxoOnboard();
-    await _stub.evtxoOnboard(EvtxoOnboardRequest()
-      ..userId = _userId!
-      ..contractGroupId = vPrime
-      ..evtxoScriptPubkey = evtxoScriptPubkey
-      ..recipientVk = recipientVk
-      ..aAtCosigner = threshold.bigIntToBytes(aAtC)
-      ..aAtParticipantPoint = aAtParticipantPoint
-      ..eciesAAtParticipant = eciesA
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-  }
-
-  /// Participant fetches the contract shares held for it, decrypts BOTH ECIES halves
-  /// with its own signing secret, sums them into `P_i`, and returns the spendable
-  /// context per contract eVTXO (the V′ key package + PKP + the taptree parameters).
-  Future<
-      List<
-          ({
-            Uint8List scriptPubkey,
-            Uint8List contractGroupId,
-            Uint8List contractId,
-            int exitDelay,
-            Uint8List ownerPk,
-            threshold.KeyPackage keyPackage,
-            threshold.PublicKeyPackage publicKeyPackage,
-          })>> fetchContractShares() async {
-    if (_userId == null || _signingSecret == null) {
-      throw StateError('Client not initialized.');
-    }
-    final auth = _authHelper!.signForEvtxoPending();
-    final resp = await _stub.evtxoPendingShares(EvtxoPendingSharesRequest()
-      ..userId = _userId!
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-
-    final participantId =
-        threshold.Identifier.derive(Uint8List.fromList(_userId!));
-    final secret = _signingSecret!.scalar;
-    final out = <
-        ({
-          Uint8List scriptPubkey,
-          Uint8List contractGroupId,
-          Uint8List contractId,
-          int exitDelay,
-          Uint8List ownerPk,
-          threshold.KeyPackage keyPackage,
-          threshold.PublicKeyPackage publicKeyPackage,
-        })>[];
-    for (final s in resp.shares) {
-      final aAtP = threshold.bytesToBigInt(threshold.eciesDecrypt(
-          Uint8List.fromList(s.eciesHalfAuthor), secret));
-      final bAtP = threshold.bytesToBigInt(threshold.eciesDecrypt(
-          Uint8List.fromList(s.eciesHalfCosigner), secret));
-      final pI = threshold.modNAdd(aAtP, bAtP);
-      final pkp = threshold.PublicKeyPackage.fromJson(
-          jsonDecode(s.publicKeyPackageJson) as Map<String, dynamic>);
-      final kp = threshold.KeyPackage(
-          participantId, pI, threshold.elemBaseMul(pI), pkp.verifyingKey, 2);
-      out.add((
-        scriptPubkey: Uint8List.fromList(s.evtxoScriptPubkey),
-        contractGroupId: Uint8List.fromList(s.contractGroupId),
-        contractId: Uint8List.fromList(s.contractId),
-        exitDelay: s.exitDelay,
-        ownerPk: Uint8List.fromList(s.ownerPk),
-        keyPackage: kp,
-        publicKeyPackage: pkp,
-      ));
-    }
-    return out;
-  }
-
-  /// Clear a picked-up contract share from the participant's inbox.
-  Future<void> ackContractShare(Uint8List evtxoScriptPubkey) async {
-    final auth = _authHelper!.signForEvtxoAck();
-    await _stub.evtxoAckShare(EvtxoAckShareRequest()
-      ..userId = _userId!
-      ..evtxoScriptPubkey = evtxoScriptPubkey
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-  }
 
   // --- SIGNING ---
 
@@ -742,7 +626,6 @@ class MpcClient {
     threshold.PublicKeyPackage groupPubKey,
     List<int>? fullTransaction, {
     bool applyTweak = true,
-    Uint8List? contractGroupId,
   }) async {
     final nonce = frost_comm.newNonce(keyPkg.secretShare);
 
@@ -750,19 +633,12 @@ class MpcClient {
       throw StateError("User ID is null, cannot proceed with signing.");
     }
 
-    // For a contract eVTXO spend: route to the contract actor (GroupID = V′) but
-    // authenticate as ourselves — claimed_share = our verifying share, and the auth
-    // signature still binds our own user id (the cosigner verifies it via
-    // auth_check_group + selects our recipient counter-share). Normal sign: route to
-    // our own actor, no claimed share.
-    final routeId = contractGroupId ?? _userId!;
-    final claimedShare = contractGroupId != null ? _userId! : Uint8List(0);
-
+    // `user_id` is our own verifying share (auth identity); routing is by the actor URL.
+    // Contract spends reuse our normal V actor, so there's no separate routing key.
     // 2. Step 1: Commitments
     final auth1 = _authHelper!.signForSignStep1();
     final req = SignStep1Request()
-      ..userId = routeId
-      ..claimedShare = claimedShare
+      ..userId = _userId!
       ..hidingCommitment =
           threshold.elemSerializeCompressed(nonce.commitments.hiding)
       ..bindingCommitment =
@@ -808,8 +684,7 @@ class MpcClient {
     // 4. Send Share & Get Result
     final auth2 = _authHelper!.signForSignStep2();
     final signStep2Resp = await _stub.signStep2(SignStep2Request()
-      ..userId = routeId
-      ..claimedShare = claimedShare
+      ..userId = _userId!
       ..signatureShare = threshold.bigIntToBytes(sigShare.s)
       ..signature = auth2.signature
       ..timestampMs = auth2.timestampMs);

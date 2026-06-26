@@ -458,6 +458,71 @@ pub extern "C" fn threshold_dkg_refresh_part3(
     }
 }
 
+/// Key-preserving REFRESH of a single holder's share toward two recipient ids.
+///
+/// Deals THIS holder's additive piece `x = λ · secret_share` (over `id_set`) as the
+/// constant term of a degree-1 polynomial `s(t) = x + slope·t`, then evaluates it at
+/// the participant id and the cosigner id. The caller supplies `slope` (rather than
+/// the crate's internal random coefficient) so the same polynomial yields both the
+/// scalar slice it keeps/sends AND the matching `·G` point — deterministic across the
+/// wallet's own calls. When every current holder does this with `min_signers = 2` and
+/// the per-id slices are summed, the recipients hold a fresh 2-of-n sharing of the SAME
+/// key. Used by `createEvtxoKey` to refresh `V` onto the {service, cosigner} pairing.
+///
+/// Inputs: `kp_json` (holder KeyPackage), `id_set_json` (JSON array of current-holder
+/// identifier hex), `participant_hex` / `cosigner_hex` (32-byte recipient id scalars),
+/// `slope_hex` (32-byte scalar). Returns JSON `{at_participant, at_cosigner}` (hex 32B).
+#[no_mangle]
+pub extern "C" fn threshold_refresh_share_to_id(
+    kp_json: *const c_char,
+    id_set_json: *const c_char,
+    participant_hex: *const c_char,
+    cosigner_hex: *const c_char,
+    slope_hex: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let kp_str = read_cstr(kp_json).ok_or("null kp_json")?;
+        let id_set_str = read_cstr(id_set_json).ok_or("null id_set_json")?;
+        let participant_str = read_cstr(participant_hex).ok_or("null participant_hex")?;
+        let cosigner_str = read_cstr(cosigner_hex).ok_or("null cosigner_hex")?;
+        let slope_str = read_cstr(slope_hex).ok_or("null slope_hex")?;
+
+        let kp = threshold::keys::KeyPackage::from_json(&kp_str)
+            .map_err(|e| format!("bad KP: {e}"))?;
+
+        let id_list: Vec<String> = serde_json::from_str(&id_set_str)
+            .map_err(|e| format!("bad id_set JSON: {e}"))?;
+        let id_set: Vec<Identifier> = id_list
+            .iter()
+            .map(|h| parse_identifier_hex(h))
+            .collect::<Result<_, _>>()?;
+
+        let participant_id = parse_identifier_hex(&participant_str)?;
+        let cosigner_id = parse_identifier_hex(&cosigner_str)?;
+        let slope = parse_scalar_hex(&slope_str)?;
+
+        // s(t) = (λ · secret_share) + slope·t, evaluated at each recipient id.
+        let lambda = threshold::lagrange::lagrange_coeff_at_zero(&kp.identifier, &id_set);
+        let coeffs = vec![lambda * kp.secret_share, slope];
+        let at_participant =
+            threshold::polynomial::evaluate_polynomial(&participant_id, &coeffs);
+        let at_cosigner =
+            threshold::polynomial::evaluate_polynomial(&cosigner_id, &coeffs);
+
+        let data = serde_json::json!({
+            "at_participant": hex_encode(&threshold::scalar::scalar_to_bytes(&at_participant)),
+            "at_cosigner": hex_encode(&threshold::scalar::scalar_to_bytes(&at_cosigner)),
+        })
+        .to_string();
+        Ok(data)
+    })();
+
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // eVTXO key resharing
 // ---------------------------------------------------------------------------

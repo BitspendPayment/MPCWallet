@@ -283,18 +283,31 @@ pub fn onboarding_step3(
         let policy_user_id = parsers::extract_verifying_share(&pkp_json, &wallet_identifier_hex)?;
         let group_key = parsers::extract_verifying_key(&pkp_json)?;
 
-        let policy_state = PolicyState {
+        let user_signing_identifier_hex = Some(wallet_identifier_hex);
+        let server_dkg_secret_hex = Some(sess.server_internal_secret_hex.clone());
+        // Persist only the PUBLIC projection — NO plaintext FROST key in `policies`. The guest
+        // seal (sealed by the mandatory seed in the manager) owns the secret share.
+        let public_state = PolicyState {
             cosigner_id: group_key.clone(),
-            user_signing_identifier_hex: Some(wallet_identifier_hex),
-            server_dkg_secret_hex: Some(sess.server_internal_secret_hex.clone()),
+            user_signing_identifier_hex: user_signing_identifier_hex.clone(),
+            server_dkg_secret_hex: server_dkg_secret_hex.clone(),
             normal_policy: NormalPolicy {
                 id: "normal policies".to_string(),
-                key_package_json: kp_json,
-                public_key_package_json: pkp_json,
+                key_package_json: String::new(),
+                public_key_package_json: pkp_json.clone(),
             },
             contracts: HashMap::new(),
+            contract_pairing: None,
         };
-        persist_policy(shared, &group_key, &policy_state)?;
+        persist_policy(shared, &group_key, &public_state)?;
+        // Stash the in-memory key material so the manager seeds it into the guest (no read-back).
+        sess.seed_material = Some(crate::onboarding::session::SeedMaterial {
+            group_key: group_key.clone(),
+            key_package_json: kp_json,
+            public_key_package_json: pkp_json,
+            user_signing_identifier_hex,
+            server_dkg_secret_hex,
+        });
 
         for member_id in [policy_user_id.as_str(), user_id_hex.as_str()] {
             if member_id != group_key {

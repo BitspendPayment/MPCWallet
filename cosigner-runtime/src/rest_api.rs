@@ -62,7 +62,7 @@ pub fn routes(state: AppState) -> Router {
         .route("/u/{group_key}/dkg/step1", post(dkg_step1))
         .route("/u/{group_key}/dkg/step2", post(dkg_step2))
         .route("/u/{group_key}/dkg/step3", post(dkg_step3))
-        // Contract creation (reshare V→V′ + service refresh)
+        // Contract creation (refresh V onto {service, cosigner})
         .route("/u/{group_key}/contract/create", post(contract_create))
         // Signing
         .route("/u/{group_key}/sign/step1", post(sign_step1))
@@ -173,6 +173,17 @@ fn to_hex(bytes: &[u8]) -> String {
 
 fn user_id_bytes(path: &str) -> Vec<u8> {
     hex::decode(path).unwrap_or_default()
+}
+
+/// The signer's verifying share for a sign request: the body `user_id` (the user or the service),
+/// falling back to the URL `group_key` for callers that route by their own id.
+fn signer_user_id(body: &Value, group_key: &str) -> Vec<u8> {
+    let uid = hex_field(body, "user_id");
+    if uid.is_empty() {
+        user_id_bytes(group_key)
+    } else {
+        uid
+    }
 }
 
 fn status_to_response(status: Status) -> (StatusCode, Json<Value>) {
@@ -332,18 +343,11 @@ async fn sign_step1(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    // Routing is by the URL path (`group_key` — the actor). For a contract spend,
-    // `claimed_share` is the spending recipient (the user or the service); set
-    // `req.user_id` to it so the actor authenticates it against the contract's
-    // recipient set + selects that recipient's V′ counter-share.
-    let claimed_share = hex_field(&body, "claimed_share");
-    let req_user_id = if claimed_share.is_empty() {
-        user_id_bytes(&group_key)
-    } else {
-        claimed_share.clone()
-    };
+    // Routing is by the URL path (`group_key` — the actor); `user_id` is the signer's verifying
+    // share (the user or the service), used for auth. Defaults to the group_key for callers that
+    // route by their own id.
     let req = wallet_proto::SignStep1Request {
-        user_id: req_user_id,
+        user_id: signer_user_id(&body, &group_key),
         hiding_commitment: hex_field(&body, "hiding_commitment"),
         binding_commitment: hex_field(&body, "binding_commitment"),
         message_to_sign: hex_field(&body, "message_to_sign"),
@@ -351,7 +355,7 @@ async fn sign_step1(
         full_transaction: hex_field(&body, "full_transaction"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         script_path_spend: bool_field(&body, "script_path_spend"),
-        claimed_share,
+        ark_tx: hex_field(&body, "ark_tx"),
     };
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SignStep1 {
@@ -388,18 +392,11 @@ async fn sign_step2(
     Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let claimed_share = hex_field(&body, "claimed_share");
-    let req_user_id = if claimed_share.is_empty() {
-        user_id_bytes(&group_key)
-    } else {
-        claimed_share.clone()
-    };
     let req = wallet_proto::SignStep2Request {
-        user_id: req_user_id,
+        user_id: signer_user_id(&body, &group_key),
         signature_share: hex_field(&body, "signature_share"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
-        claimed_share,
     };
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SignStep2 {

@@ -4,7 +4,6 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:app_core/client.dart';
-import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:hive/hive.dart';
 import 'package:test/test.dart';
 
@@ -101,24 +100,9 @@ void main() {
     expect(sig, isNotNull, reason: '2-of-2 FROST signature should verify');
     print('   2-of-2 DKG + sign round-trip OK');
 
-    // Part C: create a contract eVTXO key via a real 2-of-2 reshare {wallet,
-    // cosigner}. The cosigner validates+stores the contract and finalizes a fresh
-    // V′ = V + Δ_wallet + Δ_cosigner (≠ V), then derives + registers the eVTXO spk.
-    final wasm = await File(
-            '../contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm')
-        .readAsBytes();
-    final contractId = Uint8List.fromList(QuickCrypto.sha256Hash(wasm));
-    final serverPk = Uint8List(32)..fillRange(0, 32, 0x02); // dummy ASP x-only
-    final evtxo = await client.createEvtxoKey(contractId, wasm, serverPk, 86016);
-    print('   eVTXO spk: ${BytesUtils.toHexString(evtxo.scriptPubkey)}');
-    expect(evtxo.scriptPubkey.length, equals(34), reason: 'OP_1 <32> taproot spk');
-    expect(evtxo.scriptPubkey[0], equals(0x51));
-    // V′ MUST differ from V — a genuine reshare, not the old V′ == V register.
-    final vPrimeXonly = evtxo.publicKeyPackage.verifyingKey.E.substring(2);
-    expect(vPrimeXonly, isNot(equals(gpk)),
-        reason: 'V′ must differ from V (real 2-of-2 reshare)');
-    print('   V  x-only: $gpk');
-    print('   V′ x-only: $vPrimeXonly');
-    print('   eVTXO reshare (fresh V′) OK');
+    // NOTE: the former Part C (contract eVTXO key creation) moved to the new
+    // single-shot ContractCreate model (refresh V onto an always-online {service,
+    // cosigner} pairing) and is covered by evtxo_contract_e2e_test /
+    // evtxo_arkd_e2e_test, which drive the dummy contract-service.
   }, timeout: Timeout(Duration(minutes: 2)));
 }

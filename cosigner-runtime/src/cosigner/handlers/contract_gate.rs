@@ -74,6 +74,11 @@ fn decode_xonly(hex_str: &str) -> Result<[u8; 32], Status> {
     Ok(a)
 }
 
+// The service-co-sign conditioning (rebuild + bind the eVTXO cooperative-leaf sighash, and verify
+// the arkd two-leg) now lives INSIDE the guest (`cosigner::conditioning`), which holds the pairing
+// params in its sealed policy — Plan A 1C. The former host-side `pairing_coop_sighash` /
+// `arktx_leg_sighash` were removed; the host no longer decides what a pairing actor signs.
+
 /// If the spend touches a registered contract (matched by an input's
 /// scriptPubKey), return that contract's spk hex — the key into the contract policies.
 /// `sign_step1` uses it to select the V′ key and mark the signing session.

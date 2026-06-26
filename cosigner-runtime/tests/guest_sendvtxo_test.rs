@@ -200,6 +200,7 @@ async fn guest_send_vtxo_full_flow() {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
             server_dkg_secret_hex: None,
+            contract_pairing: None,
         })
         .await
         .unwrap();

@@ -9,7 +9,25 @@ use crate::wallet_proto::*;
 /// Reply channel for an actor command.
 pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
+/// Output of an in-guest contract refresh (Plan A): the PUBLIC pairing PKP, the receiver's
+/// half scalar, and the cosigner's pairing key package (relayed to seed the pairing actor;
+/// never persisted host-side).
+pub struct ContractRefreshOutput {
+    pub pairing_public_key_package_json: String,
+    pub receiver_half: Vec<u8>,
+    pub my_key_package_json: String,
+}
+
 pub enum CosignerCommand {
+    // --- Contract create (Plan A: refresh V inside the guest, so the host never reads V) ---
+    ContractRefresh {
+        receiver_id_hex: String,
+        receiver_partial_point: Vec<u8>,
+        wallet_id_hex: String,
+        a_at_cosigner: Vec<u8>,
+        min_signers: u32,
+        reply: Reply<ContractRefreshOutput>,
+    },
     // --- Signing ---
     SignStep1 {
         req: SignStep1Request,
@@ -96,6 +114,9 @@ pub enum CosignerCommand {
         public_key_package_json: String,
         user_signing_identifier_hex: Option<String>,
         server_dkg_secret_hex: Option<String>,
+        /// For a `{service, cosigner}` pairing actor: the eVTXO conditioning params, seeded into
+        /// the guest so it rebuilds + binds the cooperative-leaf sighash itself (Plan A 1C).
+        contract_pairing: Option<crate::policy::ContractPairing>,
         reply: Reply<()>,
     },
 

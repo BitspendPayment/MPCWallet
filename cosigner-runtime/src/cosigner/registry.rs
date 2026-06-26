@@ -35,9 +35,21 @@ use crate::wallet_proto::{
     SignStep1Response, SignStep2Request, SignStep2Response,
 };
 use cosigner_proto::{
-    ApplyDelegateSigsWire, ArkTxEntryWire, GenerateDelegateWire, GuestCommand, GuestResponse,
-    SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
+    ApplyDelegateSigsWire, ArkTxEntryWire, ContractPairingWire, GenerateDelegateWire, GuestCommand,
+    GuestResponse, SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
 };
+
+/// Convert the host `ContractPairing` projection to the wire form carried into the guest's
+/// `InstallPolicy` (Plan A 1C — the guest does the cooperative-leaf conditioning).
+fn pairing_to_wire(p: &crate::policy::ContractPairing) -> ContractPairingWire {
+    ContractPairingWire {
+        evtxo_spk_hex: p.evtxo_spk_hex.clone(),
+        contract_id: p.contract_id.to_vec(),
+        server_pk: p.server_pk.to_vec(),
+        owner_pk: p.owner_pk.to_vec(),
+        exit_delay: p.exit_delay,
+    }
+}
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -423,6 +435,30 @@ pub async fn run_cosigner(
         // through the native-async guest where the keys live. Runs outside the
         // catch_unwind below because the guest path surfaces errors as replies.
         let cmd = match cmd {
+            CosignerCommand::ContractRefresh {
+                receiver_id_hex,
+                receiver_partial_point,
+                wallet_id_hex,
+                a_at_cosigner,
+                min_signers,
+                reply,
+            } => {
+                route_contract_refresh(
+                    receiver_id_hex,
+                    receiver_partial_point,
+                    wallet_id_hex,
+                    a_at_cosigner,
+                    min_signers,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
             CosignerCommand::SignStep1 { req, reply } => {
                 route_sign_step1(
                     req,
@@ -499,6 +535,7 @@ pub async fn run_cosigner(
                 public_key_package_json,
                 user_signing_identifier_hex,
                 server_dkg_secret_hex,
+                contract_pairing,
                 reply,
             } => {
                 route_seed_policy(
@@ -506,6 +543,7 @@ pub async fn run_cosigner(
                     public_key_package_json,
                     user_signing_identifier_hex,
                     server_dkg_secret_hex,
+                    contract_pairing,
                     reply,
                     &state,
                     &shared,
@@ -612,6 +650,67 @@ async fn restore_guest_snapshot(
     }
 }
 
+/// Route `ContractRefresh` (Plan A): ensure the wallet actor's guest is up + its policy
+/// restored/installed, then refresh `V` onto the pairing INSIDE the guest. The host never reads
+/// `V`; it only relays the public PKP + the (transient, never-persisted) pairing key package.
+#[allow(clippy::too_many_arguments)]
+async fn route_contract_refresh(
+    receiver_id_hex: String,
+    receiver_partial_point: Vec<u8>,
+    wallet_id_hex: String,
+    a_at_cosigner: Vec<u8>,
+    min_signers: u32,
+    reply: oneshot::Sender<Result<crate::cosigner::command::ContractRefreshOutput, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let result = guest
+        .as_mut()
+        .unwrap()
+        .command(GuestCommand::ContractRefresh {
+            receiver_id_hex,
+            receiver_partial_point,
+            wallet_id_hex,
+            a_at_cosigner,
+            min_signers,
+        })
+        .await;
+    match result {
+        Ok(GuestResponse::ContractRefreshed {
+            pairing_public_key_package_json,
+            receiver_half,
+            my_key_package_json,
+        }) => {
+            let _ = reply.send(Ok(crate::cosigner::command::ContractRefreshOutput {
+                pairing_public_key_package_json,
+                receiver_half,
+                my_key_package_json,
+            }));
+        }
+        Ok(GuestResponse::Error(msg)) => {
+            let _ = reply.send(Err(Status::internal(msg)));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Ok(other) => {
+            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {other:?}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {e}"))));
+            reseat_guest(guest, guest_policy_installed);
+        }
+    }
+}
+
 /// Route `SignStep1`: non-contract spends (raw script-path AND key-path-tweaked) go to the
 /// native-async guest where the keys live — every spend type (script-path, key-path tweak,
 /// contract). The contract gate is enforced inside the guest's sign step2.
@@ -625,39 +724,39 @@ async fn route_sign_step1(
     guest: &mut Option<GuestInstance>,
     guest_policy_installed: &mut bool,
 ) {
-    // Routing decision + the policy material to install, computed under the locks. No
-    // `.await` is held across the parking_lot guards.
-    let decision = {
-        let cosigner_id = state.lock().cosigner_id.clone();
+    // The group key is the actor's own id; signing routes to the guest, which restores keys +
+    // state from its sealed snapshot. OPTIONAL host policy material (`Some` only for an actor the
+    // host keeps a routing projection for — the normal wallet) is the InstallPolicy fallback for
+    // the rare case there's no seal yet. A `{service, cosigner}` pairing actor has NO host
+    // projection in Plan A 1C: it is eager-sealed at create and restores purely from its snapshot.
+    let group_key = state.lock().cosigner_id.clone();
+    let material = {
         let mut state_guard = state.lock();
-        if let Err(e) = handlers::helpers::ensure_policy_loaded(
+        if handlers::helpers::ensure_policy_loaded(
             &mut state_guard,
             shared.persistence.as_ref(),
             shared.secret_store.as_ref(),
-            &cosigner_id,
-        ) {
-            let _ = reply.send(Err(e));
-            return;
-        }
-        let Some(policy) = state_guard.policy_state.as_ref() else {
-            let _ = reply.send(Err(Status::not_found("no policy state")));
-            return;
-        };
-        // The guest now handles every spend type: raw FROST (script-path), BIP-341 key-path
-        // tweak, AND contract spends (its sign step2 calls the `contract-gate` host import to
-        // enforce the bound contract before producing a share). Always route to the guest;
-        // the legacy in-WASM sign path is gone.
-        (
-            policy.normal_policy.key_package_json.clone(),
-            policy.normal_policy.public_key_package_json.clone(),
-            policy.user_signing_identifier_hex.clone(),
-            policy.cosigner_id.clone(),
-            policy.server_dkg_secret_hex.clone(),
+            &group_key,
         )
+        .is_ok()
+        {
+            state_guard.policy_state.as_ref().map(|p| {
+                (
+                    p.normal_policy.key_package_json.clone(),
+                    p.normal_policy.public_key_package_json.clone(),
+                    p.user_signing_identifier_hex.clone(),
+                    p.server_dkg_secret_hex.clone(),
+                )
+            })
+        } else {
+            None
+        }
     };
 
-    let (key_package_json, public_key_package_json, user_identifier_hex, group_key, server_dkg_secret_hex) =
-        decision;
+    // Plan A 1C: the service-co-sign conditioning (rebuild + bind the eVTXO cooperative-leaf
+    // sighash; verify the arkd two-leg) now lives INSIDE the guest (`conditioning::*`), which holds
+    // `contract_pairing` in its sealed policy. The host just forwards the spend (`full_transaction`
+    // + `ark_tx`); the guest is authoritative about what it signs.
 
     // Lazily spawn the guest, then install the policy once.
     if guest.is_none() {
@@ -675,13 +774,20 @@ async fn route_sign_step1(
     if !*guest_policy_installed {
         let gk = group_key.clone();
         // Restore-FIRST: a sealed snapshot carries the keys AND durable state (VTXOs/history/
-        // delegate), so when it restores we skip `InstallPolicy` entirely — no plaintext key
-        // is read on this path.
+        // delegate/contract-pairing), so when it restores we skip `InstallPolicy` entirely — no
+        // plaintext key is read on this path.
         if restore_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await {
             *guest_policy_installed = true;
-        } else {
-            // First run (no snapshot yet): install from the policy material, then immediately
-            // seal so every later cold spawn restores from the snapshot instead.
+        } else if let Some((
+            key_package_json,
+            public_key_package_json,
+            user_identifier_hex,
+            server_dkg_secret_hex,
+        )) = material
+        {
+            // No snapshot yet but the host holds policy material (normal wallet, pre-seal edge):
+            // install from it, then immediately seal so every later cold spawn restores instead.
+            // A pairing actor never reaches here — it has no material and MUST restore from its seal.
             let result = guest
                 .as_mut()
                 .unwrap()
@@ -691,6 +797,7 @@ async fn route_sign_step1(
                     public_key_package_json,
                     user_signing_identifier_hex: user_identifier_hex,
                     server_dkg_secret_hex,
+                    contract_pairing: None,
                 })
                 .await;
             match result {
@@ -707,6 +814,14 @@ async fn route_sign_step1(
                 }
             }
             persist_guest_snapshot(guest.as_mut().unwrap(), shared, &gk).await;
+        } else {
+            // No sealed snapshot and no host policy material — the actor was never seeded. Per
+            // Plan A 1B/1C restore is the only path to the keys; there is no plaintext fallback.
+            reseat_guest(guest, guest_policy_installed);
+            let _ = reply.send(Err(Status::failed_precondition(
+                "actor has no sealed snapshot and no policy material (not seeded)",
+            )));
+            return;
         }
     }
 
@@ -719,6 +834,7 @@ async fn route_sign_step1(
         full_transaction: req.full_transaction,
         timestamp_ms: req.timestamp_ms,
         script_path_spend: req.script_path_spend,
+        ark_tx: req.ark_tx,
     };
     let result = guest
         .as_mut()
@@ -808,11 +924,13 @@ async fn route_sign_step2(
 /// per-actor guest and seal it into the guest's snapshot. After this the keys live in the
 /// guest's sealed blob, so later cold spawns restore them without a host-side plaintext key.
 #[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 async fn route_seed_policy(
     key_package_json: String,
     public_key_package_json: String,
     user_signing_identifier_hex: Option<String>,
     server_dkg_secret_hex: Option<String>,
+    contract_pairing: Option<crate::policy::ContractPairing>,
     reply: oneshot::Sender<Result<(), Status>>,
     state: &Arc<Mutex<CosignerState>>,
     shared: &Arc<SharedServices>,
@@ -821,8 +939,17 @@ async fn route_seed_policy(
     guest_policy_installed: &mut bool,
 ) {
     let group_key = state.lock().cosigner_id.clone();
-    // Host-side projection (routing + address derivation). The secret key_package also lives
-    // here in-memory until the plaintext policy store is removed in a later step.
+    // The SeedPolicy args carry the fresh key material + (for a pairing actor) the conditioning
+    // params. The secret key + `contract_pairing` are installed into the guest + sealed; the host
+    // keeps only a routing projection. `contracts` (if any) come from a prior persisted projection.
+    let contracts = shared
+        .persistence
+        .get("policies", &group_key)
+        .ok()
+        .flatten()
+        .and_then(|j| serde_json::from_str::<crate::policy::PolicyState>(&j).ok())
+        .map(|p| p.contracts)
+        .unwrap_or_default();
     {
         let mut s = state.lock();
         s.policy_state = Some(crate::policy::PolicyState {
@@ -834,7 +961,8 @@ async fn route_seed_policy(
                 key_package_json,
                 public_key_package_json,
             },
-            contracts: Default::default(),
+            contracts,
+            contract_pairing,
         });
     }
     if let Err(e) =
@@ -862,6 +990,7 @@ async fn ensure_guest_with_policy(
         user_identifier_hex,
         group_key,
         server_dkg_secret_hex,
+        contract_pairing,
     ) = {
         let cosigner_id = state.lock().cosigner_id.clone();
         let mut state_guard = state.lock();
@@ -881,6 +1010,7 @@ async fn ensure_guest_with_policy(
             policy.user_signing_identifier_hex.clone(),
             policy.cosigner_id.clone(),
             policy.server_dkg_secret_hex.clone(),
+            policy.contract_pairing.clone(),
         )
     };
 
@@ -910,6 +1040,7 @@ async fn ensure_guest_with_policy(
                     public_key_package_json,
                     user_signing_identifier_hex: user_identifier_hex,
                     server_dkg_secret_hex,
+                    contract_pairing: contract_pairing.as_ref().map(pairing_to_wire),
                 })
                 .await;
             match result {
@@ -1294,6 +1425,12 @@ async fn dispatch_one(
             tracing::error!(
                 "dispatch_one received Shutdown; expected to be filtered by run_cosigner"
             );
+        }
+        // Handled in the guest-routed match (it `continue`s); never reaches the legacy path.
+        CosignerCommand::ContractRefresh { reply, .. } => {
+            let _ = reply.send(Err(Status::internal(
+                "ContractRefresh must be guest-routed, not dispatched to the legacy handler",
+            )));
         }
 
         // -------- Signing --------

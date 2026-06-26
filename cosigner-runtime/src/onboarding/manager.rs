@@ -130,9 +130,10 @@ impl OnboardingManager {
             .map(|e| e.clone())
             .ok_or_else(|| Status::aborted(EVICT_MSG))?;
         let (tx, rx) = oneshot::channel();
-        let finalized = {
+        let (finalized, seed_material) = {
             let mut guard = sess.lock();
-            handlers::onboarding_step3(&mut guard, &self.shared, req, tx)
+            let f = handlers::onboarding_step3(&mut guard, &self.shared, req, tx);
+            (f, guard.seed_material.take())
         };
         if finalized {
             self.sessions.remove(user_id);
@@ -141,12 +142,14 @@ impl OnboardingManager {
                 onboarding_session_event = "completed",
                 "onboarding session completed"
             );
-            // Seed the freshly-created policy into the per-actor guest and seal it, so the
-            // guest owns the keys and later cold spawns restore from the sealed snapshot.
-            // Best-effort: a failure here doesn't fail onboarding (the plaintext policy is
-            // still persisted as today; the guest is re-seeded on the first sign).
+            // MANDATORY seed (Plan A): install the freshly-minted key INTO the guest from the
+            // in-memory material + seal it. There is NO plaintext fallback — `policies` holds only
+            // the public projection — so if this fails the wallet has no usable cosigner key and
+            // onboarding MUST fail (the user re-onboards; no funds exist yet).
             if let Some(registry) = self.registry.clone() {
-                self.seed_guest_after_onboarding(&registry, user_id).await;
+                let mat = seed_material
+                    .ok_or_else(|| Status::internal("onboarding finalized without seed material"))?;
+                self.seed_guest_mandatory(&registry, &mat).await?;
             }
         }
         rx.await
@@ -154,57 +157,37 @@ impl OnboardingManager {
     }
 
     /// Install the just-created policy into the per-actor guest + seal it (best-effort).
-    async fn seed_guest_after_onboarding(
+    /// Seed the freshly-minted key INTO the guest from the IN-MEMORY material + seal it. The key
+    /// is never read back from `policies` (which holds only the public projection). Returns Err on
+    /// failure so onboarding fails — there is no plaintext fallback (Plan A).
+    async fn seed_guest_mandatory(
         self: &Arc<Self>,
         registry: &Arc<crate::cosigner::registry::CosignerRegistry>,
-        user_id: &str,
-    ) {
-        // The policy is persisted under the GROUP KEY; the request user_id may be a member
-        // verifying share that resolves to it via `policy_owner_idx`.
-        let group_key = self
-            .shared
-            .persistence
-            .get("policy_owner_idx", user_id)
-            .ok()
-            .flatten()
-            .unwrap_or_else(|| user_id.to_string());
-
-        let policy_json = match self.shared.persistence.get("policies", &group_key) {
-            Ok(Some(j)) => j,
-            _ => {
-                tracing::warn!("[{group_key}] onboarding seed: no policy to seed; skipping");
-                return;
-            }
-        };
-        let policy: crate::policy::PolicyState = match serde_json::from_str(&policy_json) {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!("[{group_key}] onboarding seed: bad policy json: {e}");
-                return;
-            }
-        };
-        let dkg_secret = self
-            .shared
-            .secret_store
-            .get_secret(&format!("dkg-secret.{group_key}"))
-            .ok()
-            .flatten();
-
-        let res: Result<(), Status> = registry
+        mat: &crate::onboarding::session::SeedMaterial,
+    ) -> Result<(), Status> {
+        let group_key = mat.group_key.clone();
+        let kp = mat.key_package_json.clone();
+        let pkp = mat.public_key_package_json.clone();
+        let usid = mat.user_signing_identifier_hex.clone();
+        let secret = mat.server_dkg_secret_hex.clone();
+        registry
             .dispatch(&group_key, |reply| {
                 crate::cosigner::command::CosignerCommand::SeedPolicy {
-                    key_package_json: policy.normal_policy.key_package_json,
-                    public_key_package_json: policy.normal_policy.public_key_package_json,
-                    user_signing_identifier_hex: policy.user_signing_identifier_hex,
-                    server_dkg_secret_hex: dkg_secret,
+                    key_package_json: kp,
+                    public_key_package_json: pkp,
+                    user_signing_identifier_hex: usid,
+                    server_dkg_secret_hex: secret,
+                    contract_pairing: None, // a normal wallet actor has no pairing conditioning
                     reply,
                 }
             })
-            .await;
-        match res {
-            Ok(()) => tracing::info!("[{group_key}] onboarding seeded policy into guest + sealed"),
-            Err(e) => tracing::warn!("[{group_key}] onboarding seed-into-guest failed: {e}"),
-        }
+            .await
+            .map_err(|e| {
+                tracing::error!("[{group_key}] onboarding seed-into-guest FAILED: {e}");
+                Status::internal(format!("onboarding seed-into-guest failed: {e}"))
+            })?;
+        tracing::info!("[{group_key}] onboarding seeded key into guest + sealed");
+        Ok(())
     }
 
     /// Run one eviction sweep: remove and drain any session whose

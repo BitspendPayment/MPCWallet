@@ -253,16 +253,14 @@ class MpcArkWallet {
     try {
       final sigHexes = <String>[];
       for (final sighash in unsigned.sighashes) {
+        // Contract spends reuse our normal V actor; the cosigner gates the spend by the
+        // contract bound to the eVTXO (no separate routing key).
         final sig = await client.signWithContext(
           sighash,
           evtxoKeyPkg,
           evtxoPkp,
           unsigned.gateTxBytes,
           applyTweak: false,
-          // Route to the contract cosigner actor (GroupID = V′); the cosigner
-          // authenticates us via auth_check_group and co-signs our recipient share.
-          contractGroupId:
-              threshold.elemSerializeCompressed(evtxoPkp.verifyingKey.E),
         );
         final rBytes = threshold.elemSerializeCompressed(sig.R);
         final xOnly = rBytes.sublist(1);

@@ -139,6 +139,7 @@ async fn full_2of2_sign_via_async_handle() {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(user_identifier_hex),
             server_dkg_secret_hex: None,
+            contract_pairing: None,
         })
         .await
         .unwrap();
@@ -160,6 +161,7 @@ async fn full_2of2_sign_via_async_handle() {
             full_transaction: vec![],
             timestamp_ms: ts1,
             script_path_spend: true,
+            ark_tx: vec![],
         }))
         .await
         .unwrap();
@@ -246,6 +248,7 @@ async fn key_path_tweak_sign_via_guest() {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(user_identifier_hex),
             server_dkg_secret_hex: None,
+            contract_pairing: None,
         })
         .await
         .unwrap();
@@ -269,6 +272,7 @@ async fn key_path_tweak_sign_via_guest() {
             full_transaction: vec![],
             timestamp_ms: ts1,
             script_path_spend: false, // key-path → tweak
+            ark_tx: vec![],
         }))
         .await
         .unwrap();

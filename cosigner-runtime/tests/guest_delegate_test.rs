@@ -184,6 +184,7 @@ async fn guest_delegate_setup_chain() {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
             server_dkg_secret_hex: Some(hex::encode([5u8; 32])),
+            contract_pairing: None,
         })
         .await
         .unwrap();
@@ -340,6 +341,7 @@ async fn setup_ready_delegate(guest: &mut GuestInstance, asp_url: &str) {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
             server_dkg_secret_hex: Some(hex::encode([5u8; 32])),
+            contract_pairing: None,
         })
         .await
         .unwrap();
@@ -461,6 +463,7 @@ async fn guest_snapshot_restore_roundtrip() {
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
             server_dkg_secret_hex: Some(hex::encode([5u8; 32])),
+            contract_pairing: None,
         })
         .await
         .unwrap();

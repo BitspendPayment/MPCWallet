@@ -206,6 +206,7 @@ name = "cosigner"
 version = "0.1.0"
 dependencies = [
  "ark",
+ "bitcoin",
  "bytes",
  "cosigner-proto",
  "hex",

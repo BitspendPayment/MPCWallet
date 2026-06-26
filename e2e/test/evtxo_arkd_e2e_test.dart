@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:app_core/ark/ark_send.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
+import 'package:app_core/rest_wallet_api.dart';
 import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:e2e/mock_fcm_server.dart';
@@ -125,6 +126,41 @@ Future<Process> startCosignerRuntime(
   return proc;
 }
 
+/// Start the dummy always-online contract-signer service and return (process, vk).
+/// The wallet POSTs its `a@service` half here; the cosigner POSTs `b@service`.
+Future<(Process, Uint8List)> startContractService(int port) async {
+  final ready = Completer<void>();
+  final failed = Completer<void>();
+  final proc = await Process.start(
+    '../e2e/contract-service/target/release/contract-service',
+    ['--port', port.toString()],
+  );
+  void watch(Stream<List<int>> s) {
+    s.transform(utf8.decoder).listen((data) {
+      print('[Service]: $data');
+      if (!ready.isCompleted && data.contains('listening on')) ready.complete();
+    }, onDone: () {
+      if (!ready.isCompleted && !failed.isCompleted) failed.complete();
+    });
+  }
+
+  watch(proc.stdout);
+  watch(proc.stderr);
+  try {
+    await Future.any([
+      ready.future,
+      failed.future.then((_) => throw Exception('contract-service failed')),
+    ]).timeout(Duration(seconds: 30),
+        onTimeout: () => throw Exception('contract-service not ready in time'));
+  } catch (e) {
+    proc.kill();
+    rethrow;
+  }
+  final info = await http.get(Uri.parse('http://127.0.0.1:$port/info'));
+  final vkHex = jsonDecode(info.body)['service_vk'] as String;
+  return (proc, Uint8List.fromList(BytesUtils.fromHexString(vkHex)));
+}
+
 void main() {
   late RegtestHelper btc;
   late ArkdAdmin arkd;
@@ -132,7 +168,10 @@ void main() {
   late Directory serverTempDir;
   late MockFcmServer mockFcm;
   Process? serverProcess;
+  Process? serviceProcess;
   late int serverPort;
+  late int servicePort;
+  late Uint8List serviceVk;
 
   setUpAll(() async {
     print('--- eVTXO-through-arkd E2E Setup ---');
@@ -185,6 +224,12 @@ void main() {
       'token_uri': mockFcm.tokenUri,
     });
 
+    // Start the contract-signer service first; the cosigner needs SERVICE_URL at boot.
+    final svcSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+    servicePort = svcSocket.port;
+    await svcSocket.close();
+    (serviceProcess, serviceVk) = await startContractService(servicePort);
+
     final portSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     serverPort = portSocket.port;
     await portSocket.close();
@@ -192,12 +237,14 @@ void main() {
     serverProcess = await startCosignerRuntime(serverPort, serverTempDir, extraEnv: {
       'FCM_SERVICE_ACCOUNT_JSON': fcmServiceAccountJson,
       'FCM_BASE_URL': mockFcm.baseUrl,
+      'SERVICE_URL': 'http://127.0.0.1:$servicePort',
     });
-    print('--- Setup Complete (port $serverPort) ---');
+    print('--- Setup Complete (port $serverPort, service $servicePort) ---');
   });
 
   tearDownAll(() async {
     serverProcess?.kill();
+    serviceProcess?.kill();
     try {
       await mockFcm.stop();
     } catch (_) {}
@@ -249,20 +296,24 @@ void main() {
     final exitDelay = arkInfo.unilateralExitDelay.toInt();
     final wasmBytes = await File(oracleGateWasmPath).readAsBytes();
     final contractId = Uint8List.fromList(QuickCrypto.sha256Hash(wasmBytes));
-    final evtxo = await alice.createEvtxoKey(contractId, wasmBytes, serverPk, exitDelay);
-    // qEvtxo = the eVTXO's taproot OUTPUT key (the address). vPrime = V′, the raw
-    // 2-of-2 key INSIDE the cooperative multisig leaf — these are different.
+    // createEvtxoKey refreshes V onto {service, cosigner}: the cosigner delivers its
+    // b@service half to the service (via SERVICE_URL), and the wallet delivers its own
+    // a@service half directly through serviceApi (role="user").
+    final serviceApi = RestWalletApi('http://127.0.0.1:$servicePort');
+    final evtxo = await alice.createEvtxoKey(
+        contractId, wasmBytes, serverPk, exitDelay,
+        serviceVk: serviceVk, serviceApi: serviceApi);
+    // qEvtxo = the eVTXO's taproot OUTPUT key (the address). The cooperative multisig
+    // leaf now reuses the wallet's key V (no separate V′).
     final qEvtxo = Uint8List.fromList(evtxo.scriptPubkey.sublist(2));
     final vPrimeXonly = _xonlyOf(evtxo.publicKeyPackage);
 
-    // V′ MUST differ from V: createEvtxoKey runs a real 2-of-2 reshare
-    // (V′ = V + Δ_author + Δ_cosigner), not the old one-shot V′ == V register.
+    // Coop leaf key == V: the new model reuses V (no reshare).
     final vXonly = _xonlyOf(alice.getPublicKeyPackage()!);
     expect(BytesUtils.toHexString(vPrimeXonly),
-        isNot(equals(BytesUtils.toHexString(vXonly))),
-        reason: 'V′ must differ from V — createEvtxoKey must run a real reshare');
-    print('   V  x-only: ${BytesUtils.toHexString(vXonly)}');
-    print('   V′ x-only: ${BytesUtils.toHexString(vPrimeXonly)}');
+        equals(BytesUtils.toHexString(vXonly)),
+        reason: 'coop leaf reuses V — createEvtxoKey no longer reshares');
+    print('   V (coop leaf) x-only: ${BytesUtils.toHexString(vXonly)}');
 
     final evtxoArkAddr =
         arkEvtxoArkAddress(serverPk: serverPk, qEvtxo: qEvtxo, network: arkInfo.network);
@@ -346,64 +397,15 @@ void main() {
     }
     expect(bobBalance, equals(50000), reason: 'Bob should receive 50000 sats from the eVTXO spend');
 
-    // ── Phase 5: MULTI-USER — Alice onboards Bob; Bob INDEPENDENTLY spends ──────
-    // Alice onboards Bob to the SAME contract: the cosigner forms Bob's own counter-
-    // share C_bob (≠ Alice's) and holds Bob's two ECIES share-halves for pickup.
-    print('6. Onboarding Bob to the contract...');
-    final bobVk = Uint8List.fromList(BytesUtils.fromHexString(bob.userId!));
-    await alice.onboardParticipant(
-      evtxoScriptPubkey: evtxo.scriptPubkey,
-      recipientVk: bobVk,
-      evtxoKeyPkg: evtxo.keyPackage,
-      evtxoPkp: evtxo.publicKeyPackage,
-    );
-
-    final bobShares = await bob.fetchContractShares();
-    expect(bobShares, isNotEmpty, reason: 'Bob should receive a held contract share');
-    final bobShare = bobShares.first;
-    // Bob's 2-entry V′ PKP {id_bob, cosigner} must carry the SAME contract key V′.
-    expect(BytesUtils.toHexString(_xonlyOf(bobShare.publicKeyPackage)),
-        equals(BytesUtils.toHexString(vPrimeXonly)),
-        reason: 'Bob V′ PKP must equal the contract V′ (key unchanged by refresh)');
-    print('   Bob fetched + decrypted his share; V′ matches.');
-    // Bob's exit-leaf owner_pk (from his pickup) must equal the author's V x-only, so
-    // his reconstructed eVTXO taptree matches the shared V′ address.
-    expect(BytesUtils.toHexString(bobShare.ownerPk), equals(BytesUtils.toHexString(vXonly)),
-        reason: "Bob's owner_pk must equal Alice's V x-only");
-
-    // The eVTXO address is V′-derived and SHARED, so any onboarded recipient can spend
-    // any eVTXO there. Alice mints a fresh 90k eVTXO; Bob spends it with HIS OWN share
-    // (no funds / normal-send needed from Bob — the eVTXO value funds the spend).
-    final mintForBob = await mint(90000);
-    print('7. Alice minted a fresh eVTXO for Bob: $mintForBob:0 (90k)');
-
-    // Bob spends it through the contract actor V′: the cosigner co-signs with C_bob
-    // (gated by the contract) using Bob's own P_bob.
-    final bobWallet = MpcArkWallet(bob);
-    final aliceArk = await alice.getArkAddress();
-    final bobUnsigned = await bobWallet.createEvtxoSpend(
-      destination: aliceArk,
-      amountSats: 50000,
-      inputTxid: mintForBob,
-      inputVout: 0,
-      inputAmountSats: 90000,
-      contractId: contractId,
-      evtxoPk: vPrimeXonly,
-      exitDelay: bobShare.exitDelay,
-      ownerPkOverride: BytesUtils.toHexString(bobShare.ownerPk),
-      contractArgs: Uint8List.fromList(utf8.encode('ORACLE-OK')),
-    );
-    final bobSigned = await bobWallet.signEvtxoSpend(bobUnsigned,
-        evtxoKeyPkg: bobShare.keyPackage, evtxoPkp: bobShare.publicKeyPackage);
-    final bobSpendTxid = await bobWallet.submit(bobSigned);
-    expect(bobSpendTxid, isNotEmpty,
-        reason: 'Bob must INDEPENDENTLY spend a contract eVTXO through V′');
-    await bob.ackContractShare(evtxo.scriptPubkey);
-    print('8. Bob INDEPENDENTLY spent the eVTXO (cosigner used C_bob), '
-        'ark_txid=$bobSpendTxid');
+    // NOTE: the former Phase 5 (multi-user — Alice onboards Bob to the SAME
+    // contract, Bob independently spends with his own counter-share) is removed.
+    // The new model reuses V (no per-participant V′ reshare) and instead refreshes
+    // V onto an always-online {service, cosigner} pairing; multi-user sharing will
+    // be re-expressed against the external contract-signer service when it lands.
+    // See HANDOFF.md TODO #2/#3.
 
     print('eVTXO-through-arkd E2E complete: arkd co-signed the allow; over-limit + '
-        'bad-arg refused; Bob onboarded + independently spent (multi-user).');
+        'bad-arg refused.');
   }, timeout: Timeout(Duration(minutes: 12)));
 }
 

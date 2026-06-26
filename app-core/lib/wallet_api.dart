@@ -12,15 +12,12 @@ abstract class WalletApi {
   Future<DKGStep2Response> dKGStep2(DKGStep2Request request);
   Future<DKGStep3Response> dKGStep3(DKGStep3Request request);
 
-  // eVTXO key generation (resharing)
-  Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request request);
-  Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request request);
-  Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request request);
-
-  // Multi-user contract onboarding
-  Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest request);
-  Future<EvtxoPendingSharesResponse> evtxoPendingShares(EvtxoPendingSharesRequest request);
-  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest request);
+  // Contract eVTXO creation: a single key-preserving refresh of V onto
+  // {service, cosigner}. assembleContractShare is the SERVICE-side API the wallet
+  // calls to hand the service its own refresh half (role="user").
+  Future<ContractCreateResponse> contractCreate(ContractCreateRequest request);
+  Future<AssembleContractShareResponse> assembleContractShare(
+      AssembleContractShareRequest request);
 
   // Signing
   Future<SignStep1Response> signStep1(SignStep1Request request);

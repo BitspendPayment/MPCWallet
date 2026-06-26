@@ -97,7 +97,6 @@ class RestWalletApi implements WalletApi {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
-      'is_restore': r.isRestore,
     });
     return DKGStep1Response()
       ..round1Packages
@@ -133,118 +132,42 @@ class RestWalletApi implements WalletApi {
   }
 
   // -------------------------------------------------------------------------
-  // eVTXO key generation (resharing)
+  // Contract eVTXO creation
   // -------------------------------------------------------------------------
 
   @override
-  Future<EvtxoKeygenStep1Response> evtxoKeygenStep1(EvtxoKeygenStep1Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step1', {
-      'user_id': _hex(r.userId),
+  Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/contract/create', {
       'identifier': _hex(r.identifier),
-      'round1_package': r.round1Package,
       'contract_id': _hex(r.contractId),
       'contract_wasm': _hex(r.contractWasm),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
       'server_pk': _hex(r.serverPk),
       'exit_delay': r.exitDelay,
-    });
-    // Reshare: the response carries both dealers' round1 packages (id_hex -> JSON)
-    // for dkg_part2. One-shot register (V′ == V) leaves the map empty and carries
-    // the eVTXO scriptPubKey (hex).
-    final result = EvtxoKeygenStep1Response()
-      ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
-    result.round1Packages
-        .addAll((resp['round1_packages'] as Map<String, dynamic>? ?? {})
-            .map((k, v) => MapEntry(k, v.toString())));
-    return result;
-  }
-
-  @override
-  Future<EvtxoKeygenStep2Response> evtxoKeygenStep2(EvtxoKeygenStep2Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step2', {
-      'user_id': _hex(r.userId),
-      'identifier': _hex(r.identifier),
-      'round1_package': r.round1Package,
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return EvtxoKeygenStep2Response()
-      ..allRound1Packages
-          .addAll((resp['all_round1_packages'] as Map<String, dynamic>? ?? {})
-              .map((k, v) => MapEntry(k, v.toString())));
-  }
-
-  @override
-  Future<EvtxoKeygenStep3Response> evtxoKeygenStep3(EvtxoKeygenStep3Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo-keygen/step3', {
-      'user_id': _hex(r.userId),
-      'identifier': _hex(r.identifier),
-      'round2_packages_for_others':
-          r.round2PackagesForOthers.map((k, v) => MapEntry(k, v)),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return EvtxoKeygenStep3Response()
-      ..round2PackagesForMe
-          .addAll((resp['round2_packages_for_me'] as Map<String, dynamic>? ?? {})
-              .map((k, v) => MapEntry(k, v.toString())))
-      ..evtxoAddress = (resp['evtxo_address'] as String? ?? '')
-      ..evtxoScriptPubkey = _unhex(resp['evtxo_script_pubkey'] as String?);
-  }
-
-  @override
-  Future<EvtxoOnboardResponse> evtxoOnboard(EvtxoOnboardRequest r) async {
-    // Routes to the contract actor V′ (URL), authenticates the author (body user_id).
-    final resp =
-        await _post('/api/u/${_hex(r.contractGroupId)}/evtxo/onboard', {
-      'user_id': _hex(r.userId),
-      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
-      'recipient_vk': _hex(r.recipientVk),
+      'owner_pk': _hex(r.ownerPk),
+      'service_vk': _hex(r.serviceVk),
       'a_at_cosigner': _hex(r.aAtCosigner),
-      'a_at_participant_point': _hex(r.aAtParticipantPoint),
-      'ecies_a_at_participant': _hex(r.eciesAAtParticipant),
+      'a_at_service_point': _hex(r.aAtServicePoint),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
+    });
+    return ContractCreateResponse()
+      ..contractScriptPubkey = _unhex(resp['contract_script_pubkey'] as String?)
+      ..bAtService = _unhex(resp['b_at_service'] as String?);
+  }
+
+  /// SERVICE-side API. [baseUrl] must point at the external contract-signer service
+  /// (not the cosigner). The wallet delivers its `a@service` half here (role="user").
+  @override
+  Future<AssembleContractShareResponse> assembleContractShare(
+      AssembleContractShareRequest r) async {
+    final resp = await _post('/assemble-contract-share', {
       'contract_group_id': _hex(r.contractGroupId),
+      'half_scalar': _hex(r.halfScalar),
+      'role': r.role,
     });
-    return EvtxoOnboardResponse()..ok = resp['ok'] as bool? ?? false;
-  }
-
-  @override
-  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
-      EvtxoPendingSharesRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/pending-shares', {
-      'user_id': _hex(r.userId),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    final result = EvtxoPendingSharesResponse();
-    for (final s in (resp['shares'] as List? ?? [])) {
-      final m = s as Map<String, dynamic>;
-      result.shares.add(PendingContractShare()
-        ..evtxoScriptPubkey = _unhex(m['evtxo_script_pubkey'] as String?)
-        ..contractGroupId = _unhex(m['contract_group_id'] as String?)
-        ..contractId = _unhex(m['contract_id'] as String?)
-        ..eciesHalfAuthor = _unhex(m['ecies_half_author'] as String?)
-        ..eciesHalfCosigner = _unhex(m['ecies_half_cosigner'] as String?)
-        ..publicKeyPackageJson = m['public_key_package_json'] as String? ?? ''
-        ..exitDelay = (m['exit_delay'] as num?)?.toInt() ?? 0
-        ..serverPk = _unhex(m['server_pk'] as String?)
-        ..ownerPk = _unhex(m['owner_pk'] as String?));
-    }
-    return result;
-  }
-
-  @override
-  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/ack-share', {
-      'user_id': _hex(r.userId),
-      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return EvtxoAckShareResponse()..ok = resp['ok'] as bool? ?? false;
+    return AssembleContractShareResponse()
+      ..ok = resp['ok'] as bool? ?? false
+      ..serviceSharePoint = _unhex(resp['service_share_point'] as String?);
   }
 
   // -------------------------------------------------------------------------
@@ -262,8 +185,6 @@ class RestWalletApi implements WalletApi {
       'full_transaction': _hex(r.fullTransaction),
       'timestamp_ms': r.timestampMs.toInt(),
       'script_path_spend': r.scriptPathSpend,
-      // Contract eVTXO spend: route by user_id (=V′), authenticate the recipient.
-      'claimed_share': _hex(r.claimedShare),
     });
     final result = SignStep1Response()
       ..messageToSign = _unhex(resp['message_to_sign'] as String?)
@@ -285,7 +206,6 @@ class RestWalletApi implements WalletApi {
       'signature_share': _hex(r.signatureShare),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
-      'claimed_share': _hex(r.claimedShare),
     });
     return SignStep2Response()
       ..rPoint = _unhex(resp['r_point'] as String?)
