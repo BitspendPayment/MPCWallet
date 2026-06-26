@@ -15,7 +15,7 @@ use wasmtime::component::Component;
 
 use super::crypto_host;
 use super::{ContractEngine, EvalContext, Verdict};
-use crate::persistence::KvStore;
+use crate::resp_store::KvStore;
 
 /// Persistence tree holding contract bytes: hex(contract_id) -> hex(wasm).
 /// Populated at eVTXO creation; the gate resolves contracts from it.
@@ -159,7 +159,7 @@ impl ContractHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::persistence::PersistenceError;
+    use crate::resp_store::PersistenceError;
     use std::sync::Mutex as StdMutex;
 
     #[derive(Default)]

@@ -50,7 +50,6 @@ pub fn fetch_history(
     ensure_policy_loaded(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 
@@ -104,7 +103,6 @@ pub fn fetch_recent_transactions(
     ensure_policy_loaded(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 

@@ -7,7 +7,7 @@ use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
 use crate::cosigner::state::CosignerState;
-use crate::persistence::{KvStore, SecretStore};
+use crate::resp_store::KvStore;
 
 /// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature against the URL
 /// `user_id` (owner pubkey) host-side via the `threshold` crate.
@@ -108,7 +108,6 @@ pub fn auth_check_group(
 pub fn ensure_policy_loaded(
     state: &mut CosignerState,
     _persistence: &dyn KvStore,
-    _secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<(), Status> {
     if state.policy_state.is_some() {
@@ -124,10 +123,9 @@ pub fn ensure_policy_loaded(
 pub fn get_user_xonly_pubkey(
     state: &mut CosignerState,
     persistence: &dyn KvStore,
-    secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<String, Status> {
-    ensure_policy_loaded(state, persistence, secret_store, user_id_hex)?;
+    ensure_policy_loaded(state, persistence, user_id_hex)?;
     let ps = state
         .policy_state
         .as_ref()

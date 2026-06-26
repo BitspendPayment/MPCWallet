@@ -263,7 +263,6 @@ pub fn get_ark_address(
     let owner_pk_hex = get_user_xonly_pubkey(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 
@@ -301,7 +300,6 @@ pub fn get_boarding_address(
     let owner_pk_hex = get_user_xonly_pubkey(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
     let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
@@ -335,7 +333,6 @@ pub fn check_boarding_balance(
     let owner_pk_hex = get_user_xonly_pubkey(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
     let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
@@ -393,7 +390,6 @@ pub fn list_vtxos(
     let owner_pk_hex = get_user_xonly_pubkey(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         &user_id_hex,
     )?;
 

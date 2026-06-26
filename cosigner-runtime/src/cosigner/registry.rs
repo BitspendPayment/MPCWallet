@@ -704,7 +704,6 @@ async fn route_sign_step1(
         if handlers::helpers::ensure_policy_loaded(
             &mut state_guard,
             shared.persistence.as_ref(),
-            shared.secret_store.as_ref(),
             &group_key,
         )
         .is_ok()
@@ -1482,7 +1481,6 @@ async fn route_settle_boarding(
                 match handlers::helpers::get_user_xonly_pubkey(
                     &mut st,
                     shared.persistence.as_ref(),
-                    shared.secret_store.as_ref(),
                     &user_id_hex,
                 ) {
                     Ok(p) => p,

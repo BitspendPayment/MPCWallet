@@ -31,7 +31,7 @@
 	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	signer-run signer-stop service-build service-run service-stop runtime-run runtime-stop \
-	arkd-up arkd-down arkd-init \
+	arkd-up arkd-down arkd-init redis-up \
 	proto threshold-test \
 	flutter flutter-run ark-newaddress crypto-bench \
 	stress-test load-test \
@@ -43,6 +43,8 @@
 # ── Variables ─────────────────────────────────────────────────────────────────
 
 export DATA_DIR=/tmp/mpc_wallet_stress
+# The cosigner-runtime's single RESP/Redis KV backend (password-only auth; username ignored).
+export REDIS_URL=redis://:testpass@127.0.0.1:6379
 
 NDK_VERSION ?= 27.0.12077973
 NDK_HOME     = $(HOME)/Android/Sdk/ndk/$(NDK_VERSION)
@@ -73,13 +75,13 @@ VERSION_FLAGS = $(if $(VERSION),--build-name=$(VERSION)) $(if $(BUILD_NUMBER),--
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # 1) Run E2E test (no Ark) — builds server + signer, runs test, cleans up
-e2e: threshold-ffi-build runtime-build signer-run
+e2e: threshold-ffi-build runtime-build signer-run redis-up
 	@echo "Running E2E test..."
 	cd e2e && dart test test/full_system_test.dart
 	-pkill -f "signer-server" || true
 
 # 2) Run Ark E2E test — starts regtest + arkd, builds everything, tests, cleans up
-e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build
+e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build redis-up
 	@echo "Running Ark E2E test..."
 	cd e2e && dart test test/ark_e2e_test.dart
 	-pkill -f "signer-server" || true
@@ -88,7 +90,7 @@ e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-
 # The contract is handed to the cosigner at eVTXO creation (no registry). Funds
 # an eVTXO, then asserts the cosigner co-signs an allowed spend (broadcast +
 # confirmed) and refuses over-limit / bad-arg spends.
-e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build
+e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build redis-up
 	@echo "Running eVTXO contract E2E test..."
 	cd e2e && dart test test/evtxo_contract_e2e_test.dart
 	-pkill -f "signer-server" || true
@@ -97,7 +99,7 @@ e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ff
 # Full eVTXO-through-arkd E2E: mint the contract eVTXO via a normal Ark send, then
 # spend its cooperative leaf through arkd (arkd genuinely co-signs the server leg;
 # the cosigner gates the V′ leg). Same stack as e2e-ark + the example contracts.
-e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build
+e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build redis-up
 	@echo "Running eVTXO-through-arkd E2E test..."
 	cd e2e && dart test test/evtxo_arkd_e2e_test.dart
 	-pkill -f "signer-server" || true
@@ -106,27 +108,27 @@ e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-r
 # Tier 2 service-driven co-sign E2E: the always-online service co-signs an eVTXO spend under V
 # with the WALLET OFFLINE, bound to its own eVTXO (refuses non-associated spends). Needs only the
 # cosigner-runtime + contract-service + ffi + the example contracts — NO arkd/bitcoind.
-e2e-evtxo-cosign: runtime-stop ffi-build runtime-build contracts-build service-build
+e2e-evtxo-cosign: runtime-stop ffi-build runtime-build contracts-build service-build redis-up
 	@echo "Running service-driven co-sign E2E test..."
 	cd e2e && dart test test/evtxo_service_cosign_e2e_test.dart
 	-pkill -f "contract-service" || true
 
 # Plan A 1B gate: prove the cosigner restores its FROST share from the SEAL alone after a runtime
 # restart (the plaintext key is no longer persisted). Needs only the runtime + ffi.
-e2e-restore: runtime-stop ffi-build runtime-build
+e2e-restore: runtime-stop ffi-build runtime-build redis-up
 	@echo "Running restore-from-seal E2E test..."
 	cd e2e && dart test test/restore_from_seal_e2e_test.dart
 
 # Tier 2 service-driven ON-CHAIN spend E2E: the service + cosigner spend a real eVTXO on regtest
 # with the WALLET OFFLINE (server leg from a self-generated ASP key — no arkd). Needs bitcoind.
-e2e-evtxo-service-spend: runtime-stop regtest-up ffi-build runtime-build contracts-build service-build
+e2e-evtxo-service-spend: runtime-stop regtest-up ffi-build runtime-build contracts-build service-build redis-up
 	@echo "Running service-driven ON-CHAIN spend E2E test..."
 	cd e2e && dart test test/evtxo_service_spend_e2e_test.dart
 	-pkill -f "contract-service" || true
 
 # Tier 2 service-driven spend THROUGH ARKD E2E: the service + cosigner spend a contract eVTXO
 # off-chain via arkd with the WALLET OFFLINE (arkd co-signs the server leg). Needs the arkd stack.
-e2e-evtxo-service-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build contracts-build service-build
+e2e-evtxo-service-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build contracts-build service-build redis-up
 	@echo "Running service-driven through-arkd spend E2E test..."
 	cd e2e && dart test test/evtxo_service_arkd_e2e_test.dart
 	-pkill -f "contract-service" || true
@@ -475,6 +477,16 @@ arkd-up:
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
 	@echo "Waiting for arkd to start (30s)..."
 	@sleep 30
+
+# Bring up the cosigner-runtime's RESP/Redis KV backend (host-exposed, password auth) and FLUSH it
+# for a clean test run. Idempotent — safe whether or not arkd-up already started it. The flush is
+# per-target (NOT on runtime restart), so the `sealed_state` snapshot survives the ark_e2e restart.
+redis-up:
+	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d cosigner-redis
+	@echo "Waiting for cosigner-redis..."
+	@until docker exec mpc_cosigner_redis redis-cli -a testpass ping 2>/dev/null | grep -q PONG; do sleep 1; done
+	@docker exec mpc_cosigner_redis redis-cli -a testpass FLUSHALL >/dev/null
+	@echo "cosigner-redis ready (flushed)"
 
 arkd-down:
 	@echo "Stopping arkd services..."

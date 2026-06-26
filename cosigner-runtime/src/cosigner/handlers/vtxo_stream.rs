@@ -93,7 +93,6 @@ pub fn apply_stream_update(
     let owner_pk = get_user_xonly_pubkey(
         state,
         shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
         user_id_hex,
     )?;
     let network = match ark::client::parse_network(&info.network) {

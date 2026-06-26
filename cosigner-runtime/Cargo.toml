@@ -8,9 +8,7 @@ name = "cosigner-runtime"
 path = "src/main.rs"
 
 [features]
-default = ["sled-backend"]
-sled-backend = ["sled"]
-enclave-backend = []
+default = []
 
 [dependencies]
 # Sandboxes the untrusted contract WASM (component-model, no WASI). The cosigner itself is native.
@@ -43,8 +41,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 
-# Persistence
-sled = { version = "0.34", optional = true }
+# Persistence — single RESP (Redis) KV backend. In the enclave the password is the runtime token;
+# the server only checks the password (username ignored → default user).
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
 
 # Bitcoin
 bitcoin = { version = "0.32", features = ["serde"] }

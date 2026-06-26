@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, contract, cosigner, fcm_client, onboarding, persistence, rest_api, shared,
+    bitcoin, config, contract, cosigner, fcm_client, onboarding, resp_store, rest_api, shared,
     telemetry, vtxo_stream,
 };
 
@@ -47,33 +47,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    // Persistence backend.
-    let (persistence, secret_store): (
-        Arc<dyn persistence::KvStore>,
-        Arc<dyn persistence::SecretStore>,
-    ) = match cfg.persistence_backend.as_str() {
-        #[cfg(feature = "enclave-backend")]
-        "enclave" => {
-            tracing::info!("Persistence: enclave supervisor at {}", cfg.supervisor_url);
-            let store = Arc::new(persistence::EnclaveStore::new(
-                cfg.supervisor_url.clone(),
-                cfg.enclave_mgmt_token.clone(),
-            ));
-            (store.clone(), store)
-        }
-        #[cfg(feature = "sled-backend")]
-        _ => {
-            let data_dir = std::path::Path::new(&cfg.data_dir);
-            std::fs::create_dir_all(data_dir)?;
-            tracing::info!("Persistence: Sled at {}", cfg.data_dir);
-            let store = Arc::new(persistence::SledStore::open(data_dir)?);
-            (store.clone(), store)
-        }
-        #[cfg(not(feature = "sled-backend"))]
-        other => {
-            panic!("Unknown persistence backend: {other}");
-        }
-    };
+    // Persistence: the single RESP (Redis) KV backend. In the enclave the AUTH password is the
+    // runtime token; the server only checks the password (username ignored → default user).
+    tracing::info!("Persistence: RESP/Redis KV backend");
+    let persistence: Arc<dyn resp_store::KvStore> =
+        Arc::new(resp_store::RespStore::connect(&cfg.redis_url).await?);
 
     // Bitcoin services.
     let electrum_client = bitcoin::ElectrumClient::new(&cfg.electrum_url, cfg.electrum_port);
@@ -150,7 +128,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut shared = shared::SharedServices::new(
         persistence,
-        secret_store,
         bitcoin_history,
         asp_client,
         service_url,

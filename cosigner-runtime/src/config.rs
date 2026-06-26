@@ -6,7 +6,10 @@ use std::env;
 pub struct ServerConfig {
     pub electrum_url: String,
     pub electrum_port: u16,
-    pub data_dir: String,
+    /// RESP (Redis) connection URL for the single KV backend, e.g.
+    /// `redis://:<password>@host:6379` (`rediss://…` for TLS). The server only checks the password
+    /// (username ignored → `default` user). In the enclave the password is the runtime token.
+    pub redis_url: String,
     /// ASP (Ark Service Provider) gRPC URL, e.g. "http://localhost:7070".
     /// When empty, Ark RPCs return UNAVAILABLE.
     pub asp_url: String,
@@ -17,12 +20,6 @@ pub struct ServerConfig {
     /// Bitcoin network name (e.g. "regtest", "signet", "testnet", "mainnet").
     /// Used for logging; the authoritative network comes from the ASP's GetArkInfo.
     pub bitcoin_network: String,
-    /// Persistence backend: "sled" (local) or "enclave" (HTTP KV store).
-    pub persistence_backend: String,
-    /// Enclave supervisor base URL (only used when persistence_backend = "enclave").
-    pub supervisor_url: String,
-    /// Enclave management token for supervisor API auth.
-    pub enclave_mgmt_token: String,
     /// Auto-settle threshold: submit a stored delegate intent when
     /// `now > earliest_expires_at - this`. Default 30 minutes.
     pub auto_settle_safety_margin_secs: i64,
@@ -58,18 +55,10 @@ impl ServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(50001),
-            data_dir: env::var("DATA_DIR").unwrap_or_else(|_| {
-                let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                format!("{}/.mpc_wallet/server", home)
-            }),
+            redis_url: redis_url_from_env(),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
             service_url: env::var("SERVICE_URL").unwrap_or_default(),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
-            persistence_backend: env::var("PERSISTENCE_BACKEND")
-                .unwrap_or_else(|_| "sled".to_string()),
-            supervisor_url: env::var("SUPERVISOR_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
-            enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
             auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -85,5 +74,32 @@ impl ServerConfig {
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800),
         }
+    }
+}
+
+/// Build the RESP (Redis) URL. `REDIS_URL` wins; otherwise compose
+/// `redis[s]://:<password>@<host>:<port>` (default user — the server only checks the password) with
+/// the password being `REDIS_PASSWORD`, else the enclave's `ENCLAVE_RUNTIME_TOKEN`. The password is
+/// hex (enclave token) or test-controlled, so it needs no URL-encoding.
+fn redis_url_from_env() -> String {
+    if let Ok(url) = env::var("REDIS_URL") {
+        if !url.is_empty() {
+            return url;
+        }
+    }
+    let host = env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
+    let scheme = if matches!(env::var("REDIS_TLS").as_deref(), Ok("1") | Ok("true")) {
+        "rediss"
+    } else {
+        "redis"
+    };
+    let password = env::var("REDIS_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or_else(|| env::var("ENCLAVE_RUNTIME_TOKEN").ok().filter(|s| !s.is_empty()));
+    match password {
+        Some(pw) => format!("{scheme}://:{pw}@{host}:{port}"),
+        None => format!("{scheme}://{host}:{port}"),
     }
 }
