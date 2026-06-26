@@ -18,7 +18,7 @@ Future<Process> startRuntime(int port, Directory dataDir) async {
   final env = {'BITCOIN_NETWORK': 'regtest', 'HOME': dataDir.path};
   final proc = await Process.start(
     '../cosigner-runtime/target/release/cosigner-runtime',
-    ['--wasm', '../cosigner/target/wasm32-wasip2/release/cosigner.wasm', '--port', port.toString()],
+    ['--port', port.toString()],
     environment: env,
   );
   void watch(Stream<List<int>> s) {

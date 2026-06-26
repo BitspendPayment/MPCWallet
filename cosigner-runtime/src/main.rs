@@ -13,11 +13,6 @@ use cosigner_runtime::{
     about = "MPC Wallet Server with per-user WASM crypto isolation"
 )]
 struct Args {
-    /// Path to the cosigner WASM component.
-    /// Falls back to COSIGNER_WASM_PATH env var, then the local build path.
-    #[arg(long)]
-    wasm: Option<String>,
-
     /// REST/JSON listen port (HTTP/1.1). Defaults to PORT env var or 7074.
     #[arg(long)]
     port: Option<u16>,
@@ -181,10 +176,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let shared = Arc::new(shared);
 
-    // The cosigner-guest WASM component (the only one): CLI > env > config default.
-    let guest_wasm = args.wasm.unwrap_or(cfg.cosigner_guest_wasm_path.clone());
-    tracing::info!("Loading cosigner-guest WASM component from: {}", guest_wasm);
-    let registry = cosigner::CosignerRegistry::new(&guest_wasm, shared.clone())?;
+    // The cosigner runs natively in-process (no WASM guest); only the contract is sandboxed WASM.
+    let registry = cosigner::CosignerRegistry::new(shared.clone())?;
 
     // Populate cross-user secondary indices from persistence so restore /
     // VTXO-stream lookups don't need to wake any actor.

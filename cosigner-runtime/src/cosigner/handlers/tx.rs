@@ -143,7 +143,7 @@ pub fn fetch_recent_transactions(
 
 fn build_tweaked_map(
     state: &mut CosignerState,
-) -> Result<(crate::policy::PolicyState, HashMap<String, String>), Status> {
+) -> Result<(crate::cosigner::state::PolicyState, HashMap<String, String>), Status> {
     let ps = state
         .policy_state
         .clone()

@@ -17,8 +17,6 @@ Future<Process> startRuntime(int port, Directory dataDir) async {
   final proc = await Process.start(
     '../cosigner-runtime/target/release/cosigner-runtime',
     [
-      '--wasm',
-      '../cosigner/target/wasm32-wasip2/release/cosigner.wasm',
       '--port',
       '$port',
     ],

@@ -12,7 +12,7 @@ use crate::cosigner::types::ArkTxEntry;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
 
-use cosigner_proto::{SendVtxoStep1Wire, VtxoInputWire};
+use crate::cosigner::wire::{SendVtxoStep1Wire, VtxoInputWire};
 
 use super::helpers::{
     auth_check, delete_user_delegate, now_secs, save_user_ark_history, save_user_vtxos,

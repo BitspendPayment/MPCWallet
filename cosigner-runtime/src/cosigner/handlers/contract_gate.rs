@@ -83,7 +83,7 @@ fn decode_xonly(hex_str: &str) -> Result<[u8; 32], Status> {
 /// scriptPubKey), return that contract's spk hex — the key into the contract policies.
 /// `sign_step1` uses it to select the V′ key and mark the signing session.
 pub fn detect_contract_spend(
-    policy_state: &crate::policy::PolicyState,
+    policy_state: &crate::cosigner::state::PolicyState,
     full_transaction: &[u8],
 ) -> Option<String> {
     let psbt = bitcoin::Psbt::deserialize(full_transaction).ok()?;

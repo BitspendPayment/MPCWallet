@@ -1,5 +1,0 @@
-# The cosigner is a WASI Component Model crate. Building for wasm32-wasip2 lets
-# rustc emit the component directly via wasm-component-ld — no `cargo component`
-# step. Setting the target here also drives rust-analyzer's analysis of this crate.
-[build]
-target = "wasm32-wasip2"

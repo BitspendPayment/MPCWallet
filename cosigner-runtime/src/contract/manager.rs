@@ -67,10 +67,31 @@ impl ContractManager {
         let server_pk = to32(&req.server_pk, "server_pk")?;
         let owner_pk = to32(&req.owner_pk, "owner_pk")?;
         let exit_delay = req.exit_delay;
+        let service_vk_hex = hex::encode(&req.service_vk);
 
         let resp = handler::contract_create(&self.shared, req, refresh)?;
         let spk_hex = hex::encode(&resp.contract_script_pubkey);
-        let pairing = crate::policy::ContractPairing {
+
+        // Plan A: add the gate's ContractPolicy to the WALLET actor's sealed state (no `policies`
+        // tree). The actor updates its `contracts` projection + re-seals; `detect_contract_spend`
+        // then sees it via the host `policy_state` loaded back from the actor.
+        let contract_policy = crate::cosigner::state::ContractPolicy {
+            contract_id,
+            wallet_vk: user_id.to_string(),
+            exit_delay,
+            owner_pk,
+            authorized_service_vks: vec![service_vk_hex],
+        };
+        let contract_policy_json = serde_json::to_string(&contract_policy)
+            .map_err(|e| Status::internal(format!("serialize contract policy: {e}")))?;
+        self.registry
+            .dispatch(user_id, |reply| CosignerCommand::AddContract {
+                spk_hex: spk_hex.clone(),
+                contract_policy_json,
+                reply,
+            })
+            .await?;
+        let pairing = crate::cosigner::state::ContractPairing {
             evtxo_spk_hex: spk_hex.clone(),
             contract_id,
             server_pk,

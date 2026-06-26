@@ -11,7 +11,6 @@
 //! verify against during the ceremony. Integrity comes from FROST itself plus
 //! TTL-bounded session state (`OnboardingManager::sweep_stale`).
 
-use std::collections::HashMap;
 use std::time::Instant;
 
 use rand::rngs::OsRng;
@@ -25,8 +24,6 @@ use threshold::scalar::scalar_to_bytes;
 
 use super::ceremony::{self, drain_pairs_with_err, Reply};
 use crate::cosigner::handlers::parsers;
-use crate::policy::store::persist_policy;
-use crate::policy::{NormalPolicy, PolicyState};
 use crate::shared::SharedServices;
 use crate::wallet_proto::{
     DkgStep1Request, DkgStep1Response, DkgStep2Request, DkgStep2Response, DkgStep3Request,
@@ -285,22 +282,10 @@ pub fn onboarding_step3(
 
         let user_signing_identifier_hex = Some(wallet_identifier_hex);
         let server_dkg_secret_hex = Some(sess.server_internal_secret_hex.clone());
-        // Persist only the PUBLIC projection — NO plaintext FROST key in `policies`. The guest
-        // seal (sealed by the mandatory seed in the manager) owns the secret share.
-        let public_state = PolicyState {
-            cosigner_id: group_key.clone(),
-            user_signing_identifier_hex: user_signing_identifier_hex.clone(),
-            server_dkg_secret_hex: server_dkg_secret_hex.clone(),
-            normal_policy: NormalPolicy {
-                id: "normal policies".to_string(),
-                key_package_json: String::new(),
-                public_key_package_json: pkp_json.clone(),
-            },
-            contracts: HashMap::new(),
-            contract_pairing: None,
-        };
-        persist_policy(shared, &group_key, &public_state)?;
-        // Stash the in-memory key material so the manager seeds it into the guest (no read-back).
+        // Plan A: nothing is persisted to a host `policies` tree. The actor is seeded from
+        // `seed_material` (below, via SeedPolicy) and seals its own state; the host `policy_state`
+        // projection is later loaded back FROM the actor on spawn (`ensure_actor`).
+        // Stash the in-memory key material so the manager seeds it into the actor (no read-back).
         sess.seed_material = Some(crate::onboarding::session::SeedMaterial {
             group_key: group_key.clone(),
             key_package_json: kp_json,

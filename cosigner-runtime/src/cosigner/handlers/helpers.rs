@@ -8,7 +8,6 @@ use tonic::Status;
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
 use crate::cosigner::state::CosignerState;
 use crate::persistence::{KvStore, SecretStore};
-use crate::policy::PolicyState;
 
 /// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature against the URL
 /// `user_id` (owner pubkey) host-side via the `threshold` crate.
@@ -102,66 +101,23 @@ pub fn auth_check_group(
     )
 }
 
-/// Load policy state from persistence into the user instance if not present.
-///
-/// Looks up under the request's `user_id_hex` first (the FROST verifying-share
-/// for the standard post-DKG path). On miss, falls back through the
-/// `policy_owner_idx` forward index — written at DKG step3 — which maps the
-/// wallet's owner pubkey (the user_id used during DKG) to the canonical
-/// verifying-share key. This lets the actor for the owner pubkey find its
-/// policy on respawn, and lets clients use either identity in the URL.
+/// Ensure the host `policy_state` projection is present. Plan A: the native `CosignerActor`'s seal
+/// is the single source — `policy_state` is populated from the actor by `ensure_actor` (called per
+/// command before dispatch); there is no `policies` sled tree. So this is now just a presence check.
+/// (`persistence`/`secret_store` kept for call-site signature symmetry.)
 pub fn ensure_policy_loaded(
     state: &mut CosignerState,
-    persistence: &dyn KvStore,
-    secret_store: &dyn SecretStore,
+    _persistence: &dyn KvStore,
+    _secret_store: &dyn SecretStore,
     user_id_hex: &str,
 ) -> Result<(), Status> {
     if state.policy_state.is_some() {
         return Ok(());
     }
-    if try_load_policy(state, persistence, secret_store, user_id_hex)? {
-        return Ok(());
-    }
-    if let Ok(Some(canonical)) = persistence.get("policy_owner_idx", user_id_hex) {
-        if try_load_policy(state, persistence, secret_store, &canonical)? {
-            tracing::info!("[{user_id_hex}] Resolved via policy_owner_idx → {canonical}");
-            return Ok(());
-        }
-    }
     Err(Status::not_found(format!(
-        "No policy state found for user {user_id_hex}"
+        "No policy state for {user_id_hex} (actor not loaded — onboarding incomplete?)"
     )))
 }
-
-/// Try to load a policy under the given key. Returns Ok(true) on hit,
-/// Ok(false) on miss; bubble parse errors as warnings, treated as miss.
-fn try_load_policy(
-    state: &mut CosignerState,
-    persistence: &dyn KvStore,
-    // Plan A Phase 2: no longer reads `dkg-secret` (kept for signature symmetry with the loader API).
-    _secret_store: &dyn SecretStore,
-    key: &str,
-) -> Result<bool, Status> {
-    if let Ok(Some(json_str)) = persistence.get("policies", key) {
-        match serde_json::from_str::<PolicyState>(&json_str) {
-            Ok(ps) => {
-                // Plan A Phase 2: the `dkg-secret` is NOT loaded from the host SecretStore anymore —
-                // `server_dkg_secret_hex` stays `None` host-side; the guest holds it in its seal and
-                // restores it on spawn. (The old `InstallPolicy` plaintext fallback is superseded by
-                // restore-from-seal.)
-                state.policy_state = Some(ps);
-                tracing::info!("[{key}] Loaded policy from persistence");
-                return Ok(true);
-            }
-            Err(e) => {
-                tracing::warn!("[{key}] Error parsing policy: {e}");
-            }
-        }
-    }
-    Ok(false)
-}
-
-pub use crate::policy::store::persist_policy;
 
 /// Fetch the user's group x-only pubkey (64 hex chars) for Ark address derivation.
 /// The compressed key from the policy is 33 bytes (66 hex); strip the parity byte.

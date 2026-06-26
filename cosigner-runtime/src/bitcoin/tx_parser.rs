@@ -3,7 +3,7 @@ use bitcoin::hashes::Hash as _;
 use bitcoin::Transaction;
 
 use crate::contract::{EvalContext, Outpoint, PrevoutInfo, Transaction as ContractTx, Txin, Txout};
-use crate::policy::Utxo;
+use crate::cosigner::state::Utxo;
 
 /// Parse a transaction from raw hex bytes and calculate the spent amount.
 ///

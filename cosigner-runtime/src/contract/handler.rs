@@ -12,8 +12,6 @@ use tonic::Status;
 
 use crate::contract;
 use crate::cosigner::handlers::{contract_gate, parsers};
-use crate::policy::store::persist_policy;
-use crate::policy::{ContractPolicy, PolicyState};
 use crate::shared::SharedServices;
 use crate::wallet_proto::{ContractContext, ContractCreateRequest, ContractCreateResponse};
 
@@ -56,12 +54,11 @@ pub fn contract_create(
         )
         .map_err(|e| Status::internal(format!("store contract wasm: {e}")))?;
 
-    // --- the wallet's existing key V is the cooperative-leaf key (read only its PUBLIC x-only;
-    //     the refresh itself ran inside the guest, so the host never touches V's secret) ---
-    let policy = load_policy(shared, &user_id_hex)?;
-    let v_coop_xonly = xonly_from_vk(&parsers::extract_verifying_key(
-        &policy.normal_policy.public_key_package_json,
-    )?);
+    // --- the wallet's existing key V is the cooperative-leaf key. The group key (cosigner_id) IS the
+    //     compressed V; resolve it from the request id via `policy_owner_idx` — no `policies` read. ---
+    let group_key =
+        crate::cosigner::handlers::helpers::group_key_of(shared.persistence.as_ref(), &user_id_hex);
+    let v_coop_xonly = xonly_from_vk(&group_key);
 
     if req.owner_pk.len() != 32 {
         return Err(Status::invalid_argument("owner_pk must be a 32-byte x-only key"));
@@ -87,22 +84,11 @@ pub fn contract_create(
         return Err(Status::invalid_argument("service_vk must be 33 bytes"));
     }
     let service_vk = req.service_vk.clone();
-    let service_vk_hex = hex::encode(&service_vk);
 
-    // --- persist ContractPolicy: PUBLIC gate metadata + the authorized-service allowlist
-    //     (no counter-share — the cosigner's pairing key lives only in the pairing actor's guest) ---
-    let mut owner_pk = [0u8; 32];
-    owner_pk.copy_from_slice(&req.owner_pk);
-    let contract_policy = ContractPolicy {
-        contract_id,
-        wallet_vk: user_id_hex.clone(),
-        exit_delay: req.exit_delay,
-        owner_pk,
-        authorized_service_vks: vec![service_vk_hex],
-    };
-    let mut policy = load_policy(shared, &user_id_hex)?;
-    policy.contracts.insert(spk_hex.clone(), contract_policy);
-    persist_policy(shared, &user_id_hex, &policy)?;
+    // --- the ContractPolicy (gate metadata + authorized-service allowlist) is added to the wallet
+    //     actor's SEALED state by `manager::create_contract` (CosignerCommand::AddContract) — the
+    //     actor is the single source of the projection; nothing goes to a host `policies` tree. ---
+    let _ = &spk_hex;
 
     // --- the {service, cosigner} pairing ACTOR (Tier 2 service-driven co-sign) ---
     // A SEPARATE actor keyed by the eVTXO spk. Plan A 1C: the host persists NOTHING for it — its
@@ -119,7 +105,7 @@ pub fn contract_create(
         server_pk: req.server_pk.clone(),
         public_key_package_json: refresh.pairing_public_key_package_json,
         service_vk,
-        cosigner_group_key: hex::decode(&policy.cosigner_id).unwrap_or_default(),
+        cosigner_group_key: hex::decode(&group_key).unwrap_or_default(),
     };
 
     tracing::info!("[{user_id_hex}] ContractCreate complete (V reused; service pairing refreshed in-guest)");
@@ -130,30 +116,6 @@ pub fn contract_create(
     })
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-fn load_policy(shared: &SharedServices, user_id_hex: &str) -> Result<PolicyState, Status> {
-    let json = match shared.persistence.get("policies", user_id_hex) {
-        Ok(Some(j)) => j,
-        _ => {
-            let owner = shared
-                .persistence
-                .get("policy_owner_idx", user_id_hex)
-                .ok()
-                .flatten()
-                .ok_or_else(|| Status::not_found("no policy for user"))?;
-            shared
-                .persistence
-                .get("policies", &owner)
-                .ok()
-                .flatten()
-                .ok_or_else(|| Status::not_found("no policy for user"))?
-        }
-    };
-    serde_json::from_str(&json).map_err(|e| Status::internal(format!("parse policy: {e}")))
-}
 
 fn xonly_from_vk(vk_hex: &str) -> String {
     if vk_hex.len() == 66 {

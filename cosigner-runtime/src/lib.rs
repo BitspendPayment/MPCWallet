@@ -9,7 +9,6 @@ pub mod cosigner;
 pub mod fcm_client;
 pub mod onboarding;
 pub mod persistence;
-pub mod policy;
 pub mod rest_api;
 pub mod shared;
 pub mod telemetry;

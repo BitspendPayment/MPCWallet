@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use super::electrum::ElectrumClient;
 use super::tx_parser;
-use crate::policy::PolicyState;
+use crate::cosigner::state::PolicyState;
 
 /// Bitcoin history service for UTXO fetching and transaction history.
 /// Mirrors `BitcoinHistoryService` from `server/lib/bitcoin_service.dart`.

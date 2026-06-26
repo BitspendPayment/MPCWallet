@@ -193,25 +193,34 @@ host only does I/O + stores an opaque sealed snapshot. (Full plan:
      wallet offline), plus host Rust tests (`sign_flow`/`seed_policy`/`registry_guest`) — all GREEN.
 
    **PHASE 2 (MuSig2 delegate / `dkg-secret`) — IN PROGRESS.**
-   - **Boarding settle MOVED INTO THE GUEST — DONE + e2e-verified 2026-06-26** (`evtxo_arkd` GREEN:
-     "3. Settled. Alice balance=1000000" → eVTXO mint + arkd co-sign). This was the hard part: the
-     boarding `settle()` was the ONLY *live* host path still MuSig2-tree-signing with a plaintext
-     `dkg-secret`. Design (lower-risk than a full in-guest drive, which `wstd` can't stream-persist
-     across the commitment-FROST pause): the HOST keeps the ASP stream + batch state machine + both
-     FROST rounds; only the secret tree-signing goes to the guest.
-     - `crates/ark` `batch.rs`: new standalone `BoardingTreeSigner` (guest-usable under `signing`;
-       wire-friendly `gen_nonces`/`sign`, holds the secret `nonce_kps` between the two). `SettleSession`
-       refactored: `new_boarding` takes the cosigner PUBLIC key (no secret); `drive()` returns new
-       `SettleAction::NeedTreeNonces`/`NeedTreeSign`; added `submit_tree_nonces`/`submit_tree_signatures`.
-       The `cosigner_kp`/`nonce_kps` fields are GONE from `SettleSession`.
-     - proto: `GuestCommand::{GetArkCosignerPubkey, BoardingGenNonces, BoardingTreeSign}` +
-       `TreeTxChunkWire` + responses `{ArkCosignerPubkey, BoardingNonces, BoardingTreeSigs}`.
-     - guest (`cosigner/src/state.rs`): the three handlers (sync; pure crypto, no ASP I/O) + a
-       `boarding_signer` field holding the in-flight `BoardingTreeSigner`.
-     - host (`registry.rs`): `route_settle_boarding` (scans boarding UTXOs host-side, gets the cosigner
-       pubkey from the guest, drives the session, dispatches `NeedTreeNonces`/`NeedTreeSign` to the
-       guest while holding the asp guard). New guest-routed `Settle` dispatch arm (asp_url set). The
-       legacy `settle()` + `SettleOutcome` are DELETED; the no-ASP fallback arm errors.
+   - **Boarding settle FULLY GUEST-DRIVEN — DONE + e2e-verified 2026-06-26** (`evtxo_arkd` GREEN with the
+     ORIGINAL `ARKD_SESSION_DURATION=10`: "3. Settled. Alice balance=1000000" → eVTXO mint + arkd co-sign).
+     The GUEST now owns the ASP event stream + MuSig2 tree-signing + BOTH FROST rounds; the host only scans
+     the boarding UTXO (public chain) and relays the two client FROST rounds. This supersedes the earlier
+     host-drives-the-stream design — the full in-guest drive WAS achievable.
+     - **Root-cause win (the thing that was "blocked"):** the blocker was NOT the wstd reactor. The guest
+       drives the stream + unary calls fine (the `drive()` poll-pump from the delegate work handles unary
+       while a stream is active). The real bug: holding an OPEN `wasi:io` stream resource in `GuestState`
+       across the `block_on` teardown at the commitment-FROST pause STALLS the guest call from completing,
+       so the host never delivered Step2's response and the client hung. Fix: **drop the stream at the
+       pause** and have Step3 finalize OPTIMISTICALLY (`SettleSession::finalize_optimistic` — commitment
+       txid = commitment-PSBT txid, VTXO = first tree leaf; no stream read needed past the pause).
+     - `crates/ark` `batch.rs`: `SettleSession` got guest-driveable step methods made `pub`
+       (`insert_intent_signatures`, `register_payload`, `on_batch_started`, `on_tree_signing_started`,
+       `on_tree_nonces`, `handle_tree_tx`, `handle_batch_finalization`, `insert_commitment_signatures`,
+       `batch_id`, `finalize_optimistic`). `BoardingTreeSigner` (standalone, `signing`-usable) unchanged.
+     - proto: `GuestCommand::{BoardingSettleStep1, BoardingSettleStep2, BoardingSettleStep3}` + responses
+       `{BoardingSettleSighashes, BoardingSettleSubmitted}`. (The host-drive `GetArkCosignerPubkey/
+       BoardingGenNonces/BoardingTreeSign` commands still exist but are now unused by the live path.)
+     - guest (`cosigner/src/lib.rs`): `boarding_settle_step1` (sync: build session, return intent sighashes),
+       `boarding_settle_step2` (async: insert intent sigs → RegisterIntent → open stream → `drive_boarding`
+       to BatchFinalization → return commitment sighashes, DROP stream), `boarding_settle_step3` (async:
+       insert commitment sigs → SubmitSignedForfeitTxs → `finalize_optimistic`). `BoardingSettleInFlight`
+       in `state.rs` holds the session + signer + boarding amount across the pause.
+     - host (`registry.rs`): `route_settle_boarding` is now a THIN RELAY — Phase 1 scans the boarding UTXO +
+       dispatches Step1; Phase 2 dispatches Step2; Phase 3 dispatches Step3 + records the VTXO. Progress is
+       a 3-state marker `CosignerState.guest_boarding = (step, amount_sats, exit_delay)`. The host no longer
+       touches the ASP for the settle drive (only for `GetInfo`).
    - **dkg-secret host persistence REMOVED — DONE + e2e-verified 2026-06-26** (`evtxo_arkd` GREEN
      after each step). The host no longer writes or reads a plaintext `dkg-secret`:
      - Deleted the DEAD legacy `settle_delegate`/`send_vtxo`/`redeem_vtxo` (guest-routed; `ark_send:788`
@@ -222,17 +231,21 @@ host only does I/O + stores an opaque sealed snapshot. (Full plan:
      - The only remaining `get_secret("dkg-secret.*")` is the delegate REHYDRATION (`registry:169`); it now
        returns `None` (nothing written) and drops the row — no plaintext read. (Left in place; the whole
        legacy host-delegate subsystem is dead — see the gap below — and removing it is a separate cleanup.)
-   - **PRE-EXISTING GAP surfaced (NOT a Plan A regression — `ark.rs`/`has_active_delegate` git-unchanged):**
-     auto-settle-after-restart only ever worked via the LEGACY host delegate (rehydration + `delegate_sessions`
-     sled row + `dkg-secret`). The GUEST `SettleDelegate` store_only path (the one the e2e actually uses, ASP
-     set) NEVER wrote a `delegate_sessions` row or set `state.delegate_session`, and `guest_delegate_threshold`
-     is in-memory only — so `has_active_delegate` (= `state.delegate_session.is_some()`) reports false and the
-     fire-trigger is lost on restart. The `ark_e2e` "survives cosigner-runtime restart" test has thus been RED
-     since the guest-path migration (fails pre-restart on the `has_active_delegate` assertion). FOLLOW-UP to
-     complete Phase 2: wire guest-path restart durability — persist `guest_delegate_threshold` (+ a secret-free
-     `delegate_sessions` marker so `main.rs:232` re-spawns the actor), restore it on spawn, point
-     `has_active_delegate` at the guest delegate, and retire the dead legacy host-delegate subsystem
-     (`registry` rehydration + `auto_settle.rs` + `save/load_user_delegate`).
+   - **AUTO-SETTLE-AFTER-RESTART — FIXED + e2e-verified 2026-06-26** (`ark_e2e` "survives cosigner-runtime
+     restart" GREEN; "auto-settle drives stored delegate intent" GREEN; `evtxo_arkd` GREEN). Two parts:
+     - **Guest-path restart durability:** `route_settle_delegate` store_only writes a SECRET-FREE marker to a
+       new `guest_delegate_thresholds` sled tree (`helpers::save/load/delete_guest_delegate_threshold`); the
+       spawn rehydration in `registry.rs` restores `guest_delegate_threshold` from it (replacing the dead
+       dkg-secret rehydration); the `main.rs` auto-settle tick scans that tree to re-spawn+tick actors;
+       `has_active_delegate` = `guest_delegate_threshold.is_some() || state.delegate_session.is_some()`.
+     - **The guest-internal delegate settle was HANGING** on its unary gRPC calls (`ConfirmRegistration` /
+       `SubmitTree*`) while the event stream was active — a wstd/wasi-http reactor bug: the host h2 hook's
+       response future resolves host-side but doesn't wake the guest reactor. Fixed with a `drive(fut)`
+       poll-pump (poll + `wstd::task::sleep` yield-to-host + re-poll) wrapping the UNARY calls in
+       `cosigner/src/grpc.rs` (NOT the stream's `body.frame()` — DATA frames wake fine). Now the guest drives
+       the WHOLE delegate settle itself (stream + all unary). See memory `guest_grpc_reactor_pump`.
+     - (The flushed-`eprintln` "fix" during debugging was a red herring — stderr wasi calls accidentally
+       pumped the reactor. The `drive()` helper is the real fix.)
 
 5. **Cleanup (done):** `ContractSession`/`session.rs` + the contract eviction loop are removed and
    `ceremony` is now `onboarding/ceremony.rs`. The stale `AssembleContractShare` `contract_group_id`

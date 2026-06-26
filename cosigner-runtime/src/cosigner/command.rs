@@ -116,7 +116,16 @@ pub enum CosignerCommand {
         server_dkg_secret_hex: Option<String>,
         /// For a `{service, cosigner}` pairing actor: the eVTXO conditioning params, seeded into
         /// the guest so it rebuilds + binds the cooperative-leaf sighash itself (Plan A 1C).
-        contract_pairing: Option<crate::policy::ContractPairing>,
+        contract_pairing: Option<crate::cosigner::state::ContractPairing>,
+        reply: Reply<()>,
+    },
+
+    /// Add a gate `ContractPolicy` (JSON) to the WALLET actor's sealed `contracts` projection +
+    /// re-seal (Plan A: the actor is the single source — no host `policies` tree). Dispatched by
+    /// `ContractManager::create_contract`.
+    AddContract {
+        spk_hex: String,
+        contract_policy_json: String,
         reply: Reply<()>,
     },
 

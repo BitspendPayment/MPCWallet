@@ -13,14 +13,8 @@ sled-backend = ["sled"]
 enclave-backend = []
 
 [dependencies]
-wasmtime = { version = "45", features = ["component-model", "async"] }
-wasmtime-wasi = "45"
-wasmtime-wasi-http = "45"
-cosigner-proto = { path = "../cosigner-proto" }
-# Custom h2 outgoing hook for the guest's wasi:http (the guest speaks gRPC over it).
-hyper = { version = "1", features = ["client", "server", "http2"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
+# Sandboxes the untrusted contract WASM (component-model, no WASI). The cosigner itself is native.
+wasmtime = { version = "45", features = ["component-model"] }
 http = "1"
 tonic = "0.12"
 tonic-web = "0.12"
@@ -70,6 +64,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 
 # Crypto
 sha2 = "0.10"
+# Zeroize secret key material on drop (multi-tenant: keys share one address space natively).
+zeroize = "1"
 threshold = { path = "../crates/threshold", features = ["std"] }
 parking_lot = "0.12"
 k256 = { version = "0.13", features = ["arithmetic"] }
