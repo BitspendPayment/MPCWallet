@@ -30,9 +30,9 @@ use super::handle::{CosignerHandle, OwnedHandle};
 use super::handlers;
 use super::state::{CosignerState, DeviceToken};
 use crate::wallet_proto::{
-    send_vtxo_response, settle_delegate_response, sign_step1_response, SendVtxoRequest,
-    SendVtxoResponse, SettleDelegateRequest, SettleDelegateResponse, SignStep1Request,
-    SignStep1Response, SignStep2Request, SignStep2Response,
+    send_vtxo_response, settle_delegate_response, settle_response, sign_step1_response,
+    SendVtxoRequest, SendVtxoResponse, SettleDelegateRequest, SettleDelegateResponse, SettleRequest,
+    SettleResponse, SignStep1Request, SignStep1Response, SignStep2Request, SignStep2Response,
 };
 use cosigner_proto::{
     ApplyDelegateSigsWire, ArkTxEntryWire, ContractPairingWire, GenerateDelegateWire, GuestCommand,
@@ -153,60 +153,20 @@ impl CosignerRegistry {
         fresh_state.device_tokens =
             super::handlers::helpers::load_user_device_tokens(persistence, group_key);
 
-        // Rehydrate a persisted delegate intent if one is present. The
-        // sled row doesn't carry the cosigner secret (issue #31) — we look
-        // it up from `SecretStore` here and pass it into `from_persisted`.
-        // On any failure (missing secret, parse error, pubkey mismatch),
-        // delete the sled row so the next actor spawn doesn't keep
-        // retrying — the client will re-delegate on its next refresh.
-        let mut delegate_loaded = false;
-        if let Some(persisted_record) =
-            super::handlers::helpers::load_user_delegate(persistence, group_key)
-        {
-            match self
-                .shared
-                .secret_store
-                .get_secret(&format!("dkg-secret.{group_key}"))
-            {
-                Ok(Some(dkg_secret_hex)) => {
-                    match ark::client::batch::DelegateSettleSession::from_persisted(
-                        &persisted_record.session,
-                        &dkg_secret_hex,
-                    ) {
-                        Ok(session) => {
-                            fresh_state.delegate_session =
-                                Some(crate::cosigner::state::DelegateRecord {
-                                    session,
-                                    covered_outpoints: persisted_record.covered_outpoints.clone(),
-                                    earliest_expires_at: persisted_record.earliest_expires_at,
-                                    // Rehydrated records carry signed
-                                    // sighashes already — the bypass must
-                                    // not fire on unrelated SignStep1.
-                                    awaiting_signatures: false,
-                                });
-                            delegate_loaded = true;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Rehydrate delegate for {group_key} failed: {e}; dropping sled row"
-                            );
-                            super::handlers::helpers::delete_user_delegate(persistence, group_key);
-                        }
-                    }
-                }
-                Ok(None) => {
-                    tracing::warn!(
-                        "Rehydrate delegate for {group_key}: SecretStore missing dkg-secret entry; dropping sled row"
-                    );
-                    super::handlers::helpers::delete_user_delegate(persistence, group_key);
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "Rehydrate delegate for {group_key}: SecretStore error {e}; leaving sled row in place"
-                    );
-                }
+        // Plan A Phase 2: restore the guest-delegate auto-settle threshold from its SECRET-FREE
+        // marker, so a stored delegate survives a runtime restart. The delegate itself lives in the
+        // guest's sealed snapshot (restored on first guest spawn) — the host keeps no key. (This
+        // replaces the legacy host-delegate rehydration that read `dkg-secret` from the SecretStore.)
+        let delegate_loaded = match super::handlers::helpers::load_guest_delegate_threshold(
+            persistence,
+            group_key,
+        ) {
+            Some(threshold) => {
+                fresh_state.guest_delegate_threshold = Some(threshold);
+                true
             }
-        }
+            None => false,
+        };
 
         if !fresh_state.vtxos.is_empty()
             || !fresh_state.ark_tx_history.is_empty()
@@ -513,6 +473,22 @@ pub async fn run_cosigner(
                 .await;
                 continue;
             }
+            // Boarding settle: the host drives the batch + stream + FROST rounds, but the MuSig2
+            // tree-signing secret stays in the guest (Plan A Phase 2). Falls back to the legacy
+            // host handler (plaintext dkg-secret) only when the ASP URL isn't configured.
+            CosignerCommand::Settle { req, reply } if shared.asp_url.is_some() => {
+                route_settle_boarding(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut guest,
+                    &mut guest_policy_installed,
+                )
+                .await;
+                continue;
+            }
             // Auto-settle tick: if this actor has a guest-routed delegate pending, drive it in
             // the guest. Otherwise fall through to the legacy host tick.
             CosignerCommand::TickAutoSettle
@@ -798,6 +774,7 @@ async fn route_sign_step1(
                     user_signing_identifier_hex: user_identifier_hex,
                     server_dkg_secret_hex,
                     contract_pairing: None,
+                    contracts_json: String::new(),
                 })
                 .await;
             match result {
@@ -991,6 +968,7 @@ async fn ensure_guest_with_policy(
         group_key,
         server_dkg_secret_hex,
         contract_pairing,
+        contracts_json,
     ) = {
         let cosigner_id = state.lock().cosigner_id.clone();
         let mut state_guard = state.lock();
@@ -1011,6 +989,7 @@ async fn ensure_guest_with_policy(
             policy.cosigner_id.clone(),
             policy.server_dkg_secret_hex.clone(),
             policy.contract_pairing.clone(),
+            serde_json::to_string(&policy.contracts).unwrap_or_default(),
         )
     };
 
@@ -1041,6 +1020,7 @@ async fn ensure_guest_with_policy(
                     user_signing_identifier_hex: user_identifier_hex,
                     server_dkg_secret_hex,
                     contract_pairing: contract_pairing.as_ref().map(pairing_to_wire),
+                    contracts_json,
                 })
                 .await;
             match result {
@@ -1311,9 +1291,10 @@ async fn route_settle_delegate(
     }
 
     if req.store_only {
-        // Auto-settle path: persist the durable ReadyToSettle delegate + record the host-side
-        // "when to fire" marker (earliest VTXO expiry − margin) for TickAutoSettle.
-        {
+        // Auto-settle path: the durable ReadyToSettle delegate is sealed in the guest snapshot; the
+        // host records a SECRET-FREE "fire at" threshold (earliest VTXO expiry − margin) — both
+        // in-memory (for TickAutoSettle) and persisted (so it survives a runtime restart).
+        let threshold = {
             let mut st = state.lock();
             let earliest = st
                 .vtxos
@@ -1322,9 +1303,16 @@ async fn route_settle_delegate(
                 .min()
                 .unwrap_or(0);
             let margin = shared.auto_settle_safety_margin_secs;
-            st.guest_delegate_threshold = Some((earliest - margin).max(0));
-        }
+            let threshold = (earliest - margin).max(0);
+            st.guest_delegate_threshold = Some(threshold);
+            threshold
+        };
         persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+        handlers::helpers::save_guest_delegate_threshold(
+            shared.persistence.as_ref(),
+            &group_key,
+            threshold,
+        );
         let _ = reply.send(Ok(SettleDelegateResponse {
             status: settle_delegate_response::Status::Delegated as i32,
             messages_to_sign: vec![],
@@ -1363,9 +1351,294 @@ async fn route_settle_delegate(
     }
 }
 
+/// Boarding settle, fully GUEST-driven (Plan A): the host scans the boarding UTXO (public chain) and
+/// relays the two FROST rounds; the GUEST owns the ASP event stream + MuSig2 tree-signing. Phase 1
+/// (no sigs): scan + `BoardingSettleStep1` → intent sighashes. Phase 2 (intent sigs):
+/// `BoardingSettleStep2` → commitment sighashes (the guest holds the open stream across the pause).
+/// Phase 3 (commitment sigs): `BoardingSettleStep3` → the new VTXO. Progress = `state.guest_boarding`.
+#[allow(clippy::too_many_arguments)]
+async fn route_settle_boarding(
+    req: SettleRequest,
+    reply: oneshot::Sender<Result<SettleResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    guest: &mut Option<GuestInstance>,
+    guest_policy_installed: &mut bool,
+) {
+    let user_id_hex = handlers::parsers::user_id_hex(&req.user_id);
+    {
+        let mut st = state.lock();
+        if let Err(e) = handlers::helpers::auth_check(
+            &mut st,
+            &req.user_id,
+            &req.signature,
+            req.timestamp_ms,
+            crate::auth::message::OP_SETTLE,
+        ) {
+            let _ = reply.send(Err(e));
+            return;
+        }
+    }
+    let Some(asp_url) = shared.asp_url.clone() else {
+        let _ = reply.send(Err(Status::unavailable("ASP not configured")));
+        return;
+    };
+    if let Err(e) =
+        ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
+    {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+
+    let has_signatures = !req.signed_messages.is_empty();
+    let progress = {
+        let mut st = state.lock();
+        let p = st.guest_boarding;
+        if p.is_some() && !has_signatures {
+            st.guest_boarding = None; // poll-without-sigs ⇒ abandon, restart at Phase 1
+            None
+        } else {
+            p
+        }
+    };
+
+    macro_rules! settle_err {
+        ($e:expr) => {{
+            state.lock().guest_boarding = None;
+            let _ = reply.send(Err($e));
+            reseat_guest(guest, guest_policy_installed);
+            return;
+        }};
+    }
+
+    match (progress.map(|(s, _, _)| s), has_signatures) {
+        // ---- Phase 1: scan the boarding UTXO + BoardingSettleStep1 (guest builds the session) ----
+        (None, false) => {
+            let owner_pk_hex = {
+                let mut st = state.lock();
+                match handlers::helpers::get_user_xonly_pubkey(
+                    &mut st,
+                    shared.persistence.as_ref(),
+                    shared.secret_store.as_ref(),
+                    &user_id_hex,
+                ) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                }
+            };
+            let info = {
+                let asp = match handlers::ark_send::require_asp(shared) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                        return;
+                    }
+                };
+                let mut g = asp.lock().await;
+                match g.info.clone() {
+                    Some(i) => i,
+                    None => match g.get_info().await {
+                        Ok(i) => i,
+                        Err(e) => {
+                            let _ = reply.send(Err(Status::internal(format!("ASP get_info: {e}"))));
+                            return;
+                        }
+                    },
+                }
+            };
+            let network = match ark::client::parse_network(&info.network) {
+                Ok(n) => n,
+                Err(e) => {
+                    let _ = reply.send(Err(Status::internal(e)));
+                    return;
+                }
+            };
+            let exit_delay = info.boarding_exit_delay as u32;
+            let boarding_addr = match ark::client::boarding_address(
+                &owner_pk_hex,
+                &info.signer_pubkey,
+                exit_delay,
+                network,
+            ) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = reply.send(Err(Status::internal(format!("boarding_address: {e}"))));
+                    return;
+                }
+            };
+            let addr: bitcoin::Address<bitcoin::address::NetworkUnchecked> =
+                match boarding_addr.parse() {
+                    Ok(a) => a,
+                    Err(e) => {
+                        let _ = reply.send(Err(Status::internal(format!("parse addr: {e}"))));
+                        return;
+                    }
+                };
+            let addr = match addr.require_network(network) {
+                Ok(a) => a,
+                Err(e) => {
+                    let _ = reply.send(Err(Status::internal(format!("network mismatch: {e}"))));
+                    return;
+                }
+            };
+            let script_hex = hex::encode(addr.script_pubkey().as_bytes());
+            let script_hash = match crate::bitcoin::tx_parser::derive_script_hash(&script_hex) {
+                Ok(h) => h,
+                Err(e) => {
+                    let _ = reply.send(Err(Status::internal(format!("script_hash: {e}"))));
+                    return;
+                }
+            };
+            let utxos = {
+                let guard = shared.bitcoin_history.lock().await;
+                match guard.list_unspent_by_script_hash(&script_hash).await {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let _ = reply.send(Err(Status::internal(format!("list_unspent: {e}"))));
+                        return;
+                    }
+                }
+            };
+            if utxos.is_empty() {
+                let _ = reply.send(Err(Status::failed_precondition("no UTXOs at boarding address")));
+                return;
+            }
+            let utxo = &utxos[0];
+            let boarding_amount = utxo.amount_sats as u64;
+            let messages_to_sign = match guest
+                .as_mut()
+                .unwrap()
+                .command(GuestCommand::BoardingSettleStep1 {
+                    owner_pk_hex,
+                    signer_pubkey: info.signer_pubkey.clone(),
+                    forfeit_pubkey: info.forfeit_pubkey.clone(),
+                    boarding_address: boarding_addr,
+                    boarding_txid: utxo.tx_hash.clone(),
+                    boarding_vout: utxo.vout,
+                    boarding_amount_sats: boarding_amount,
+                    exit_delay,
+                    network: info.network.clone(),
+                })
+                .await
+            {
+                Ok(GuestResponse::BoardingSettleSighashes { messages_to_sign }) => messages_to_sign,
+                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
+                other => settle_err!(Status::internal(format!("BoardingSettleStep1: {other:?}"))),
+            };
+            state.lock().guest_boarding = Some((1, boarding_amount, exit_delay));
+            let _ = reply.send(Ok(SettleResponse {
+                status: settle_response::Status::SigningRequired as i32,
+                messages_to_sign,
+                script_path_spend: true,
+                commitment_txid: String::new(),
+                error_message: String::new(),
+            }));
+        }
+
+        // ---- Phase 2: intent FROST sigs → BoardingSettleStep2 → commitment sighashes ----
+        (Some(1), true) => {
+            let (amount, exit_delay) = progress.map(|(_, a, e)| (a, e)).unwrap();
+            let messages_to_sign = match guest
+                .as_mut()
+                .unwrap()
+                .command(GuestCommand::BoardingSettleStep2 {
+                    asp_url: asp_url.clone(),
+                    intent_signatures: req.signed_messages,
+                })
+                .await
+            {
+                Ok(GuestResponse::BoardingSettleSighashes { messages_to_sign }) => messages_to_sign,
+                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
+                other => settle_err!(Status::internal(format!("BoardingSettleStep2: {other:?}"))),
+            };
+            state.lock().guest_boarding = Some((2, amount, exit_delay));
+            let _ = reply.send(Ok(SettleResponse {
+                status: settle_response::Status::SigningRequired as i32,
+                messages_to_sign,
+                script_path_spend: true,
+                commitment_txid: String::new(),
+                error_message: String::new(),
+            }));
+        }
+
+        // ---- Phase 3: commitment FROST sigs → BoardingSettleStep3 → the new VTXO ----
+        (Some(2), true) => {
+            let exit_delay = progress.map(|(_, _, e)| e).unwrap();
+            let (commitment_txid, vtxo_txid, vtxo_vout, amount_sats) = match guest
+                .as_mut()
+                .unwrap()
+                .command(GuestCommand::BoardingSettleStep3 {
+                    asp_url,
+                    commitment_signatures: req.signed_messages,
+                })
+                .await
+            {
+                Ok(GuestResponse::BoardingSettleSubmitted {
+                    commitment_txid,
+                    vtxo_txid,
+                    vtxo_vout,
+                    amount_sats,
+                }) => (commitment_txid, vtxo_txid, vtxo_vout, amount_sats),
+                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
+                other => settle_err!(Status::internal(format!("BoardingSettleStep3: {other:?}"))),
+            };
+            {
+                let mut st = state.lock();
+                st.guest_boarding = None;
+                st.vtxos.retain(|e| !(e.txid == vtxo_txid && e.vout == vtxo_vout));
+                st.vtxos.push(crate::cosigner::state::VtxoEntry {
+                    txid: vtxo_txid.clone(),
+                    vout: vtxo_vout,
+                    amount: amount_sats,
+                    exit_delay,
+                    created_at: now_secs(),
+                    expires_at: 0,
+                });
+                handlers::helpers::save_user_vtxos(
+                    shared.persistence.as_ref(),
+                    &user_id_hex,
+                    &st.vtxos,
+                );
+                st.ark_tx_history.push(crate::cosigner::types::ArkTxEntry {
+                    tx_type: "board".into(),
+                    amount_sats: amount_sats as i64,
+                    txid: vtxo_txid,
+                    timestamp: now_secs(),
+                });
+                handlers::helpers::save_user_ark_history(
+                    shared.persistence.as_ref(),
+                    &user_id_hex,
+                    &st.ark_tx_history,
+                );
+            }
+            persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
+            let _ = reply.send(Ok(SettleResponse {
+                status: settle_response::Status::Settled as i32,
+                messages_to_sign: vec![],
+                script_path_spend: false,
+                commitment_txid,
+                error_message: String::new(),
+            }));
+        }
+
+        (None, true) => {
+            let _ = reply.send(Err(Status::failed_precondition("no active boarding settle")));
+        }
+        _ => {
+            let _ = reply.send(Err(Status::internal("unexpected boarding settle state")));
+        }
+    }
+}
+
 /// Guest-routed auto-settle: if a stored delegate's threshold has arrived, drive it in the
 /// guest. Fire-and-forget (no reply). `ensure_guest_with_policy` restores the delegate from
 /// the snapshot if the actor was reseated; an alive actor already holds it.
+#[allow(clippy::too_many_arguments)]
 async fn route_tick_auto_settle(
     state: &Arc<Mutex<CosignerState>>,
     shared: &Arc<SharedServices>,
@@ -1379,6 +1652,7 @@ async fn route_tick_auto_settle(
     if now_secs() < threshold {
         return;
     }
+    tracing::info!("auto-settle (guest): threshold reached, driving stored delegate");
     let Some(asp_url) = shared.asp_url.clone() else { return };
     if let Err(e) =
         ensure_guest_with_policy(state, shared, registry, guest, guest_policy_installed).await
@@ -1393,8 +1667,38 @@ async fn route_tick_auto_settle(
         .command(GuestCommand::SettleDelegate { asp_url })
         .await
     {
-        Ok(GuestResponse::SettleSubmitted { commitment_txid, .. }) => {
-            state.lock().guest_delegate_threshold = None;
+        Ok(GuestResponse::SettleSubmitted { commitment_txid, vtxo_outpoint }) => {
+            {
+                let mut st = state.lock();
+                st.guest_delegate_threshold = None;
+                // The delegate settle consolidated this actor's VTXOs into one refreshed VTXO. A
+                // cold-spawned actor has NO cached ASP info, so the indexer VTXO-stream notification is
+                // skipped — update the host projection directly from the settle result (balance is
+                // preserved by the refresh; exit delay carries over from the consolidated inputs).
+                if let Some((txid, vout)) = vtxo_outpoint {
+                    let amount: u64 = st.vtxos.iter().map(|e| e.amount).sum();
+                    let exit_delay = st.vtxos.first().map(|e| e.exit_delay).unwrap_or(0);
+                    let expires_at = st.vtxos.iter().map(|e| e.expires_at).max().unwrap_or(0);
+                    st.vtxos.clear();
+                    st.vtxos.push(crate::cosigner::state::VtxoEntry {
+                        txid,
+                        vout,
+                        amount,
+                        exit_delay,
+                        created_at: now_secs(),
+                        expires_at,
+                    });
+                    handlers::helpers::save_user_vtxos(
+                        shared.persistence.as_ref(),
+                        &group_key,
+                        &st.vtxos,
+                    );
+                }
+            }
+            handlers::helpers::delete_guest_delegate_threshold(
+                shared.persistence.as_ref(),
+                &group_key,
+            );
             persist_guest_snapshot(guest.as_mut().unwrap(), shared, &group_key).await;
             tracing::info!("auto-settle (guest): commitment_txid={commitment_txid}");
         }
@@ -1521,35 +1825,24 @@ async fn dispatch_one(
                 handlers::ark::list_ark_transactions
             );
         }
-        CosignerCommand::SendVtxo { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark_send::send_vtxo
-            );
+        // Plan A Phase 2: SendVtxo / RedeemVtxo / Settle / SettleDelegate are guest-routed (the keys
+        // never leave the guest) and require the ASP URL. The legacy host paths that signed with a
+        // plaintext dkg-secret are gone; without ASP_URL there is no fallback.
+        CosignerCommand::SendVtxo { req: _, reply } => {
+            let _ = reply.send(Err(Status::unavailable("send requires ASP_URL (guest-routed)")));
         }
-        CosignerCommand::RedeemVtxo { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark_send::redeem_vtxo
-            );
+        CosignerCommand::RedeemVtxo { req: _, reply } => {
+            let _ = reply.send(Err(Status::unimplemented("RedeemVtxo not implemented")));
         }
-        CosignerCommand::Settle { req, reply } => {
-            dispatch!(state, shared, req, reply, handlers::ark_send::settle);
+        CosignerCommand::Settle { req: _, reply } => {
+            let _ = reply.send(Err(Status::unavailable(
+                "boarding settle requires ASP_URL (guest-routed)",
+            )));
         }
-        CosignerCommand::SettleDelegate { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark_send::settle_delegate
-            );
+        CosignerCommand::SettleDelegate { req: _, reply } => {
+            let _ = reply.send(Err(Status::unavailable(
+                "delegate settle requires ASP_URL (guest-routed)",
+            )));
         }
         CosignerCommand::SubmitArkSend { req, reply } => {
             dispatch!(

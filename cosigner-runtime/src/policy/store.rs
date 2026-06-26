@@ -7,8 +7,9 @@ use tonic::Status;
 use crate::policy::PolicyState;
 use crate::shared::SharedServices;
 
-/// Persist policy state and the server's DKG secret (the latter via SecretStore,
-/// keyed by the group key).
+/// Persist the PUBLIC policy projection. Plan A Phase 2: the server's Ark/MuSig2 `dkg-secret` is NO
+/// LONGER written to the host `SecretStore` — it lives only in the guest's sealed snapshot (seeded
+/// via `SeedPolicy` at onboarding). The host keeps no plaintext key copy.
 pub fn persist_policy(
     shared: &SharedServices,
     user_id_hex: &str,
@@ -33,15 +34,5 @@ pub fn persist_policy(
             tracing::error!(error = %e, user_id = %user_id_hex, "persistence put policies failed");
             Status::internal(format!("persistence write error: {e}"))
         })?;
-    if let Some(ref secret) = policy.server_dkg_secret_hex {
-        if let Err(e) = shared
-            .secret_store
-            .put_secret(&format!("dkg-secret.{user_id_hex}"), secret)
-        {
-            tracing::error!(
-                "persist dkg-secret.{user_id_hex} failed: {e} — wallet may not be restorable"
-            );
-        }
-    }
     Ok(())
 }

@@ -192,9 +192,47 @@ host only does I/O + stores an opaque sealed snapshot. (Full plan:
      gate DENY-over-limit), `evtxo_service_arkd` (two-leg: "service co-signed 2 V-leg(s)", Bob credited,
      wallet offline), plus host Rust tests (`sign_flow`/`seed_policy`/`registry_guest`) — all GREEN.
 
-   **PHASE 2 (MuSig2 delegate / `dkg-secret`) — not started:** route the legacy `ark_send.rs`
-   Settle/Send paths to the guest's existing `SettleDelegate`/`SendVtxo` commands, drop
-   `get_user_ark_keys`'s `dkg_secret` return + the `dkg-secret.*` SecretStore reads/writes.
+   **PHASE 2 (MuSig2 delegate / `dkg-secret`) — IN PROGRESS.**
+   - **Boarding settle MOVED INTO THE GUEST — DONE + e2e-verified 2026-06-26** (`evtxo_arkd` GREEN:
+     "3. Settled. Alice balance=1000000" → eVTXO mint + arkd co-sign). This was the hard part: the
+     boarding `settle()` was the ONLY *live* host path still MuSig2-tree-signing with a plaintext
+     `dkg-secret`. Design (lower-risk than a full in-guest drive, which `wstd` can't stream-persist
+     across the commitment-FROST pause): the HOST keeps the ASP stream + batch state machine + both
+     FROST rounds; only the secret tree-signing goes to the guest.
+     - `crates/ark` `batch.rs`: new standalone `BoardingTreeSigner` (guest-usable under `signing`;
+       wire-friendly `gen_nonces`/`sign`, holds the secret `nonce_kps` between the two). `SettleSession`
+       refactored: `new_boarding` takes the cosigner PUBLIC key (no secret); `drive()` returns new
+       `SettleAction::NeedTreeNonces`/`NeedTreeSign`; added `submit_tree_nonces`/`submit_tree_signatures`.
+       The `cosigner_kp`/`nonce_kps` fields are GONE from `SettleSession`.
+     - proto: `GuestCommand::{GetArkCosignerPubkey, BoardingGenNonces, BoardingTreeSign}` +
+       `TreeTxChunkWire` + responses `{ArkCosignerPubkey, BoardingNonces, BoardingTreeSigs}`.
+     - guest (`cosigner/src/state.rs`): the three handlers (sync; pure crypto, no ASP I/O) + a
+       `boarding_signer` field holding the in-flight `BoardingTreeSigner`.
+     - host (`registry.rs`): `route_settle_boarding` (scans boarding UTXOs host-side, gets the cosigner
+       pubkey from the guest, drives the session, dispatches `NeedTreeNonces`/`NeedTreeSign` to the
+       guest while holding the asp guard). New guest-routed `Settle` dispatch arm (asp_url set). The
+       legacy `settle()` + `SettleOutcome` are DELETED; the no-ASP fallback arm errors.
+   - **dkg-secret host persistence REMOVED — DONE + e2e-verified 2026-06-26** (`evtxo_arkd` GREEN
+     after each step). The host no longer writes or reads a plaintext `dkg-secret`:
+     - Deleted the DEAD legacy `settle_delegate`/`send_vtxo`/`redeem_vtxo` (guest-routed; `ark_send:788`
+       never ran) + `get_user_ark_keys`. The no-ASP dispatch arms now error.
+     - `persist_policy` (`store.rs`) no longer writes `dkg-secret.<key>` to the SecretStore; `try_load_policy`
+       (`helpers.rs`) no longer reads it — `server_dkg_secret_hex` stays `None` host-side. The guest holds
+       the SOLE copy in its sealed snapshot (seeded via `SeedPolicy` at onboarding, restored on spawn).
+     - The only remaining `get_secret("dkg-secret.*")` is the delegate REHYDRATION (`registry:169`); it now
+       returns `None` (nothing written) and drops the row — no plaintext read. (Left in place; the whole
+       legacy host-delegate subsystem is dead — see the gap below — and removing it is a separate cleanup.)
+   - **PRE-EXISTING GAP surfaced (NOT a Plan A regression — `ark.rs`/`has_active_delegate` git-unchanged):**
+     auto-settle-after-restart only ever worked via the LEGACY host delegate (rehydration + `delegate_sessions`
+     sled row + `dkg-secret`). The GUEST `SettleDelegate` store_only path (the one the e2e actually uses, ASP
+     set) NEVER wrote a `delegate_sessions` row or set `state.delegate_session`, and `guest_delegate_threshold`
+     is in-memory only — so `has_active_delegate` (= `state.delegate_session.is_some()`) reports false and the
+     fire-trigger is lost on restart. The `ark_e2e` "survives cosigner-runtime restart" test has thus been RED
+     since the guest-path migration (fails pre-restart on the `has_active_delegate` assertion). FOLLOW-UP to
+     complete Phase 2: wire guest-path restart durability — persist `guest_delegate_threshold` (+ a secret-free
+     `delegate_sessions` marker so `main.rs:232` re-spawns the actor), restore it on spawn, point
+     `has_active_delegate` at the guest delegate, and retire the dead legacy host-delegate subsystem
+     (`registry` rehydration + `auto_settle.rs` + `save/load_user_delegate`).
 
 5. **Cleanup (done):** `ContractSession`/`session.rs` + the contract eviction loop are removed and
    `ceremony` is now `onboarding/ceremony.rs`. The stale `AssembleContractShare` `contract_group_id`

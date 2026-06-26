@@ -62,7 +62,19 @@ pub enum GuestCommand {
         /// Set ONLY for a `{service, cosigner}` pairing actor — the eVTXO it may co-sign + the
         /// params to rebuild that eVTXO's cooperative-leaf sighash in the guest (Plan A 1C).
         contract_pairing: Option<ContractPairingWire>,
+        /// The wallet's contract registry as OPAQUE host JSON (a `HashMap<spk_hex, ContractPolicy>`
+        /// the guest never parses — it only stores + returns it, so the seal is the single source of
+        /// the public projection). Empty string ⇒ no contracts. (Plan A Phase 2: drop `persist_policy`.)
+        #[serde(default)]
+        contracts_json: String,
     },
+    /// Replace the guest's stored contract registry (opaque host JSON) — used by contract-create to
+    /// add a contract without a host-side `policies` row. The guest re-seals on the next snapshot.
+    SetContracts { contracts_json: String },
+    /// Return the PUBLIC policy projection the host needs (verifying key, contracts, pairing,
+    /// signing id) — the host populates `policy_state` from this after restoring a cold-spawned
+    /// guest, instead of reading the removed `policies` sled tree.
+    GetPublicPolicy,
     /// Contract create: key-preservingly REFRESH the guest's own key `V` onto a
     /// `{receiver, cosigner}` pairing — entirely inside the guest, so the host never reads
     /// `V`. The wallet (other holder of `V`) supplies its slice `a@cosigner` (scalar) +
@@ -110,6 +122,56 @@ pub enum GuestCommand {
     /// intent, open the ASP event stream, and run the MuSig2 tree-signing + forfeit loop to
     /// completion. Requires a `ReadyToSettle` delegate session already installed in the guest.
     SettleDelegate { asp_url: String },
+    /// Return the Ark cosigner (MuSig2) PUBLIC key derived from the in-guest secret — the host needs
+    /// it to build the boarding intent's `own_cosigner_pks` (phase 1) without reading the secret.
+    GetArkCosignerPubkey,
+    /// Boarding-settle tree-signing step 1 (Plan A Phase 2): the host drives the boarding batch +
+    /// stream + FROST rounds, but the MuSig2 tree-signing secret stays in the guest. The host sends
+    /// the (public) tree tx graph + unsigned commitment PSBT; the guest builds the graph, generates
+    /// the secret per-node nonces, and returns the public nonce points to submit. The secret
+    /// `nonce_kps` + graph are held in the guest until the matching `BoardingTreeSign`.
+    BoardingGenNonces {
+        tree_tx_chunks: Vec<TreeTxChunkWire>,
+        commitment_psbt_b64: String,
+        batch_id: String,
+    },
+    /// Boarding-settle tree-signing step 2: once the host has aggregated every node's nonces, it
+    /// sends them back; the guest MuSig2-signs all tree txs with its in-guest cosigner key +
+    /// stored nonces and returns the partial signatures to submit. Consumes the held session.
+    BoardingTreeSign {
+        /// `(tree_txid, [(cosigner_pk_hex, nonce_pk_hex)])` for every node in the graph.
+        pending_nonces: Vec<(String, Vec<(String, String)>)>,
+        batch_expiry: u32,
+        forfeit_pk_hex: String,
+    },
+    /// Boarding settle, fully GUEST-driven (Plan A): the guest owns the ASP event stream + the
+    /// MuSig2 tree-signing; the host only scans the boarding UTXO (public chain) and relays the two
+    /// FROST rounds. Step 1: build the boarding session from the (public) scan + ASP info, return
+    /// the intent-proof sighashes to FROST-sign.
+    BoardingSettleStep1 {
+        owner_pk_hex: String,
+        signer_pubkey: String,
+        forfeit_pubkey: String,
+        boarding_address: String,
+        boarding_txid: String,
+        boarding_vout: u32,
+        boarding_amount_sats: u64,
+        exit_delay: u32,
+        network: String,
+    },
+    /// Step 2: insert the intent FROST sigs, RegisterIntent + open the event stream, drive the
+    /// batch (tree-signing in-guest) until BatchFinalization, then return the commitment-tx
+    /// sighashes to FROST-sign. The open stream + session are held in the guest across to step 3.
+    BoardingSettleStep2 {
+        asp_url: String,
+        intent_signatures: Vec<Vec<u8>>,
+    },
+    /// Step 3: insert the commitment FROST sigs, submit the signed commitment, and drive to
+    /// BatchFinalized — returning the new VTXO.
+    BoardingSettleStep3 {
+        asp_url: String,
+        commitment_signatures: Vec<Vec<u8>>,
+    },
     /// Phase 4: serialize the guest's durable state (policy + Ark cosigner secret + VTXOs +
     /// history) into an opaque sealed blob the host stores but cannot read. In-flight sessions
     /// are deliberately excluded (MuSig2 secret nonces must never persist).
@@ -120,6 +182,17 @@ pub enum GuestCommand {
     // Phase 3 (later): Settle, SettleDelegate, SubmitArkSend, RedeemVtxo, ListVtxos,
     //                  ListArkTransactions, GetArkAddress, GetBoardingAddress,
     //                  RegisterDeviceToken, ApplyVtxoStreamUpdate, TickAutoSettle
+}
+
+/// One node of the batch tx graph (a `TreeTx` event), passed host→guest for boarding tree-signing.
+/// All fields are public protocol data; the guest rebuilds the `TxGraph` from the chunk set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeTxChunkWire {
+    /// The node txid, or empty for the (rootless) commitment-anchored node.
+    pub txid: String,
+    pub psbt_b64: String,
+    /// `(vout, child_txid)` edges to child nodes.
+    pub children: Vec<(u32, String)>,
 }
 
 /// A spendable VTXO the guest can use as a send input. (Passed in until the guest owns
@@ -168,6 +241,9 @@ pub struct SnapshotState {
     /// it co-signs across cold spawns. `None` for a normal wallet actor.
     #[serde(default)]
     pub contract_pairing: Option<ContractPairingWire>,
+    /// The wallet's contract registry as OPAQUE host JSON (see `InstallPolicy::contracts_json`).
+    #[serde(default)]
+    pub contracts_json: String,
     pub vtxos: Vec<VtxoInputWire>,
     pub history: Vec<ArkTxEntryWire>,
     /// A `ReadyToSettle` delegate session serialized via ark `PersistedDelegate` (JSON), if
@@ -262,8 +338,17 @@ pub struct CommitmentWire {
 pub enum GuestResponse {
     /// Reply to [`GuestCommand::Ping`].
     Pong,
-    /// Reply to [`GuestCommand::InstallPolicy`].
+    /// Reply to [`GuestCommand::InstallPolicy`] and [`GuestCommand::SetContracts`].
     PolicyInstalled,
+    /// Reply to [`GuestCommand::GetPublicPolicy`] — the PUBLIC projection the host loads into its
+    /// `policy_state` (no secret key material; `contracts_json` is the opaque host registry blob).
+    PublicPolicy {
+        group_key: String,
+        public_key_package_json: String,
+        user_signing_identifier_hex: Option<String>,
+        contract_pairing: Option<ContractPairingWire>,
+        contracts_json: String,
+    },
     /// Reply to [`GuestCommand::ContractRefresh`]: the PUBLIC pairing PKP, the receiver's
     /// half scalar (32B), and the cosigner's pairing key package (JSON; host relays it to
     /// seed the pairing actor, never persists it).
@@ -295,6 +380,31 @@ pub enum GuestResponse {
     DelegateSighashes { messages_to_sign: Vec<Vec<u8>> },
     /// Reply to [`GuestCommand::ApplyDelegateSigs`] — the delegate session is `ReadyToSettle`.
     DelegateReady,
+    /// Reply to [`GuestCommand::GetArkCosignerPubkey`] — the cosigner's MuSig2 pubkey (33-byte
+    /// compressed, hex).
+    ArkCosignerPubkey { pubkey_hex: String },
+    /// Reply to [`GuestCommand::BoardingSettleStep1`] / `Step2` — the sighashes the host must have
+    /// FROST-signed (intent proof for step 1, commitment tx for step 2).
+    BoardingSettleSighashes { messages_to_sign: Vec<Vec<u8>> },
+    /// Reply to [`GuestCommand::BoardingSettleStep3`] — the finalized boarding settle's new VTXO.
+    BoardingSettleSubmitted {
+        commitment_txid: String,
+        vtxo_txid: String,
+        vtxo_vout: u32,
+        amount_sats: u64,
+    },
+    /// Reply to [`GuestCommand::BoardingGenNonces`] — the cosigner's pubkey + per-node public
+    /// nonce points (`(tree_txid, encoded_nonce_pks)`) for the host to submit to the ASP.
+    BoardingNonces {
+        cosigner_pk_hex: String,
+        nonce_map: Vec<(String, String)>,
+    },
+    /// Reply to [`GuestCommand::BoardingTreeSign`] — the cosigner's pubkey + per-node partial
+    /// signatures (`(tree_txid, encoded_partial_sig)`) for the host to submit to the ASP.
+    BoardingTreeSigs {
+        cosigner_pk_hex: String,
+        sig_map: Vec<(String, String)>,
+    },
     /// Reply to [`GuestCommand::SettleDelegate`] — the finalized batch commitment txid and
     /// the settled VTXO outpoint `(txid, vout)` if one was produced.
     SettleSubmitted {

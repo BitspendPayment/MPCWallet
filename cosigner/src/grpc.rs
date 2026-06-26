@@ -5,9 +5,32 @@
 //! Unary gRPC framing: request/response bodies are `[compressed_flag: u8][len: u32 BE]
 //! [protobuf message]`. The method path is `/<package>.<Service>/<Method>`.
 
+use std::future::Future;
+use std::task::{Context, Poll, Waker};
+
 use http_body_util::BodyExt;
 use prost::Message;
 use wstd::http::{Body, Client, Request};
+
+/// Drive a wasi-http future to completion, yielding to the host runtime between polls.
+///
+/// Works around a wasi-http/wstd reactor issue: a host-side response/body future can resolve on
+/// the host (tokio) side without reliably waking the guest reactor, so a plain `.await` hangs even
+/// though the result is ready. We poll the future ourselves, and on `Pending` we `sleep` briefly —
+/// which suspends the guest, lets the host drive the underlying h2 connection, and on resume we
+/// re-poll and pick up the now-ready result. The `sleep` is the only thing awaited normally, so the
+/// guest reactor stays correct; the gRPC future is polled with a no-op waker (we re-poll on a timer).
+async fn drive<F: Future>(fut: F) -> F::Output {
+    let mut fut = std::pin::pin!(fut);
+    let waker = Waker::noop();
+    let mut cx = Context::from_waker(waker);
+    loop {
+        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+            return v;
+        }
+        wstd::task::sleep(wstd::time::Duration::from_millis(3)).await;
+    }
+}
 
 /// Frame the gRPC request body: `[compressed: u8][len: u32 BE][protobuf]`.
 fn frame_request<Req: Message>(req: &Req) -> Result<Vec<u8>, String> {
@@ -43,8 +66,8 @@ where
         .body(Body::from(framed))
         .map_err(|e| format!("grpc build request: {e}"))?;
 
-    let resp = Client::new()
-        .send(request)
+    let client = Client::new();
+    let resp = drive(client.send(request))
         .await
         .map_err(|e| format!("grpc send: {e}"))?;
     let status = resp.status();
@@ -53,8 +76,7 @@ where
     }
 
     let mut body = resp.into_body();
-    let bytes = body
-        .bytes_contents()
+    let bytes = drive(body.bytes_contents())
         .await
         .map_err(|e| format!("grpc read body: {e}"))?;
     if bytes.len() < 5 {
@@ -113,6 +135,9 @@ impl ServerStream {
             if self.ended {
                 return Ok(None);
             }
+            // The streaming body's DATA frames wake the reactor reliably (unlike the unary
+            // response future), so a normal await is correct here — and `drive`'s no-op-waker
+            // polling would NOT pick up frames.
             match self.body.frame().await {
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {

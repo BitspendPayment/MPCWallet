@@ -73,6 +73,10 @@ pub struct CosignerState {
 
     /// Active settle (boarding) session: `(session, boarding_amount_sats, exit_delay)`.
     pub settle_session: Option<(ark::client::batch::SettleSession, u64, u32)>,
+    /// Plan A: progress through the GUEST-driven boarding settle — `(step, amount_sats, exit_delay)`.
+    /// step 1 = awaiting intent FROST sigs, 2 = awaiting commitment FROST sigs. The session + open
+    /// stream live in the GUEST; the host only relays the two FROST rounds and records the result.
+    pub guest_boarding: Option<(u8, u64, u32)>,
     /// Active delegate-settle session — stored signed intent + scope.
     pub delegate_session: Option<DelegateRecord>,
     /// Active send session: `(session, exit_delay)`.
@@ -106,6 +110,7 @@ impl CosignerState {
         Self {
             cosigner_id,
             settle_session: None,
+            guest_boarding: None,
             delegate_session: None,
             send_session: None,
             vtxos: Vec::new(),

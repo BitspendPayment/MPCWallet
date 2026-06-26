@@ -82,6 +82,10 @@ pub fn apply_stream_update(
             super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
             tracing::info!("[{user_id_hex}] delegate invalidated: covered VTXO spent");
         }
+        // All VTXOs spent — any guest-delegate marker (no host-side coverage info) is now stale.
+        if state.guest_delegate_threshold.take().is_some() {
+            super::helpers::delete_guest_delegate_threshold(shared.persistence.as_ref(), user_id_hex);
+        }
         save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
         return Ok(Vec::new());
     }
@@ -162,6 +166,10 @@ pub fn apply_stream_update(
     if delegate_invalidated {
         state.delegate_session = None;
         super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
+        // The guest-delegate marker has no host-side coverage info; a changed VTXO set makes it stale.
+        if state.guest_delegate_threshold.take().is_some() {
+            super::helpers::delete_guest_delegate_threshold(shared.persistence.as_ref(), user_id_hex);
+        }
     }
 
     save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);

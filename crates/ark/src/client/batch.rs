@@ -52,6 +52,20 @@ use crate::client::proto::get_event_stream_response::Event;
 pub enum SettleAction {
     /// FROST signatures are needed on these sighashes (script-path, no tweak).
     NeedSignatures { sighashes: Vec<[u8; 32]> },
+    /// Plan A Phase 2: the MuSig2 tree-signing secret lives in the cosigner guest, not here. The
+    /// caller must dispatch these (public) tree chunks + commitment PSBT to the guest's
+    /// `BoardingGenNonces`, then call [`SettleSession::submit_tree_nonces`] with the result.
+    NeedTreeNonces {
+        tree_tx_chunks: Vec<(String, String, Vec<(u32, String)>)>,
+        commitment_psbt_b64: String,
+    },
+    /// Plan A Phase 2: the caller must dispatch the aggregated per-node nonces to the guest's
+    /// `BoardingTreeSign`, then call [`SettleSession::submit_tree_signatures`] with the result.
+    NeedTreeSign {
+        pending_nonces: Vec<(String, Vec<(String, String)>)>,
+        batch_expiry: u32,
+        forfeit_pk_hex: String,
+    },
     /// Batch is still processing; poll `drive` again.
     WaitingForBatch,
     /// Settlement complete.
@@ -101,10 +115,15 @@ pub struct SettleSession {
     intent_message: Option<IntentMessage>,
     /// Sighash index -> (psbt input index, leaf_hash) for inserting sigs later.
     intent_sighash_meta: Vec<(usize, TapLeafHash)>,
+    // Used by the host (`client` feature) confirm path; the guest drives its own intent id locally.
+    #[cfg_attr(not(feature = "client"), allow(dead_code))]
     intent_id: Option<String>,
 
-    // -- ephemeral cosigner (for tree signing, NOT FROST) --
-    cosigner_kp: Keypair,
+    // -- cosigner identity (PUBLIC only) --
+    // Plan A Phase 2: the MuSig2 cosigner keypair + secret per-node nonces live in the cosigner
+    // guest, NOT here. This session keeps only the PUBLIC cosigner key (for the intent + event-
+    // stream topic); tree-signing is delegated out via `SettleAction::NeedTreeNonces`/`NeedTreeSign`.
+    cosigner_pk: bitcoin::secp256k1::PublicKey,
 
     // -- batch state --
     batch_id: Option<String>,
@@ -113,7 +132,6 @@ pub struct SettleSession {
     event_stream: Option<tonic::Streaming<proto::GetEventStreamResponse>>,
     tx_graph_chunks: Vec<TxGraphChunk>,
     tx_graph: Option<TxGraph>,
-    nonce_kps: Option<NonceKps>,
     commitment_psbt: Option<Psbt>,
     /// Accumulated raw nonces per tree txid (from TreeNonces events).
     /// We only sign + submit once ALL nonces for every node in the graph
@@ -122,6 +140,139 @@ pub struct SettleSession {
 
     // -- commitment signing --
     commitment_sighash_meta: Vec<(usize, TapLeafHash)>,
+}
+
+/// Standalone boarding tree-signer (Plan A Phase 2). Does ONLY the secret MuSig2 tree-signing of a
+/// boarding settle — so it can run inside the cosigner guest while the host keeps the batch state
+/// machine, the event stream, and the FROST rounds. It holds the secret per-node nonces between
+/// `gen_nonces` and `sign`. All inputs/outputs are wire-friendly (hex / base64 / strings), so the
+/// guest needs no `ark_core` types: the host passes the public tree graph; the secret stays here.
+pub struct BoardingTreeSigner {
+    cosigner_kp: Keypair,
+    tx_graph: Option<TxGraph>,
+    commitment_psbt: Option<Psbt>,
+    nonce_kps: Option<NonceKps>,
+}
+
+impl BoardingTreeSigner {
+    /// Build from the cosigner's MuSig2 tree-signing secret (the Ark `dkg-secret`, held in-guest).
+    pub fn new(cosigner_secret_hex: &str) -> Result<Self, String> {
+        let secp = Secp256k1::new();
+        let bytes = hex_decode_32(cosigner_secret_hex)?;
+        let sk = bitcoin::secp256k1::SecretKey::from_slice(&bytes)
+            .map_err(|e| format!("bad cosigner secret: {e}"))?;
+        Ok(Self {
+            cosigner_kp: Keypair::from_secret_key(&secp, &sk),
+            tx_graph: None,
+            commitment_psbt: None,
+            nonce_kps: None,
+        })
+    }
+
+    /// The cosigner's MuSig2 public key (33-byte compressed, hex) — the host needs it for the
+    /// boarding intent's `own_cosigner_pks` and never has to derive it from the secret.
+    pub fn cosigner_pubkey_hex(&self) -> String {
+        self.cosigner_kp.public_key().to_string()
+    }
+
+    /// Rebuild the tx graph from the (public) tree chunks, generate the secret nonce tree, and
+    /// return the cosigner pubkey + per-node public nonce points to submit. Holds the secret nonces
+    /// + graph for the matching `sign`. `tree_tx_chunks` = `(txid_or_empty, psbt_b64, [(vout, child_txid)])`.
+    pub fn gen_nonces(
+        &mut self,
+        tree_tx_chunks: &[(String, String, Vec<(u32, String)>)],
+        commitment_psbt_b64: &str,
+    ) -> Result<(String, Vec<(String, String)>), String> {
+        let commitment_psbt = decode_psbt_b64(commitment_psbt_b64)?;
+        let mut chunks = Vec::with_capacity(tree_tx_chunks.len());
+        for (txid_str, psbt_b64, children_wire) in tree_tx_chunks {
+            let tx = decode_psbt_b64(psbt_b64)?;
+            let txid = if txid_str.is_empty() {
+                None
+            } else {
+                Some(txid_str.parse().map_err(|e| format!("bad chunk txid: {e}"))?)
+            };
+            let children = children_wire
+                .iter()
+                .map(|(vout, ctxid)| {
+                    Ok::<_, String>((
+                        *vout,
+                        ctxid.parse().map_err(|e| format!("bad child txid: {e}"))?,
+                    ))
+                })
+                .collect::<Result<HashMap<_, _>, String>>()?;
+            chunks.push(TxGraphChunk { txid, tx, children });
+        }
+        let tx_graph = TxGraph::new(chunks).map_err(|e| format!("TxGraph::new: {e}"))?;
+
+        let cosigner_pk = self.cosigner_kp.public_key();
+        let nonce_kps = {
+            let mut rng = rand::thread_rng();
+            generate_nonce_tree(&mut rng, &tx_graph, cosigner_pk, &commitment_psbt)
+                .map_err(|e| format!("generate_nonce_tree: {e}"))?
+        };
+        let nonce_map: Vec<(String, String)> =
+            nonce_kps.to_nonce_pks().encode().into_iter().collect();
+
+        self.nonce_kps = Some(nonce_kps);
+        self.tx_graph = Some(tx_graph);
+        self.commitment_psbt = Some(commitment_psbt);
+        Ok((cosigner_pk.to_string(), nonce_map))
+    }
+
+    /// MuSig2-sign every tree tx with the in-guest cosigner key + held nonces. `pending_nonces` =
+    /// `(tree_txid, [(cosigner_pk_hex, nonce_pk_hex)])` for every node. Returns the cosigner pubkey
+    /// + per-node partial signatures, and consumes the held session.
+    pub fn sign(
+        &mut self,
+        pending_nonces: &[(String, Vec<(String, String)>)],
+        batch_expiry: u32,
+        forfeit_pk_hex: &str,
+    ) -> Result<(String, Vec<(String, String)>), String> {
+        let tx_graph = self
+            .tx_graph
+            .as_ref()
+            .ok_or("no tx_graph (call gen_nonces first)")?;
+        let commitment_psbt = self.commitment_psbt.as_ref().ok_or("no commitment_psbt")?;
+        let nonce_kps = self.nonce_kps.as_mut().ok_or("no nonce_kps")?;
+        let batch_expiry = Sequence::from_consensus(batch_expiry);
+        let forfeit_pk = bitcoin::XOnlyPublicKey::from_str(forfeit_pk_hex)
+            .map_err(|e| format!("bad forfeit_pk: {e}"))?;
+
+        let mut nonces_by_txid: HashMap<Txid, HashMap<String, String>> = HashMap::new();
+        for (txid_str, nonces) in pending_nonces {
+            let txid: Txid = txid_str.parse().map_err(|e| format!("bad txid: {e}"))?;
+            nonces_by_txid.insert(txid, nonces.iter().cloned().collect());
+        }
+
+        let mut combined = PartialSigTree::default();
+        for (tree_txid, _) in tx_graph.as_map() {
+            let raw = nonces_by_txid
+                .get(&tree_txid)
+                .ok_or_else(|| format!("missing nonces for {tree_txid}"))?;
+            let nonce_pks = ark_core::server::TreeTxNoncePks::decode(raw.clone())
+                .map_err(|e| format!("decode TreeTxNoncePks: {e}"))?;
+            let agg = aggregate_nonces(nonce_pks);
+            let partial = sign_batch_tree_tx(
+                tree_txid,
+                batch_expiry,
+                forfeit_pk,
+                &self.cosigner_kp,
+                agg,
+                tx_graph,
+                commitment_psbt,
+                nonce_kps,
+            )
+            .map_err(|e| format!("sign_batch_tree_tx {tree_txid}: {e}"))?;
+            combined.0.extend(partial.0);
+        }
+        let sig_map: Vec<(String, String)> = combined.encode().into_iter().collect();
+        let cosigner_pk_hex = self.cosigner_kp.public_key().to_string();
+        self.tx_graph = None;
+        self.commitment_psbt = None;
+        self.nonce_kps = None;
+        Ok((cosigner_pk_hex, sig_map))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +294,7 @@ impl SettleSession {
         boarding_utxo_amount_sat: u64,
         exit_delay: u32,
         network: &str,
-        delegate_cosigner_secret_hex: &str,
+        cosigner_pk_hex: &str,
     ) -> Result<(Self, Vec<[u8; 32]>), String> {
         let secp = Secp256k1::new();
         let network = parse_network(network)?;
@@ -178,14 +329,11 @@ impl SettleSession {
 
         let onchain_input = OnChainInput::new(boarding_output.clone(), amount, outpoint);
 
-        // Use the server's DKG secret as the delegate cosigner key for MuSig2
-        // tree signing.  This avoids mixing FROST and MuSig2 by giving the
-        // batch protocol a real, persistent single key.
-        let cosigner_secret_bytes = hex_decode_32(delegate_cosigner_secret_hex)?;
-        let cosigner_secret = bitcoin::secp256k1::SecretKey::from_slice(&cosigner_secret_bytes)
-            .map_err(|e| format!("invalid delegate cosigner secret: {e}"))?;
-        let cosigner_kp = Keypair::from_secret_key(&secp, &cosigner_secret);
-        let cosigner_pk = cosigner_kp.public_key();
+        // Plan A Phase 2: the MuSig2 cosigner SECRET lives in the cosigner guest. Here we only need
+        // its PUBLIC key, supplied by the caller (fetched from the guest), to declare the cosigner
+        // in the intent. The actual tree-signing is delegated out during `drive`.
+        let cosigner_pk = bitcoin::secp256k1::PublicKey::from_str(cosigner_pk_hex)
+            .map_err(|e| format!("invalid cosigner pubkey: {e}"))?;
 
         // Build the intent message.
         let now = std::time::SystemTime::now()
@@ -325,14 +473,13 @@ impl SettleSession {
             intent_message: Some(intent_message),
             intent_sighash_meta: sighash_meta,
             intent_id: None,
-            cosigner_kp,
+            cosigner_pk,
             batch_id: None,
             batch_expiry: None,
             #[cfg(feature = "client")]
             event_stream: None,
             tx_graph_chunks: Vec::new(),
             tx_graph: None,
-            nonce_kps: None,
             commitment_psbt: None,
             pending_nonces: HashMap::new(),
             commitment_sighash_meta: Vec::new(),
@@ -413,7 +560,7 @@ impl SettleSession {
         // Open the event stream with outpoint + cosigner key topics
         // (matching the reference ark-client implementation).
         let outpoint_topic = self.onchain_input.outpoint().to_string();
-        let cosigner_bytes = self.cosigner_kp.public_key().serialize();
+        let cosigner_bytes = self.cosigner_pk.serialize();
         let cosigner_topic = cosigner_bytes.iter()
             .map(|b| format!("{b:02x}"))
             .collect::<String>();
@@ -472,8 +619,9 @@ impl SettleSession {
                     "event: TreeSigningStarted id={} cosigners={} chunks_so_far={}",
                     e.id, e.cosigners_pubkeys.len(), self.tx_graph_chunks.len()
                 );
-                self.handle_tree_signing_started(asp, e).await?;
-                Ok(SettleAction::WaitingForBatch)
+                // Plan A Phase 2: nonce generation needs the cosigner SECRET, which lives in the
+                // guest — return the public tree data so the caller can dispatch it.
+                self.on_tree_signing_started(e)
             }
             Event::TreeNoncesAggregated(e) => {
                 eprintln!("event: TreeNoncesAggregated id={}", e.id);
@@ -493,8 +641,12 @@ impl SettleSession {
                     "event: TreeNonces id={} txid={} nonces_count={}",
                     e.id, e.txid, e.nonces.len()
                 );
-                self.handle_tree_nonces(asp, e).await?;
-                Ok(SettleAction::WaitingForBatch)
+                // Plan A Phase 2: accumulate; once every node has nonces, return them so the caller
+                // can dispatch tree-signing to the guest (the secret is there, not here).
+                match self.on_tree_nonces(e)? {
+                    Some(action) => Ok(action),
+                    None => Ok(SettleAction::WaitingForBatch),
+                }
             }
             Event::TreeSignature(_) => {
                 // Per-tx signature events from other cosigners; ignored.
@@ -582,11 +734,12 @@ impl SettleSession {
 }
 
 // ---------------------------------------------------------------------------
-// Event handlers (ASP transport — host only)
+// Event handlers. The sync `on_*` step methods are guest-driveable (no ASP transport);
+// the `async fn handle_*`/`submit_*` (ASP `AspClient`) are host-only (per-method cfg).
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "client")]
 impl SettleSession {
+    #[cfg(feature = "client")]
     async fn handle_batch_started(
         &mut self,
         asp: &mut AspClient,
@@ -615,131 +768,122 @@ impl SettleSession {
         Ok(())
     }
 
-    async fn handle_tree_signing_started(
+    /// TreeSigningStarted (Plan A Phase 2): build + store the tx graph from collected chunks, and
+    /// return the (public) tree data the caller must dispatch to the guest's `BoardingGenNonces`.
+    /// No secret is touched here — nonce generation happens in the guest.
+    pub fn on_tree_signing_started(
         &mut self,
-        asp: &mut AspClient,
         event: proto::TreeSigningStartedEvent,
-    ) -> Result<(), String> {
-        // Use batch_id from BatchStarted if available, otherwise fall back to
-        // the TreeSigningStarted event id (public ASPs may skip BatchStarted).
+    ) -> Result<SettleAction, String> {
+        // Use batch_id from BatchStarted if available, else the event id (public ASPs may skip it).
         if self.batch_id.is_none() {
             self.batch_id = Some(event.id.clone());
         }
-        let batch_id = self.batch_id.as_ref().ok_or("no batch_id set")?.clone();
-
-        // Decode the unsigned commitment PSBT.
         let commitment_psbt = decode_psbt_b64(&event.unsigned_commitment_tx)?;
-
-        // Build TxGraph from collected chunks.
         if self.tx_graph_chunks.is_empty() {
             return Err("no tree tx chunks collected yet".into());
         }
+        let chunks: Vec<TxGraphChunk> = self.tx_graph_chunks.drain(..).collect();
 
-        let tx_graph = TxGraph::new(self.tx_graph_chunks.drain(..).collect())
-            .map_err(|e| format!("TxGraph::new: {e}"))?;
+        // Serialize the (public) chunks for the guest, then build our own graph for tracking.
+        let tree_tx_chunks: Vec<(String, String, Vec<(u32, String)>)> = chunks
+            .iter()
+            .map(|c| {
+                let txid = c.txid.map(|t| t.to_string()).unwrap_or_default();
+                let psbt_b64 = encode_psbt_b64(&c.tx);
+                let children = c.children.iter().map(|(v, t)| (*v, t.to_string())).collect();
+                (txid, psbt_b64, children)
+            })
+            .collect();
+        let commitment_psbt_b64 = encode_psbt_b64(&commitment_psbt);
 
-        // Generate ephemeral nonces (no FROST needed).
-        let cosigner_pk = self.cosigner_kp.public_key();
-        let nonce_kps = {
-            let mut rng = rand::thread_rng();
-            generate_nonce_tree(&mut rng, &tx_graph, cosigner_pk, &commitment_psbt)
-                .map_err(|e| format!("generate_nonce_tree: {e}"))?
-        };
-
-        // Convert nonces to proto format and submit.
-        let nonce_pks = nonce_kps.to_nonce_pks();
-        let nonce_map = nonce_pks.encode();
-        let cosigner_pk_hex = cosigner_pk.to_string();
-
-        asp.submit_tree_nonces(&batch_id, cosigner_pk_hex, nonce_map)
-            .await
-            .map_err(|e| format!("submit_tree_nonces: {e}"))?;
-
-        self.nonce_kps = Some(nonce_kps);
+        let tx_graph = TxGraph::new(chunks).map_err(|e| format!("TxGraph::new: {e}"))?;
         self.tx_graph = Some(tx_graph);
         self.commitment_psbt = Some(commitment_psbt);
 
-        Ok(())
+        Ok(SettleAction::NeedTreeNonces {
+            tree_tx_chunks,
+            commitment_psbt_b64,
+        })
     }
 
-    /// Handle a TreeNonces event: accumulate nonces, and once all tree nodes
-    /// have nonces, sign ALL at once and submit in a single call.
-    /// This matches the reference ark-client which waits for all nonces before signing.
-    async fn handle_tree_nonces(
+    /// Submit the guest-generated tree nonces to the ASP.
+    #[cfg(feature = "client")]
+    pub async fn submit_tree_nonces(
         &mut self,
         asp: &mut AspClient,
-        event: proto::TreeNoncesEvent,
+        cosigner_pk_hex: String,
+        nonce_map: Vec<(String, String)>,
     ) -> Result<(), String> {
+        let batch_id = self.batch_id.as_ref().ok_or("no batch_id set")?.clone();
+        let nonce_map: HashMap<String, String> = nonce_map.into_iter().collect();
+        asp.submit_tree_nonces(&batch_id, cosigner_pk_hex, nonce_map)
+            .await
+            .map_err(|e| format!("submit_tree_nonces: {e}"))
+    }
+
+    /// TreeNonces (Plan A Phase 2): accumulate; once every node has nonces, return them (+ batch
+    /// expiry + forfeit key) for the caller to dispatch tree-signing to the guest. `None` while
+    /// still waiting. No secret is touched here — signing happens in the guest.
+    pub fn on_tree_nonces(
+        &mut self,
+        event: proto::TreeNoncesEvent,
+    ) -> Result<Option<SettleAction>, String> {
         let txid: Txid = event
             .txid
             .parse()
             .map_err(|e| format!("invalid txid {}: {e}", event.txid))?;
-
-        // Store the raw nonces for this txid.
         self.pending_nonces.insert(txid, event.nonces);
 
         let tx_graph = self.tx_graph.as_ref().ok_or("no tx_graph built")?;
         let expected = tx_graph.nb_of_nodes();
-
         eprintln!(
             "  accumulated nonces for txid={txid}, {}/{} collected",
             self.pending_nonces.len(),
             expected
         );
-
-        // Only sign once ALL nonces for every tree node have been collected.
         if self.pending_nonces.len() < expected {
-            return Ok(());
+            return Ok(None);
         }
 
+        let batch_expiry = self.batch_expiry.ok_or("no batch_expiry")?.to_consensus_u32();
+        let forfeit_pk_hex = self.forfeit_pk.to_string();
+        let pending_nonces: Vec<(String, Vec<(String, String)>)> = self
+            .pending_nonces
+            .iter()
+            .map(|(txid, nonces)| {
+                (
+                    txid.to_string(),
+                    nonces.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
+                )
+            })
+            .collect();
+
+        Ok(Some(SettleAction::NeedTreeSign {
+            pending_nonces,
+            batch_expiry,
+            forfeit_pk_hex,
+        }))
+    }
+
+    /// Submit the guest-generated tree signatures to the ASP, then clear the accumulated nonces.
+    #[cfg(feature = "client")]
+    pub async fn submit_tree_signatures(
+        &mut self,
+        asp: &mut AspClient,
+        cosigner_pk_hex: String,
+        sig_map: Vec<(String, String)>,
+    ) -> Result<(), String> {
         let batch_id = self.batch_id.as_ref().ok_or("no batch_id set")?.clone();
-        let commitment_psbt = self.commitment_psbt.as_ref().ok_or("no commitment_psbt")?;
-        let nonce_kps = self.nonce_kps.as_mut().ok_or("no nonce_kps generated")?;
-        let batch_expiry = self.batch_expiry.ok_or("no batch_expiry")?;
-        let forfeit_xonly = self.forfeit_pk;
-
-        // Sign ALL tree txids at once.
-        let mut combined_sigs = PartialSigTree::default();
-
-        for (tree_txid, _) in tx_graph.as_map() {
-            let raw_nonces = self.pending_nonces.get(&tree_txid).ok_or_else(|| {
-                format!("missing nonces for tree txid {tree_txid}")
-            })?;
-
-            let tree_tx_nonce_pks =
-                ark_core::server::TreeTxNoncePks::decode(raw_nonces.clone())
-                    .map_err(|e| format!("decode TreeTxNoncePks for {tree_txid}: {e}"))?;
-
-            let agg_nonce = aggregate_nonces(tree_tx_nonce_pks);
-
-            let partial_sig = sign_batch_tree_tx(
-                tree_txid,
-                batch_expiry,
-                forfeit_xonly,
-                &self.cosigner_kp,
-                agg_nonce,
-                tx_graph,
-                commitment_psbt,
-                nonce_kps,
-            )
-            .map_err(|e| format!("sign_batch_tree_tx {tree_txid}: {e}"))?;
-
-            combined_sigs.0.extend(partial_sig.0);
-        }
-
-        // Submit ALL signatures in a single call.
-        let sig_map = combined_sigs.encode();
-        let cosigner_pk_hex = self.cosigner_kp.public_key().to_string();
-
+        let sig_map: HashMap<String, String> = sig_map.into_iter().collect();
         asp.submit_tree_signatures(&batch_id, cosigner_pk_hex, sig_map)
             .await
             .map_err(|e| format!("submit_tree_signatures: {e}"))?;
-
         self.pending_nonces.clear();
         Ok(())
     }
 
-    fn handle_tree_tx(&mut self, event: proto::TreeTxEvent) -> Result<(), String> {
+    pub fn handle_tree_tx(&mut self, event: proto::TreeTxEvent) -> Result<(), String> {
         let psbt = decode_psbt_b64(&event.tx)?;
 
         let children: HashMap<u32, Txid> = event
@@ -773,7 +917,7 @@ impl SettleSession {
         Ok(())
     }
 
-    fn handle_batch_finalization(
+    pub fn handle_batch_finalization(
         &mut self,
         event: proto::BatchFinalizationEvent,
     ) -> Result<Vec<[u8; 32]>, String> {
@@ -832,8 +976,152 @@ impl SettleSession {
 
         self.commitment_psbt = Some(commitment_psbt);
         self.commitment_sighash_meta = sighash_meta;
+        self.phase = Phase::AwaitingCommitmentSignatures;
 
         Ok(sighashes)
+    }
+
+    // ----- guest-driveable step API (Plan A: the GUEST drives the boarding settle itself,
+    // mirroring DelegateSettleSession; the host relays the two FROST rounds) -----
+
+    /// Insert the FROST signatures over the intent-proof sighashes (from `new_boarding`), so the
+    /// proof is ready to register. Mirrors the insert half of `register_with_signatures`.
+    pub fn insert_intent_signatures(&mut self, signatures: Vec<[u8; 64]>) -> Result<(), String> {
+        if !matches!(self.phase, Phase::AwaitingIntentSignatures) {
+            return Err("insert_intent_signatures called in wrong phase".into());
+        }
+        let proof_psbt = self
+            .intent_proof_psbt
+            .as_mut()
+            .ok_or("missing intent proof PSBT")?;
+        if signatures.len() != self.intent_sighash_meta.len() {
+            return Err(format!(
+                "expected {} intent sigs, got {}",
+                self.intent_sighash_meta.len(),
+                signatures.len()
+            ));
+        }
+        for (sig_bytes, (input_idx, leaf_hash)) in
+            signatures.iter().zip(self.intent_sighash_meta.iter())
+        {
+            let schnorr_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(sig_bytes)
+                .map_err(|e| format!("invalid schnorr sig: {e}"))?;
+            let sig = taproot::Signature {
+                signature: schnorr_sig,
+                sighash_type: TapSighashType::Default,
+            };
+            proof_psbt.inputs[*input_idx]
+                .tap_script_sigs
+                .insert((self.owner_pk, *leaf_hash), sig);
+        }
+        self.phase = Phase::Driving;
+        Ok(())
+    }
+
+    /// The registration payload `(proof_b64, message_json, topics)` for `RegisterIntent` +
+    /// `GetEventStream` — topics are the boarding outpoint + the cosigner pubkey hex.
+    pub fn register_payload(&self) -> Result<(String, String, Vec<String>), String> {
+        let proof_psbt = self
+            .intent_proof_psbt
+            .as_ref()
+            .ok_or("missing intent proof PSBT")?;
+        let proof_b64 = encode_psbt_b64(proof_psbt);
+        let message_json = self
+            .intent_message
+            .as_ref()
+            .ok_or("missing intent message")?
+            .encode()
+            .map_err(|e| format!("encode intent message: {e}"))?;
+        let outpoint_topic = self.onchain_input.outpoint().to_string();
+        let cosigner_topic: String = self
+            .cosigner_pk
+            .serialize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        Ok((proof_b64, message_json, vec![outpoint_topic, cosigner_topic]))
+    }
+
+    /// BatchStarted: record batch id + expiry. (The guest then sends ConfirmRegistration itself.)
+    pub fn on_batch_started(&mut self, event: proto::BatchStartedEvent) -> Result<(), String> {
+        self.batch_id = Some(event.id.clone());
+        if event.batch_expiry > 0 {
+            self.batch_expiry = Some(
+                ark_core::server::parse_sequence_number(event.batch_expiry)
+                    .map_err(|e| format!("parse batch_expiry: {e}"))?,
+            );
+        }
+        Ok(())
+    }
+
+    /// Insert the FROST signatures over the commitment sighashes (from `handle_batch_finalization`)
+    /// and return the signed commitment PSBT b64 to submit (`SubmitSignedForfeitTxs`, no forfeits).
+    pub fn insert_commitment_signatures(
+        &mut self,
+        signatures: Vec<[u8; 64]>,
+    ) -> Result<String, String> {
+        if !matches!(self.phase, Phase::AwaitingCommitmentSignatures) {
+            return Err("insert_commitment_signatures called in wrong phase".into());
+        }
+        let commitment_psbt = self
+            .commitment_psbt
+            .as_mut()
+            .ok_or("missing commitment PSBT")?;
+        if signatures.len() != self.commitment_sighash_meta.len() {
+            return Err(format!(
+                "expected {} commitment sigs, got {}",
+                self.commitment_sighash_meta.len(),
+                signatures.len()
+            ));
+        }
+        for (sig_bytes, (input_idx, leaf_hash)) in
+            signatures.iter().zip(self.commitment_sighash_meta.iter())
+        {
+            let schnorr_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(sig_bytes)
+                .map_err(|e| format!("invalid schnorr sig: {e}"))?;
+            let sig = taproot::Signature {
+                signature: schnorr_sig,
+                sighash_type: TapSighashType::Default,
+            };
+            commitment_psbt.inputs[*input_idx]
+                .tap_script_sigs
+                .insert((self.owner_pk, *leaf_hash), sig);
+        }
+        let signed_commitment_b64 = encode_psbt_b64(commitment_psbt);
+        self.phase = Phase::Driving;
+        Ok(signed_commitment_b64)
+    }
+
+    /// The current batch id (for the guest's `SubmitTreeNonces`/`SubmitTreeSignatures`).
+    pub fn batch_id(&self) -> String {
+        self.batch_id.clone().unwrap_or_default()
+    }
+
+    /// After submitting the signed commitment, return the new VTXO WITHOUT waiting for a
+    /// BatchFinalized event — the commitment txid is the commitment-PSBT txid (witness-independent)
+    /// and the VTXO is the first tree leaf. Lets the guest finalize boarding without resuming the
+    /// (now mid-batch) event stream across the commitment-FROST pause.
+    pub fn finalize_optimistic(&self) -> Result<(String, Option<(String, u32)>), String> {
+        let commitment_psbt = self.commitment_psbt.as_ref().ok_or("no commitment PSBT")?;
+        let commitment_txid = commitment_psbt.unsigned_tx.compute_txid().to_string();
+        let vtxo = self.tx_graph.as_ref().map(|g| {
+            let leaf = first_tree_leaf(g);
+            (leaf.unsigned_tx.compute_txid().to_string(), 0u32)
+        });
+        Ok((commitment_txid, vtxo))
+    }
+
+    /// BatchFinalized: mark done and return `(commitment_txid, vtxo_outpoint)`.
+    pub fn on_batch_finalized(
+        &mut self,
+        event: proto::BatchFinalizedEvent,
+    ) -> (String, Option<(String, u32)>) {
+        self.phase = Phase::Done;
+        let vtxo_outpoint = self.tx_graph.as_ref().map(|g| {
+            let leaf = first_tree_leaf(g);
+            (leaf.unsigned_tx.compute_txid().to_string(), 0u32)
+        });
+        (event.commitment_txid, vtxo_outpoint)
     }
 }
 

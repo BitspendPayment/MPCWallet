@@ -420,7 +420,11 @@ pub fn list_vtxos(
             script,
         });
     }
-    let has_active_delegate = state.delegate_session.is_some();
+    // Plan A Phase 2: a delegate is "active" if the guest holds a pending one (its `fire at`
+    // threshold is set — restored from the secret-free marker on spawn) OR the legacy host session
+    // is loaded. The guest path is the live one; the host `delegate_session` is the dead legacy.
+    let has_active_delegate =
+        state.guest_delegate_threshold.is_some() || state.delegate_session.is_some();
     tracing::info!(
         "[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}, has_active_delegate={has_active_delegate}",
         vtxos.len()

@@ -14,7 +14,8 @@ use rand::rngs::OsRng;
 
 use cosigner_proto::{
     ApplyDelegateSigsWire, ArkTxEntryWire, CommitmentWire, ContractPairingWire, GuestCommand,
-    GuestResponse, SendVtxoStep1Wire, SignStep1Wire, SignStep2Wire, SnapshotState, VtxoInputWire,
+    GuestResponse, SendVtxoStep1Wire, SignStep1Wire, SignStep2Wire, SnapshotState, TreeTxChunkWire,
+    VtxoInputWire,
 };
 
 use ark::client::batch::{DelegateSettleSession, PersistedDelegate};
@@ -50,6 +51,10 @@ struct Policy {
     /// Set ONLY for a `{service, cosigner}` pairing actor: the guest then rebuilds + binds the
     /// cooperative-leaf sighash itself in `sign_step1` (Plan A 1C). `None` for a normal wallet.
     contract_pairing: Option<crate::conditioning::ContractPairing>,
+    /// The wallet's contract registry as OPAQUE host JSON (the guest never parses it — it only
+    /// stores + returns it so the seal is the single source of the public projection). Plan A
+    /// Phase 2: this replaces the host `policies` sled tree. Empty string ⇒ no contracts.
+    contracts_json: String,
 }
 
 /// In-flight FROST ceremony state (cleared between rounds).
@@ -68,6 +73,16 @@ struct Ceremony {
     full_transaction: Vec<u8>,
 }
 
+/// In-flight GUEST-driven boarding settle, held across the commitment-FROST pause (Plan A): the
+/// boarding session + tree-signer + the boarding amount for the resulting VTXO. The event stream is
+/// dropped at the pause (Step3 finalizes optimistically), so `stream` stays `None` in practice.
+pub struct BoardingSettleInFlight {
+    pub session: ark::client::batch::SettleSession,
+    pub signer: ark::client::batch::BoardingTreeSigner,
+    pub stream: Option<crate::grpc::ServerStream>,
+    pub amount_sats: u64,
+}
+
 pub struct GuestState {
     policy: Option<Policy>,
     ceremony: Ceremony,
@@ -76,6 +91,13 @@ pub struct GuestState {
     send_session: Option<(SendSession, u32)>,
     /// A `ReadyToSettle` delegate session the guest can drive autonomously (auto-settle).
     delegate_session: Option<DelegateSettleSession>,
+    /// In-flight boarding tree-signer (Plan A Phase 2): holds the secret per-node nonces between
+    /// `BoardingGenNonces` and `BoardingTreeSign` while the host drives the boarding batch.
+    boarding_signer: Option<ark::client::batch::BoardingTreeSigner>,
+    /// In-flight GUEST-driven boarding settle: the session + tree-signer + open ASP event stream +
+    /// intent id, held across the BoardingSettleStep1→2→3 commitment-FROST pause. Transient (never
+    /// snapshotted — in-flight batch state must not persist).
+    boarding_settle: Option<BoardingSettleInFlight>,
     /// The Ark cosigner (MuSig2) secret, hex — used by `generate_delegate` for tree signing.
     /// Installed via [`GuestCommand::InstallPolicy`]; never leaves the guest.
     ark_cosigner_secret_hex: Option<String>,
@@ -93,6 +115,8 @@ impl GuestState {
             ceremony: Ceremony::default(),
             send_session: None,
             delegate_session: None,
+            boarding_signer: None,
+            boarding_settle: None,
             ark_cosigner_secret_hex: None,
             vtxos: Vec::new(),
             history: Vec::new(),
@@ -114,6 +138,7 @@ impl GuestState {
                 .map(|id| hex::encode(id.serialize())),
             ark_cosigner_secret_hex: self.ark_cosigner_secret_hex.clone(),
             contract_pairing: policy.contract_pairing.as_ref().map(pairing_to_wire),
+            contracts_json: policy.contracts_json.clone(),
             vtxos: self.vtxos.clone(),
             history: self.history.clone(),
             // Persist a ReadyToSettle delegate (to_persisted errors for other phases → None),
@@ -145,6 +170,7 @@ impl GuestState {
             public_key_package,
             user_signing_identifier,
             contract_pairing: snap.contract_pairing.map(pairing_from_wire).transpose()?,
+            contracts_json: snap.contracts_json,
         });
         self.ark_cosigner_secret_hex = snap.ark_cosigner_secret_hex;
         self.vtxos = snap.vtxos;
@@ -190,6 +216,14 @@ impl GuestState {
     /// The installed Ark cosigner secret (hex), if any.
     pub fn ark_cosigner_secret_hex(&self) -> Option<&str> {
         self.ark_cosigner_secret_hex.as_deref()
+    }
+
+    pub fn take_boarding_settle(&mut self) -> Option<BoardingSettleInFlight> {
+        self.boarding_settle.take()
+    }
+
+    pub fn set_boarding_settle(&mut self, b: BoardingSettleInFlight) {
+        self.boarding_settle = Some(b);
     }
 
     /// Access the installed delegate session (the guest drives it in SettleDelegate).
@@ -296,6 +330,7 @@ impl GuestState {
                 user_signing_identifier_hex,
                 server_dkg_secret_hex,
                 contract_pairing,
+                contracts_json,
             } => self.install_policy(
                 group_key,
                 &key_package_json,
@@ -303,7 +338,16 @@ impl GuestState {
                 user_signing_identifier_hex.as_deref(),
                 server_dkg_secret_hex,
                 contract_pairing,
+                contracts_json,
             ),
+            GuestCommand::SetContracts { contracts_json } => match self.policy.as_mut() {
+                Some(p) => {
+                    p.contracts_json = contracts_json;
+                    return GuestResponse::PolicyInstalled;
+                }
+                None => return GuestResponse::Error("no policy installed".into()),
+            },
+            GuestCommand::GetPublicPolicy => return self.public_policy(),
             GuestCommand::ContractRefresh {
                 receiver_id_hex,
                 receiver_partial_point,
@@ -318,6 +362,17 @@ impl GuestState {
                 min_signers as usize,
             ),
             GuestCommand::ApplyDelegateSigs(req) => self.apply_delegate_sigs(req),
+            GuestCommand::GetArkCosignerPubkey => self.get_ark_cosigner_pubkey(),
+            GuestCommand::BoardingGenNonces {
+                tree_tx_chunks,
+                commitment_psbt_b64,
+                batch_id: _,
+            } => self.boarding_gen_nonces(tree_tx_chunks, &commitment_psbt_b64),
+            GuestCommand::BoardingTreeSign {
+                pending_nonces,
+                batch_expiry,
+                forfeit_pk_hex,
+            } => self.boarding_tree_sign(pending_nonces, batch_expiry, &forfeit_pk_hex),
             GuestCommand::SetVtxos { vtxos } => {
                 self.vtxos = vtxos;
                 return GuestResponse::VtxosSet;
@@ -362,7 +417,10 @@ impl GuestState {
             GuestCommand::FrostSignStep1(_)
             | GuestCommand::FrostSignStep2(_)
             | GuestCommand::SettleDelegate { .. }
-            | GuestCommand::GenerateDelegate(_) => {
+            | GuestCommand::GenerateDelegate(_)
+            | GuestCommand::BoardingSettleStep1 { .. }
+            | GuestCommand::BoardingSettleStep2 { .. }
+            | GuestCommand::BoardingSettleStep3 { .. } => {
                 return GuestResponse::Error(
                     "async commands are routed through handle(), not handle_command".into(),
                 )
@@ -423,6 +481,7 @@ impl GuestState {
         user_signing_identifier_hex: Option<&str>,
         server_dkg_secret_hex: Option<String>,
         contract_pairing: Option<ContractPairingWire>,
+        contracts_json: String,
     ) -> Result<GuestResponse, String> {
         let key_package =
             KeyPackage::from_json(key_package_json).map_err(|e| format!("bad key package: {e}"))?;
@@ -438,9 +497,86 @@ impl GuestState {
             public_key_package,
             user_signing_identifier,
             contract_pairing: contract_pairing.map(pairing_from_wire).transpose()?,
+            contracts_json,
         });
         self.ark_cosigner_secret_hex = server_dkg_secret_hex;
         Ok(GuestResponse::PolicyInstalled)
+    }
+
+    /// Return the PUBLIC policy projection the host loads into its `policy_state` after restoring a
+    /// cold-spawned guest (Plan A Phase 2: replaces the host `policies` sled tree).
+    fn public_policy(&self) -> GuestResponse {
+        match self.policy.as_ref() {
+            Some(p) => GuestResponse::PublicPolicy {
+                group_key: p.group_key.clone(),
+                public_key_package_json: p.public_key_package.to_json(),
+                user_signing_identifier_hex: p
+                    .user_signing_identifier
+                    .as_ref()
+                    .map(|id| hex::encode(id.serialize())),
+                contract_pairing: p.contract_pairing.as_ref().map(pairing_to_wire),
+                contracts_json: p.contracts_json.clone(),
+            },
+            None => GuestResponse::Error("no policy installed".into()),
+        }
+    }
+
+    /// Return the Ark cosigner MuSig2 pubkey derived from the in-guest secret (for the host's
+    /// boarding intent), without the secret leaving the guest.
+    fn get_ark_cosigner_pubkey(&self) -> Result<GuestResponse, String> {
+        let secret = self
+            .ark_cosigner_secret_hex
+            .as_deref()
+            .ok_or("no Ark cosigner secret installed")?;
+        let signer = ark::client::batch::BoardingTreeSigner::new(secret)?;
+        Ok(GuestResponse::ArkCosignerPubkey {
+            pubkey_hex: signer.cosigner_pubkey_hex(),
+        })
+    }
+
+    /// Boarding-settle tree-signing step 1 (Plan A Phase 2): build the tx graph from the host's
+    /// (public) chunks, generate the secret per-node nonces with the in-guest cosigner key, and
+    /// return the public nonce points. The secret nonces stay in the guest for `boarding_tree_sign`.
+    fn boarding_gen_nonces(
+        &mut self,
+        chunks: Vec<TreeTxChunkWire>,
+        commitment_psbt_b64: &str,
+    ) -> Result<GuestResponse, String> {
+        let secret = self
+            .ark_cosigner_secret_hex
+            .clone()
+            .ok_or("no Ark cosigner secret installed")?;
+        let mut signer = ark::client::batch::BoardingTreeSigner::new(&secret)?;
+        let chunk_tuples: Vec<(String, String, Vec<(u32, String)>)> = chunks
+            .into_iter()
+            .map(|c| (c.txid, c.psbt_b64, c.children))
+            .collect();
+        let (cosigner_pk_hex, nonce_map) = signer.gen_nonces(&chunk_tuples, commitment_psbt_b64)?;
+        self.boarding_signer = Some(signer);
+        Ok(GuestResponse::BoardingNonces {
+            cosigner_pk_hex,
+            nonce_map,
+        })
+    }
+
+    /// Boarding-settle tree-signing step 2: MuSig2-sign every tree tx with the in-guest cosigner
+    /// key + the nonces held since step 1, then drop the session.
+    fn boarding_tree_sign(
+        &mut self,
+        pending_nonces: Vec<(String, Vec<(String, String)>)>,
+        batch_expiry: u32,
+        forfeit_pk_hex: &str,
+    ) -> Result<GuestResponse, String> {
+        let mut signer = self
+            .boarding_signer
+            .take()
+            .ok_or("no boarding signer (call BoardingGenNonces first)")?;
+        let (cosigner_pk_hex, sig_map) =
+            signer.sign(&pending_nonces, batch_expiry, forfeit_pk_hex)?;
+        Ok(GuestResponse::BoardingTreeSigs {
+            cosigner_pk_hex,
+            sig_map,
+        })
     }
 
     /// The full transaction stored by `sign_step1`, for the step-2 contract-gate check.

@@ -58,6 +58,39 @@ impl Guest for Component {
             Ok(GuestCommand::SettleDelegate { asp_url }) => {
                 wstd::runtime::block_on(async move { settle_delegate(&asp_url).await })
             }
+            Ok(GuestCommand::BoardingSettleStep1 {
+                owner_pk_hex,
+                signer_pubkey,
+                forfeit_pubkey,
+                boarding_address,
+                boarding_txid,
+                boarding_vout,
+                boarding_amount_sats,
+                exit_delay,
+                network,
+            }) => boarding_settle_step1(
+                &owner_pk_hex,
+                &signer_pubkey,
+                &forfeit_pubkey,
+                &boarding_address,
+                &boarding_txid,
+                boarding_vout,
+                boarding_amount_sats,
+                exit_delay,
+                &network,
+            ),
+            Ok(GuestCommand::BoardingSettleStep2 {
+                asp_url,
+                intent_signatures,
+            }) => wstd::runtime::block_on(async move {
+                boarding_settle_step2(&asp_url, intent_signatures).await
+            }),
+            Ok(GuestCommand::BoardingSettleStep3 {
+                asp_url,
+                commitment_signatures,
+            }) => wstd::runtime::block_on(async move {
+                boarding_settle_step3(&asp_url, commitment_signatures).await
+            }),
             Ok(cmd) => STATE.with(|s| s.borrow_mut().handle_command(cmd)),
             Err(e) => GuestResponse::Error(format!("undecodable command: {e}")),
         };
@@ -245,6 +278,7 @@ async fn settle_delegate(asp_url: &str) -> GuestResponse {
         Err(e) => return GuestResponse::Error(format!("RegisterIntent: {e}")),
     };
     let intent_id = reg.intent_id;
+    eprintln!("settle_delegate: RegisterIntent ok intent_id={intent_id} topics={topics:?}");
 
     let mut stream = match grpc::ServerStream::open(
         asp_url,
@@ -256,6 +290,7 @@ async fn settle_delegate(asp_url: &str) -> GuestResponse {
         Ok(s) => s,
         Err(e) => return GuestResponse::Error(format!("GetEventStream: {e}")),
     };
+    eprintln!("settle_delegate: event stream opened, waiting for batch");
 
     loop {
         let resp: GetEventStreamResponse = match stream.next().await {
@@ -403,6 +438,281 @@ async fn settle_delegate(asp_url: &str) -> GuestResponse {
                 return GuestResponse::Error(format!("batch failed: {}", e.reason))
             }
             // TreeNoncesAggregated, TreeSignature, Heartbeat, StreamStarted — no action.
+            _ => {}
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Boarding settle — fully GUEST-driven (Plan A). The guest owns the ASP event stream + MuSig2
+// tree-signing; the host only scans the boarding UTXO + relays the two FROST rounds. The open
+// stream + session are held in `GuestState.boarding_settle` across the commitment-FROST pause.
+// ---------------------------------------------------------------------------
+
+fn sigs_from_wire(wire: Vec<Vec<u8>>) -> Result<Vec<[u8; 64]>, String> {
+    wire.into_iter()
+        .map(|v| <[u8; 64]>::try_from(v.as_slice()).map_err(|_| "signature must be 64 bytes".to_string()))
+        .collect()
+}
+
+/// Step 1 (sync): build the boarding session + tree-signer from the host's (public) scan + ASP
+/// info, store it in flight, and return the intent-proof sighashes to FROST-sign.
+#[allow(clippy::too_many_arguments)]
+fn boarding_settle_step1(
+    owner_pk_hex: &str,
+    signer_pubkey: &str,
+    forfeit_pubkey: &str,
+    boarding_address: &str,
+    boarding_txid: &str,
+    boarding_vout: u32,
+    boarding_amount_sats: u64,
+    exit_delay: u32,
+    network: &str,
+) -> GuestResponse {
+    let secret = match STATE.with(|s| s.borrow().ark_cosigner_secret_hex().map(str::to_string)) {
+        Some(x) => x,
+        None => return GuestResponse::Error("no Ark cosigner secret installed".into()),
+    };
+    let signer = match ark::client::batch::BoardingTreeSigner::new(&secret) {
+        Ok(s) => s,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let cosigner_pk_hex = signer.cosigner_pubkey_hex();
+    let (session, sighashes) = match ark::client::batch::SettleSession::new_boarding(
+        owner_pk_hex,
+        signer_pubkey,
+        forfeit_pubkey,
+        boarding_address,
+        boarding_txid,
+        boarding_vout,
+        boarding_amount_sats,
+        exit_delay,
+        network,
+        &cosigner_pk_hex,
+    ) {
+        Ok(v) => v,
+        Err(e) => return GuestResponse::Error(format!("new_boarding: {e}")),
+    };
+    STATE.with(|s| {
+        s.borrow_mut().set_boarding_settle(state::BoardingSettleInFlight {
+            session,
+            signer,
+            stream: None,
+            amount_sats: boarding_amount_sats,
+        })
+    });
+    GuestResponse::BoardingSettleSighashes {
+        messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
+    }
+}
+
+/// Step 2 (async): insert the intent FROST sigs, RegisterIntent + open the event stream, drive the
+/// batch (tree-signing in-guest) to BatchFinalization, return the commitment sighashes (pause).
+async fn boarding_settle_step2(asp_url: &str, intent_sigs_wire: Vec<Vec<u8>>) -> GuestResponse {
+    use ark::client::proto::{
+        GetEventStreamRequest, Intent, RegisterIntentRequest, RegisterIntentResponse,
+    };
+    let intent_sigs = match sigs_from_wire(intent_sigs_wire) {
+        Ok(s) => s,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let mut inflight = match STATE.with(|s| s.borrow_mut().take_boarding_settle()) {
+        Some(b) => b,
+        None => return GuestResponse::Error("no boarding settle in flight".into()),
+    };
+    if let Err(e) = inflight.session.insert_intent_signatures(intent_sigs) {
+        return GuestResponse::Error(e);
+    }
+    let (proof, message, topics) = match inflight.session.register_payload() {
+        Ok(v) => v,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let reg: RegisterIntentResponse = match grpc::unary(
+        asp_url,
+        "/ark.v1.ArkService/RegisterIntent",
+        &RegisterIntentRequest {
+            intent: Some(Intent { proof, message }),
+        },
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return GuestResponse::Error(format!("RegisterIntent: {e}")),
+    };
+    let intent_id = reg.intent_id;
+    let mut stream = match grpc::ServerStream::open(
+        asp_url,
+        "/ark.v1.ArkService/GetEventStream",
+        &GetEventStreamRequest { topics },
+    )
+    .await
+    {
+        Ok(s) => s,
+        Err(e) => return GuestResponse::Error(format!("GetEventStream: {e}")),
+    };
+    match drive_boarding(
+        &mut inflight.session,
+        &mut inflight.signer,
+        &mut stream,
+        &intent_id,
+        asp_url,
+    )
+    .await
+    {
+        Ok(sighashes) => {
+            // Drop the event stream before returning: holding an open wasi:io stream resource across
+            // the block_on teardown stalls the guest call from completing. Step3 finalizes
+            // optimistically (no stream read), so the stream isn't needed past the pause.
+            drop(stream);
+            inflight.stream = None;
+            STATE.with(|s| s.borrow_mut().set_boarding_settle(inflight));
+            GuestResponse::BoardingSettleSighashes {
+                messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
+            }
+        }
+        Err(e) => GuestResponse::Error(e),
+    }
+}
+
+/// Step 3 (async): insert the commitment FROST sigs, submit the signed commitment, and drive to
+/// BatchFinalized — returning the new VTXO.
+async fn boarding_settle_step3(asp_url: &str, commitment_sigs_wire: Vec<Vec<u8>>) -> GuestResponse {
+    use ark::client::proto::{SubmitSignedForfeitTxsRequest, SubmitSignedForfeitTxsResponse};
+    let commitment_sigs = match sigs_from_wire(commitment_sigs_wire) {
+        Ok(s) => s,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let mut inflight = match STATE.with(|s| s.borrow_mut().take_boarding_settle()) {
+        Some(b) => b,
+        None => return GuestResponse::Error("no boarding settle in flight".into()),
+    };
+    // Keep the event stream HELD (its open connection stops the ASP dropping us during the pause),
+    // but we don't READ it again: finalize optimistically instead of resuming a mid-batch stream
+    // across the commitment-FROST pause (which wstd's no-op-waker reactor can't reliably do).
+    let _stream = inflight.stream.take();
+    let signed_commitment_b64 = match inflight.session.insert_commitment_signatures(commitment_sigs) {
+        Ok(v) => v,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let _: SubmitSignedForfeitTxsResponse = match grpc::unary(
+        asp_url,
+        "/ark.v1.ArkService/SubmitSignedForfeitTxs",
+        &SubmitSignedForfeitTxsRequest {
+            signed_forfeit_txs: vec![],
+            signed_commitment_tx: signed_commitment_b64,
+        },
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return GuestResponse::Error(format!("SubmitSignedForfeitTxs: {e}")),
+    };
+    let (commitment_txid, vtxo) = match inflight.session.finalize_optimistic() {
+        Ok(v) => v,
+        Err(e) => return GuestResponse::Error(e),
+    };
+    let (vtxo_txid, vtxo_vout) = vtxo.unwrap_or_else(|| (commitment_txid.clone(), 0));
+    GuestResponse::BoardingSettleSubmitted {
+        commitment_txid,
+        vtxo_txid,
+        vtxo_vout,
+        amount_sats: inflight.amount_sats,
+    }
+}
+
+/// Drive the boarding batch event stream: confirm, tree-sign (in-guest), and stop at either
+/// BatchFinalization, returning the commitment-tx sighashes the client must FROST-sign (the pause).
+/// Mirrors `settle_delegate` but uses the boarding `SettleSession` step methods + the in-guest
+/// `BoardingTreeSigner`. The batch reaching BatchFinalized here (before the commitment FROST) is an
+/// error — Step3 finalizes optimistically after submitting the signed commitment.
+async fn drive_boarding(
+    session: &mut ark::client::batch::SettleSession,
+    signer: &mut ark::client::batch::BoardingTreeSigner,
+    stream: &mut grpc::ServerStream,
+    intent_id: &str,
+    asp_url: &str,
+) -> Result<Vec<[u8; 32]>, String> {
+    use ark::client::batch::SettleAction;
+    use ark::client::proto::{
+        get_event_stream_response::Event, ConfirmRegistrationRequest, ConfirmRegistrationResponse,
+        GetEventStreamResponse, SubmitTreeNoncesRequest, SubmitTreeNoncesResponse,
+        SubmitTreeSignaturesRequest, SubmitTreeSignaturesResponse,
+    };
+    loop {
+        let resp: GetEventStreamResponse = match stream.next().await {
+            Ok(Some(r)) => r,
+            Ok(None) => return Err("event stream ended unexpectedly".into()),
+            Err(e) => return Err(format!("event stream: {e}")),
+        };
+        let Some(event) = resp.event else { continue };
+        match event {
+            Event::BatchStarted(e) => {
+                session.on_batch_started(e)?;
+                let _: ConfirmRegistrationResponse = grpc::unary(
+                    asp_url,
+                    "/ark.v1.ArkService/ConfirmRegistration",
+                    &ConfirmRegistrationRequest {
+                        intent_id: intent_id.to_string(),
+                    },
+                )
+                .await
+                .map_err(|e| format!("ConfirmRegistration: {e}"))?;
+            }
+            Event::TreeTx(e) => {
+                session.handle_tree_tx(e)?;
+            }
+            Event::TreeSigningStarted(e) => {
+                if let SettleAction::NeedTreeNonces {
+                    tree_tx_chunks,
+                    commitment_psbt_b64,
+                } = session.on_tree_signing_started(e)?
+                {
+                    let (pubkey, nonce_map) =
+                        signer.gen_nonces(&tree_tx_chunks, &commitment_psbt_b64)?;
+                    let _: SubmitTreeNoncesResponse = grpc::unary(
+                        asp_url,
+                        "/ark.v1.ArkService/SubmitTreeNonces",
+                        &SubmitTreeNoncesRequest {
+                            batch_id: session.batch_id(),
+                            pubkey,
+                            tree_nonces: nonce_map.into_iter().collect(),
+                        },
+                    )
+                    .await
+                    .map_err(|e| format!("SubmitTreeNonces: {e}"))?;
+                }
+            }
+            Event::TreeNonces(e) => {
+                if let Some(SettleAction::NeedTreeSign {
+                    pending_nonces,
+                    batch_expiry,
+                    forfeit_pk_hex,
+                }) = session.on_tree_nonces(e)?
+                {
+                    let (pubkey, sig_map) =
+                        signer.sign(&pending_nonces, batch_expiry, &forfeit_pk_hex)?;
+                    let _: SubmitTreeSignaturesResponse = grpc::unary(
+                        asp_url,
+                        "/ark.v1.ArkService/SubmitTreeSignatures",
+                        &SubmitTreeSignaturesRequest {
+                            batch_id: session.batch_id(),
+                            pubkey,
+                            tree_signatures: sig_map.into_iter().collect(),
+                        },
+                    )
+                    .await
+                    .map_err(|e| format!("SubmitTreeSignatures: {e}"))?;
+                }
+            }
+            Event::BatchFinalization(e) => {
+                return session.handle_batch_finalization(e);
+            }
+            Event::BatchFinalized(_) => {
+                return Err("batch finalized before commitment signing".into());
+            }
+            Event::BatchFailed(e) => {
+                return Err(format!("batch failed: {}", e.reason));
+            }
             _ => {}
         }
     }

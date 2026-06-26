@@ -138,15 +138,17 @@ pub fn ensure_policy_loaded(
 fn try_load_policy(
     state: &mut CosignerState,
     persistence: &dyn KvStore,
-    secret_store: &dyn SecretStore,
+    // Plan A Phase 2: no longer reads `dkg-secret` (kept for signature symmetry with the loader API).
+    _secret_store: &dyn SecretStore,
     key: &str,
 ) -> Result<bool, Status> {
     if let Ok(Some(json_str)) = persistence.get("policies", key) {
         match serde_json::from_str::<PolicyState>(&json_str) {
-            Ok(mut ps) => {
-                if let Ok(Some(secret)) = secret_store.get_secret(&format!("dkg-secret.{key}")) {
-                    ps.server_dkg_secret_hex = Some(secret);
-                }
+            Ok(ps) => {
+                // Plan A Phase 2: the `dkg-secret` is NOT loaded from the host SecretStore anymore —
+                // `server_dkg_secret_hex` stays `None` host-side; the guest holds it in its seal and
+                // restores it on spawn. (The old `InstallPolicy` plaintext fallback is superseded by
+                // restore-from-seal.)
                 state.policy_state = Some(ps);
                 tracing::info!("[{key}] Loaded policy from persistence");
                 return Ok(true);
@@ -189,37 +191,6 @@ pub fn get_user_xonly_pubkey(
     }
 }
 
-/// Return `(xonly_owner_pk_hex, server_dkg_secret_hex)` from the user's policy.
-pub fn get_user_ark_keys(
-    state: &mut CosignerState,
-    persistence: &dyn KvStore,
-    secret_store: &dyn SecretStore,
-    user_id_hex: &str,
-) -> Result<(String, String), Status> {
-    ensure_policy_loaded(state, persistence, secret_store, user_id_hex)?;
-    let ps = state
-        .policy_state
-        .as_ref()
-        .ok_or_else(|| Status::not_found("no policy state"))?;
-    let vk_hex = crate::cosigner::handlers::parsers::extract_verifying_key(
-        &ps.normal_policy.public_key_package_json,
-    )?;
-    let xonly = if vk_hex.len() == 66 {
-        vk_hex[2..].to_string()
-    } else if vk_hex.len() == 64 {
-        vk_hex
-    } else {
-        return Err(Status::internal(format!(
-            "unexpected verifying key length: {}",
-            vk_hex.len()
-        )));
-    };
-    let dkg_secret = ps
-        .server_dkg_secret_hex
-        .clone()
-        .ok_or_else(|| Status::internal("missing server_dkg_secret_hex"))?;
-    Ok((xonly, dkg_secret))
-}
 
 /// Resolve an addressing id (a member's verifying share) to its GROUP KEY
 /// (`cosigner_id`) via `policy_owner_idx`, so all of a group's per-user data is keyed
@@ -383,6 +354,36 @@ pub fn delete_user_delegate(persistence: &dyn KvStore, user_id_hex: &str) {
     let user_id_hex = &group_key_of(persistence, user_id_hex);
     if let Err(e) = persistence.delete("delegate_sessions", user_id_hex) {
         tracing::warn!("delete delegate_sessions/{user_id_hex} failed: {e}");
+    }
+}
+
+/// Plan A Phase 2: persist the guest-delegate auto-settle threshold (Unix secs) — a SECRET-FREE
+/// marker so a stored delegate survives a runtime restart. The delegate itself lives in the guest's
+/// sealed snapshot; this is only the host's "fire at / has a pending delegate" record (replacing the
+/// legacy `delegate_sessions` row, which carried no secret either but needed the dkg-secret to rehydrate).
+pub fn save_guest_delegate_threshold(persistence: &dyn KvStore, user_id_hex: &str, threshold: i64) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    if let Err(e) =
+        persistence.put("guest_delegate_thresholds", user_id_hex, &threshold.to_string())
+    {
+        tracing::warn!("persist guest_delegate_thresholds/{user_id_hex} failed: {e}");
+    }
+}
+
+/// Read back the guest-delegate threshold marker. `None` on miss / parse error.
+pub fn load_guest_delegate_threshold(persistence: &dyn KvStore, user_id_hex: &str) -> Option<i64> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    match persistence.get("guest_delegate_thresholds", user_id_hex) {
+        Ok(Some(s)) => s.parse().ok(),
+        _ => None,
+    }
+}
+
+/// Drop the guest-delegate threshold marker (after the delegate auto-settles or is invalidated).
+pub fn delete_guest_delegate_threshold(persistence: &dyn KvStore, user_id_hex: &str) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    if let Err(e) = persistence.delete("guest_delegate_thresholds", user_id_hex) {
+        tracing::warn!("delete guest_delegate_thresholds/{user_id_hex} failed: {e}");
     }
 }
 

@@ -229,10 +229,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let candidates = match persistence_clone.get_all("delegate_sessions") {
+                // Plan A Phase 2: spawn + tick every actor with a pending guest-delegate threshold
+                // marker (secret-free), so a stored delegate auto-settles even after a runtime
+                // restart. (Replaces the legacy `delegate_sessions` scan.)
+                let candidates = match persistence_clone.get_all("guest_delegate_thresholds") {
                     Ok(rows) => rows,
                     Err(e) => {
-                        tracing::warn!("auto-settle tick: get_all delegate_sessions failed: {e}");
+                        tracing::warn!(
+                            "auto-settle tick: get_all guest_delegate_thresholds failed: {e}"
+                        );
                         continue;
                     }
                 };
@@ -240,7 +245,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 tracing::debug!(
-                    "auto-settle tick: {} user(s) with stored delegate",
+                    "auto-settle tick: {} user(s) with stored guest-delegate marker",
                     candidates.len()
                 );
                 for (user_id, _value) in candidates {
