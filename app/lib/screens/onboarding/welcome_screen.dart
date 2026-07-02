@@ -54,24 +54,10 @@ class WelcomeScreen extends StatelessWidget {
               ElevatedButton(
                 key: const Key('welcomeCreateBtn'),
                 onPressed: () {
-                  context.push('/onboarding/signer-selection');
+                  // Software signer is the only path (hardware signer dropped).
+                  context.push('/onboarding/pin', extra: {'isRestore': false});
                 },
                 child: const Text('Create MPC Wallet'),
-              ),
-              const SizedBox(height: 16),
-              TextButton(
-                key: const Key('welcomeRestoreBtn'),
-                onPressed: () {
-                  context.push('/onboarding/signer-selection',
-                      extra: {'isRestore': true});
-                },
-                child: Text(
-                  'Restore existing wallet',
-                  style: GoogleFonts.inter(
-                    color: Colors.white54,
-                    fontSize: 14,
-                  ),
-                ),
               ),
             ],
           ),

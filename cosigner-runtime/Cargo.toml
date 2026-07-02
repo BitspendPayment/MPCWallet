@@ -13,6 +13,11 @@ default = []
 [dependencies]
 # Sandboxes the untrusted contract WASM (component-model, no WASI). The cosigner itself is native.
 wasmtime = { version = "45", features = ["component-model"] }
+# Composes a template + a synthesized config provider into one contract component. Pinned to 0.248
+# to match wasmtime 45's transitive wasm-encoder/wasmparser (no version-resolution conflict).
+wasm-compose = "=0.248.0"
+# Temp files for the (filesystem-based) wasm-compose API.
+tempfile = "3"
 http = "1"
 tonic = "0.12"
 tonic-web = "0.12"
@@ -56,13 +61,15 @@ reqwest = { version = "0.12", features = ["json"] }
 jsonwebtoken = "9"
 
 # Streaming
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", features = ["sync"] }
 
 # Electrum (raw TCP)
 tokio-util = { version = "0.7", features = ["codec"] }
 
 # Crypto
 sha2 = "0.10"
+# Session-token signing: the cosigner's own Ed25519 keypair (32-byte seed from env).
+ed25519-dalek = "2"
 # Zeroize secret key material on drop (multi-tenant: keys share one address space natively).
 zeroize = "1"
 threshold = { path = "../crates/threshold", features = ["std"] }
@@ -76,6 +83,13 @@ axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 
+# WebAuthn ceremony server (register/assert). Standard passkey flow — ceremony state kept in-memory
+# (a DashMap), so the `danger-allow-state-serialisation` feature is NOT enabled; only the resulting
+# `Passkey` credential is persisted (serde-serializable by default).
+webauthn-rs = "0.5.5"
+# UUIDv5 for the deterministic per-user WebAuthn handle (same `Uuid` type webauthn-rs re-exports).
+uuid = { version = "1", features = ["v5"] }
+
 # Misc
 rand = "0.8"
 base64 = "0.22"
@@ -87,6 +101,8 @@ serde_json = "1"
 tempfile = "3"
 hex = "0.4"
 tonic = "0.12"
+# Headless soft authenticator to drive the passkey create/get in the webauthn flow test (no device).
+webauthn-authenticator-rs = { version = "0.5.5", features = ["softpasskey"] }
 
 [build-dependencies]
 tonic-build = "0.12"

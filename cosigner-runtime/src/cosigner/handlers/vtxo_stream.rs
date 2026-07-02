@@ -84,17 +84,16 @@ pub fn apply_stream_update(
         }
         // All VTXOs spent — any guest-delegate marker (no host-side coverage info) is now stale.
         if state.guest_delegate_threshold.take().is_some() {
-            super::helpers::delete_guest_delegate_threshold(shared.persistence.as_ref(), user_id_hex);
+            super::helpers::delete_guest_delegate_threshold(
+                shared.persistence.as_ref(),
+                user_id_hex,
+            );
         }
         save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
         return Ok(Vec::new());
     }
 
-    let owner_pk = get_user_xonly_pubkey(
-        state,
-        shared.persistence.as_ref(),
-        user_id_hex,
-    )?;
+    let owner_pk = get_user_xonly_pubkey(state, shared.persistence.as_ref(), user_id_hex)?;
     let network = match ark::client::parse_network(&info.network) {
         Ok(n) => n,
         Err(e) => return Err(Status::internal(e)),
@@ -167,7 +166,10 @@ pub fn apply_stream_update(
         super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
         // The guest-delegate marker has no host-side coverage info; a changed VTXO set makes it stale.
         if state.guest_delegate_threshold.take().is_some() {
-            super::helpers::delete_guest_delegate_threshold(shared.persistence.as_ref(), user_id_hex);
+            super::helpers::delete_guest_delegate_threshold(
+                shared.persistence.as_ref(),
+                user_id_hex,
+            );
         }
     }
 

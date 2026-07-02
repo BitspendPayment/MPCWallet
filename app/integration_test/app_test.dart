@@ -1,12 +1,8 @@
-// One end-to-end testWidgets covering the full user lifecycle:
-//   onboarding (DKG) → on-chain send → Ark board → recovery (re-DKG from blob).
-//
-// Recovery reuses the same `InMemoryBackupStore` that onboarding wrote into,
-// so the restore flow downloads main flow's blob — no second fresh DKG.
+// One end-to-end testWidgets covering the user lifecycle:
+//   onboarding (DKG) → on-chain send → Ark board/send/receive.
 
 // ignore_for_file: avoid_print
 
-import 'package:app/services/backup_store.dart';
 import 'package:app/services/mpc_service.dart';
 import 'package:app/services/push_service.dart';
 import 'package:flutter/material.dart';
@@ -24,17 +20,16 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'full flow: onboarding → send → ark → recovery',
+    'full flow: onboarding → send → ark',
     (tester) async {
-      const password = 'TestPassword!2026';
-      final store = InMemoryBackupStore();
+      const pin = '123456';
       final btc = RegtestHelper();
       await btc.ensureWalletLoaded('default');
 
       // ── Onboarding ───────────────────────────────────────────────────────
       await resetAppState();
-      await bootApp(tester, backupStore: store);
-      await Flows.completeOnboarding(tester, password: password);
+      await bootApp(tester);
+      await Flows.completeOnboarding(tester, pin: pin);
       await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
       expect(find.byKey(const Key('homeSendBtn')), findsOneWidget);
 
@@ -42,8 +37,6 @@ void main() {
       final originalAddress =
           Provider.of<MpcService>(ctxOnboard, listen: false).receiveAddress;
       expect(originalAddress, isNotNull);
-      expect(await store.download(), isNotNull,
-          reason: 'DKG should have uploaded an encrypted backup');
 
       // ── On-chain send ────────────────────────────────────────────────────
       await HomePage.tapReceive(tester);
@@ -198,38 +191,6 @@ void main() {
                 'MpcClient.restoreState(), or the FROST sign round of '
                 'settleDelegate(storeOnly:true).');
       }
-
-      // ── Recovery: wipe, re-restore from the blob `store` already holds ──
-      await tearDownTree(tester);
-      await resetAppState();
-      await bootApp(tester, backupStore: store);
-
-      await pumpUntilFound(tester, find.byKey(const Key('welcomeRestoreBtn')));
-      await WelcomePage.tapRestore(tester);
-      await tester.pumpAndSettle();
-      await SignerSelectionPage.pickSoftware(tester);
-      await SignerSelectionPage.tapContinue(tester);
-      await tester.pumpAndSettle();
-      await GoogleSignInPage.signIn(tester);
-      await tester.pumpAndSettle();
-
-      await pumpUntilFound(tester, find.byKey(const Key('restoreContinueBtn')));
-      await RestorePage.enterPassword(tester, password);
-      await RestorePage.tapContinue(tester);
-
-      await pumpUntilFound(tester, find.byKey(const Key('serverPresetRegtest')));
-      await ServerConnectPage.pickRegtest(tester);
-      await tester.pumpAndSettle();
-      await DkgProgressPage.waitForReady(tester,
-          timeout: const Duration(minutes: 2));
-      await WalletReadyPage.tapGoToWallet(tester);
-
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-      final ctxPost = tester.element(find.byKey(const Key('homeSendBtn')));
-      final svcPost = Provider.of<MpcService>(ctxPost, listen: false);
-      expect(svcPost.dkgComplete, isTrue);
-      expect(svcPost.receiveAddress, equals(originalAddress),
-          reason: 'restored wallet should derive the same group verifying key');
     },
     timeout: const Timeout(Duration(minutes: 12)),
   );

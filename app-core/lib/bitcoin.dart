@@ -8,10 +8,27 @@ import 'package:app_core/client.dart';
 import 'package:convert/convert.dart';
 import 'package:app_core/persistence/wallet_store.dart';
 import 'package:app_core/coin_selection.dart';
+import 'package:app_core/electrum.dart';
 import 'package:app_core/fees.dart';
 import 'package:app_core/ark/ark.dart';
-import 'package:app_core/threshold/threshold.dart' as threshold; // Access bigIntToBytes
+import 'package:fixnum/fixnum.dart';
 import 'package:protocol/protocol.dart';
+
+/// A wallet on-chain transaction summary for the history UI (was the
+/// `TransactionSummary` proto message; on-chain history is now wallet-derived).
+class WalletTransaction {
+  final String txHash;
+  final int amountSats; // signed: + received, - sent
+  final int timestamp; // seconds; 0 if unknown/pending
+  final bool isPending;
+
+  const WalletTransaction({
+    required this.txHash,
+    required this.amountSats,
+    required this.timestamp,
+    required this.isPending,
+  });
+}
 
 /// Maps a server/ASP network string to bitcoin_base BitcoinNetwork.
 /// Throws on empty or unknown input — silently defaulting was a real bug
@@ -107,20 +124,29 @@ class MpcBitcoinWallet {
     return _address;
   }
 
-  List<TransactionSummary> _transactions = [];
-  List<TransactionSummary> get transactions => List.unmodifiable(_transactions);
+  List<WalletTransaction> _transactions = [];
+  List<WalletTransaction> get transactions => List.unmodifiable(_transactions);
 
   Future<BigInt> getBalance() async {
     final utxos = await store.getUtxos();
     return utxos.fold<BigInt>(BigInt.zero, (sum, u) => sum + u.utxo.value);
   }
 
+  /// The wallet's own Electrum client — all on-chain Bitcoin (UTXO scan,
+  /// broadcast, history) goes through here, never the cosigner.
+  final ElectrumClient electrum;
+
   MpcBitcoinWallet(this.client,
-      {this.networkName = 'regtest', String? storageId, bool useIdentity2 = false})
+      {this.networkName = 'regtest',
+      String? storageId,
+      bool useIdentity2 = false,
+      String electrumHost = '127.0.0.1',
+      int electrumPort = 50001})
       : store = WalletStore(
-            boxName: storageId ?? 'mpc_wallet_state_default',
-            network: parseBitcoinNetwork(networkName),
-        );
+          boxName: storageId ?? 'mpc_wallet_state_default',
+          network: parseBitcoinNetwork(networkName),
+        ),
+        electrum = ElectrumClient(electrumHost, electrumPort);
 
   Future<void> init() async {
     await store.init();
@@ -162,20 +188,21 @@ class MpcBitcoinWallet {
     }
   }
 
-  void _deriveAddress() {
-    final publicKeyPackage = client.getTweakedPublicKeyPackage(null);
-    if (publicKeyPackage == null) {
+  /// The wallet's single-key on-chain signer (the DKG dealer secret). On-chain
+  /// receive/scan/spend/broadcast are wallet-alone — the cosigner is never
+  /// involved. The FROST group key stays the Ark owner key (boarding + VTXO).
+  ECPrivate get _onchainKey {
+    final secretBytes = client.onchainSecretBytes;
+    if (secretBytes == null) {
       throw StateError("Wallet not initialized. Call init() first.");
     }
-    final publicKey = publicKeyPackage.verifyingKey.E;
+    return ECPrivate.fromBytes(secretBytes);
+  }
 
-    // Serialize point to compressed hex
-    final pointBytes = threshold.elemSerializeCompressed(publicKey);
-    final pointHex = hex.encode(pointBytes);
-
-    final ecPub = ECPublic.fromHex(pointHex);
-    _address = P2trAddress.fromProgram(
-        program: BytesUtils.toHexString(ecPub.toXOnly()));
+  void _deriveAddress() {
+    // The on-chain utxo address is the BIP-341 key-path taproot address of the
+    // single on-chain key (the dealer pubkey is the internal key, tweaked).
+    _address = _onchainKey.getPublic().toTaprootAddress();
   }
 
   /// Helper to generate address with custom HRP (e.g. 'bcrt' for Regtest)
@@ -318,7 +345,9 @@ class MpcBitcoinWallet {
     return UnsignedTransaction(txPointer, sighashes);
   }
 
-  /// Signs an unsigned transaction using the MPC client.
+  /// Signs an on-chain transaction with the wallet's single on-chain key
+  /// (BIP-340 key-path, taproot-tweaked). No cosigner round-trip — on-chain
+  /// UTXOs are single-key and signed by the wallet alone.
   Future<String> signTransaction(UnsignedTransaction unsigned) async {
     final txPointer = unsigned.btcTransaction;
     final sighashes = unsigned.sighashes;
@@ -327,34 +356,17 @@ class MpcBitcoinWallet {
       throw StateError("Sighash count mismatch");
     }
 
-    final fullTxHex = txPointer.serialize();
-    final fullTxBytes = hex.decode(fullTxHex);
-
-    // 4. Sign Asynchronously
+    final key = _onchainKey;
     final witnesses = <TxWitnessInput>[];
 
     for (int i = 0; i < txPointer.inputs.length; i++) {
-      final sighash = sighashes[i];
-      final sighashUint8 = Uint8List.fromList(sighash);
-
-      final signature = await client.sign(
-        sighashUint8,
-        fullTransaction: fullTxBytes,
-      );
-
-      final sigBytes = signature.serialize();
-
-      final sigHex =
-          sigBytes.map((e) => e.toRadixString(16).padLeft(2, '0')).join();
-
-      // Create Witness Input
-      // Assuming TxWitnessInput only needs the stack since BtcTransaction correlates by index
-      witnesses.add(TxWitnessInput(
-        stack: [sigHex],
-      ));
+      // Key-path taproot spend: tweak the internal key and Schnorr-sign the
+      // BIP-341 digest. `signBip340(tweak: true)` applies the taptweak so the
+      // signature verifies under the output key in the UTXO scriptPubKey.
+      final sigHex = key.signBip340(sighashes[i], tweak: true);
+      witnesses.add(TxWitnessInput(stack: [sigHex]));
     }
 
-    // 5. Reconstruct Transaction
     final signedTx = BtcTransaction(
       inputs: txPointer.inputs,
       outputs: txPointer.outputs,
@@ -365,66 +377,123 @@ class MpcBitcoinWallet {
     return signedTx.serialize();
   }
 
-  /// Syncs the wallet's UTXOs and History using the server.
+  /// Syncs the wallet's single-key UTXOs + history directly from electrum
+  /// (the cosigner is not involved in on-chain reads).
   Future<void> sync() async {
-    // 1. Fetch from Server
-    final utxoInfos = await client.fetchHistory();
+    final scriptHash = ElectrumClient.scriptHashForAddress(address);
+
+    final utxos = await electrum.listUnspentByScriptHash(scriptHash);
+
     try {
-      _transactions = await client.fetchRecentTransactions();
+      _transactions = await _loadRecentTransactions(scriptHash);
     } catch (e) {
       stderr.writeln('[WARN] bitcoin: error fetching recent transactions: $e');
     }
 
-    // 2. Convert to UtxoWithAddress
-    // Find P2TR type robustly
     final p2trType = BitcoinAddressType.values.firstWhere(
-        (e) => e
-            .toString()
-            .toLowerCase()
-            .contains('tr'), // matches p2tr or taproot
+        (e) => e.toString().toLowerCase().contains('tr'),
         orElse: () => BitcoinAddressType.values.last);
 
-    // TODO() : WARNING: This is critical, it helps avoid retweaking of Public Key
-    final publicKeyPackage = client.getPublicKeyPackage();
-    if (publicKeyPackage == null) {
-      throw StateError("Wallet not initialized. Call init() first.");
-    }
-    final publicKey = publicKeyPackage.verifyingKey.E;
+    // Single-key on-chain: ownerDetails carries the internal (untweaked) key so
+    // the builder computes the right key-path digest; signing tweaks it.
     final ownerDetails = UtxoAddressDetails(
-        publicKey: hex.encode(threshold.elemSerializeCompressed(publicKey)),
-        address: address);
+        publicKey: _onchainKey.getPublic().toHex(), address: address);
 
-    final newUtxos = utxoInfos.map((u) {
+    final newUtxos = utxos.map((u) {
       return UtxoWithAddress(
         utxo: BitcoinUtxo(
           txHash: u.txHash,
           vout: u.vout,
-          value: BigInt.parse(u.amount.toString()),
+          value: u.value,
           scriptType: p2trType,
         ),
         ownerDetails: ownerDetails,
       );
     }).toList();
 
-    // 3. Save to Store
     final deduped = <String, UtxoWithAddress>{};
     for (final utxo in newUtxos) {
       deduped['${utxo.utxo.txHash}:${utxo.utxo.vout}'] = utxo;
     }
-    final uniqueUtxos = deduped.values.toList();
-    await store.saveUtxos(uniqueUtxos);
+    await store.saveUtxos(deduped.values.toList());
   }
 
+  /// Best-effort on-chain history for the UI: net = (my outputs) − (my inputs)
+  /// per tx, with the block-header timestamp. Wrapped per-tx so a parse error
+  /// on one entry doesn't sink the sync.
+  Future<List<WalletTransaction>> _loadRecentTransactions(
+      String scriptHash) async {
+    final myScriptHex = address.toScriptPubKey().toHex();
+    final history = await electrum.getHistory(scriptHash);
+    final result = <WalletTransaction>[];
+    for (final item in history) {
+      try {
+        final tx = BtcTransaction.deserialize(
+            hex.decode(await electrum.getTransaction(item.txHash)));
+        BigInt received = BigInt.zero;
+        for (final o in tx.outputs) {
+          if (o.scriptPubKey.toHex() == myScriptHex) received += o.amount;
+        }
+        BigInt spent = BigInt.zero;
+        for (final i in tx.inputs) {
+          try {
+            final prev = BtcTransaction.deserialize(
+                hex.decode(await electrum.getTransaction(i.txId)));
+            final out = prev.outputs[i.txIndex];
+            if (out.scriptPubKey.toHex() == myScriptHex) spent += out.amount;
+          } catch (_) {/* prevout unavailable — skip */}
+        }
+        final ts = item.height > 0
+            ? await electrum.getBlockHeaderTime(item.height)
+            : 0;
+        result.add(WalletTransaction(
+          txHash: item.txHash,
+          amountSats: (received - spent).toInt(),
+          timestamp: ts,
+          isPending: item.height <= 0,
+        ));
+      } catch (e) {
+        stderr.writeln('[WARN] bitcoin: tx parse error ${item.txHash}: $e');
+      }
+    }
+    return result;
+  }
+
+  Timer? _pollTimer;
+  bool _syncing = false;
+
+
   void subscribe() {
-    client.subscribeToHistory().listen((notification) {
-      sync().then((_) async {
-        await onSyncComplete?.call();
-      }).catchError((e) {
-        stderr.writeln('[WARN] bitcoin: notification sync error: $e');
-      });
-    }, onError: (e) {
-      stderr.writeln('[WARN] bitcoin: history subscription error: $e');
+    _pollTimer?.cancel();
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (_syncing) return;
+      _syncing = true;
+      sync()
+          .then((_) => onSyncComplete?.call())
+          .catchError((e) {
+        stderr.writeln('[WARN] bitcoin: poll sync error: $e');
+      }).whenComplete(() => _syncing = false);
     });
+  }
+
+  /// Stop background polling + close the electrum socket.
+  void dispose() {
+    _pollTimer?.cancel();
+    electrum.close();
+  }
+
+  /// Scans the boarding address on-chain and returns the deposits to settle.
+  /// The wallet is the only component with a chain view, so it polls + supplies
+  /// these to the cosigner's `settle()`.
+  Future<List<BoardingUtxo>> scanBoarding(String boardingAddress) async {
+    final addr = _parseP2trDestination(boardingAddress);
+    final utxos = await electrum.listUnspent(addr);
+    return utxos
+        .map((u) => BoardingUtxo()
+          ..txid = u.txHash
+          ..vout = u.vout
+          ..amountSats = Int64(u.value.toInt()))
+        .toList();
   }
 
   // ---------------------------------------------------------------------------
@@ -626,8 +695,8 @@ class MpcBitcoinWallet {
     return signedTx.serialize();
   }
 
-  /// Broadcasts a signed transaction hex to the network via the MPC Server.
+  /// Broadcasts a signed transaction via the wallet's own electrum client.
   Future<String> broadcast(String txHex) async {
-    return await client.broadcastTransaction(txHex);
+    return await electrum.broadcast(txHex);
   }
 }

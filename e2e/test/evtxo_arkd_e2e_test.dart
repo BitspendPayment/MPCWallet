@@ -6,7 +6,8 @@ import 'dart:typed_data';
 import 'package:app_core/ark/ark_send.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/rest_wallet_api.dart';
+import 'package:e2e/boarding_poll.dart';
+import 'package:app_core/services_registry.dart';
 import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:blockchain_utils/blockchain_utils.dart';
 import 'package:e2e/mock_fcm_server.dart';
@@ -15,24 +16,32 @@ import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
 import 'package:test/test.dart';
 
-/// Full e2e: a contract eVTXO minted and spent THROUGH arkd — the ASP genuinely
-/// co-signs the cooperative (`ConditionMultisigClosure`) leaf; no forged key.
+/// Full e2e (PEER model): a contract eVTXO created WITH a peer receiver, then spent
+/// INDEPENDENTLY by that receiver THROUGH arkd — the cosigner co-signs the cooperative
+/// leaf with its counter-share, the ASP finalizes; no forged key, no external service.
 ///
-/// 1. Alice DKG (V); Bob DKG (recipient). Build the `oracle-gate` contract.
-/// 2. `createEvtxoKey` → V′ + eVTXO spk; derive its Ark address.
+/// 1. Alice (author), Bob (receiver), Carol (payee) DKG.
+/// 2. Alice `createEvtxoKey(receiverVk: Bob)` → refresh V onto {Bob, cosigner}; the
+///    cosigner ECIES-relays BOTH of Bob's share halves into Bob's inbox.
+/// 2b. Bob `fetchContractShares` → decrypts both halves → assembles his pairing share.
 /// 3. Alice boards + settles → a normal Ark VTXO.
-/// 4. Alice sends to the eVTXO Ark address → arkd MINTS a VTXO at it (now tracked).
-/// 5. Alice spends the eVTXO via arkd:
-///    - allow (within limit + good arg): V′ FROST leg (gate allows) + arkd co-signs
-///      the server leg → ark_txid returned, Bob credited.
-///    - over-limit / bad-arg: the cosigner withholds the V′ share → throws at sign.
+/// 4. Alice mints the eVTXO (sends to its Ark address).
+/// 5. BOB independently spends the eVTXO (routing to the {Bob, cosigner} pairing actor,
+///    Alice offline):
+///    - allow (within limit + good arg): cosigner co-signs (gate allows) + arkd finalizes
+///      → ark_txid returned, Carol credited.
+///    - over-limit / bad-arg: the cosigner withholds its share → throws at sign.
 ///
 /// Prereqs (mirrors `make e2e-ark`): bitcoind + arkd + signer-server(9090) +
-/// cosigner.wasm/cosigner-runtime/ffi/contracts built. The contract is handed to
-/// the cosigner at eVTXO creation (no registry).
+/// cosigner.wasm/cosigner-runtime/ffi/contracts built. The contract wasm is handed to
+/// the cosigner at eVTXO creation.
 
 const oracleGateWasmPath =
     '../contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm';
+const oracleGateTemplateWasmPath =
+    '../contracts/examples/oracle-gate-template/target/wasm32-wasip2/release/oracle_gate_template.wasm';
+const configProviderWasmPath =
+    '../contracts/examples/config-provider/target/wasm32-wasip2/release/config_provider.wasm';
 
 class ArkdAdmin {
   final String adminUrl;
@@ -126,41 +135,6 @@ Future<Process> startCosignerRuntime(
   return proc;
 }
 
-/// Start the dummy always-online contract-signer service and return (process, vk).
-/// The wallet POSTs its `a@service` half here; the cosigner POSTs `b@service`.
-Future<(Process, Uint8List)> startContractService(int port) async {
-  final ready = Completer<void>();
-  final failed = Completer<void>();
-  final proc = await Process.start(
-    '../e2e/contract-service/target/release/contract-service',
-    ['--port', port.toString()],
-  );
-  void watch(Stream<List<int>> s) {
-    s.transform(utf8.decoder).listen((data) {
-      print('[Service]: $data');
-      if (!ready.isCompleted && data.contains('listening on')) ready.complete();
-    }, onDone: () {
-      if (!ready.isCompleted && !failed.isCompleted) failed.complete();
-    });
-  }
-
-  watch(proc.stdout);
-  watch(proc.stderr);
-  try {
-    await Future.any([
-      ready.future,
-      failed.future.then((_) => throw Exception('contract-service failed')),
-    ]).timeout(Duration(seconds: 30),
-        onTimeout: () => throw Exception('contract-service not ready in time'));
-  } catch (e) {
-    proc.kill();
-    rethrow;
-  }
-  final info = await http.get(Uri.parse('http://127.0.0.1:$port/info'));
-  final vkHex = jsonDecode(info.body)['service_vk'] as String;
-  return (proc, Uint8List.fromList(BytesUtils.fromHexString(vkHex)));
-}
-
 void main() {
   late RegtestHelper btc;
   late ArkdAdmin arkd;
@@ -168,10 +142,7 @@ void main() {
   late Directory serverTempDir;
   late MockFcmServer mockFcm;
   Process? serverProcess;
-  Process? serviceProcess;
   late int serverPort;
-  late int servicePort;
-  late Uint8List serviceVk;
 
   setUpAll(() async {
     print('--- eVTXO-through-arkd E2E Setup ---');
@@ -224,12 +195,6 @@ void main() {
       'token_uri': mockFcm.tokenUri,
     });
 
-    // Start the contract-signer service first; the cosigner needs SERVICE_URL at boot.
-    final svcSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
-    servicePort = svcSocket.port;
-    await svcSocket.close();
-    (serviceProcess, serviceVk) = await startContractService(servicePort);
-
     final portSocket = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
     serverPort = portSocket.port;
     await portSocket.close();
@@ -237,14 +202,12 @@ void main() {
     serverProcess = await startCosignerRuntime(serverPort, serverTempDir, extraEnv: {
       'FCM_SERVICE_ACCOUNT_JSON': fcmServiceAccountJson,
       'FCM_BASE_URL': mockFcm.baseUrl,
-      'SERVICE_URL': 'http://127.0.0.1:$servicePort',
     });
-    print('--- Setup Complete (port $serverPort, service $servicePort) ---');
+    print('--- Setup Complete (port $serverPort) ---');
   });
 
   tearDownAll(() async {
     serverProcess?.kill();
-    serviceProcess?.kill();
     try {
       await mockFcm.stop();
     } catch (_) {}
@@ -270,7 +233,8 @@ void main() {
       } catch (_) {}
     });
     try {
-      await client.settle();
+      final boardingUtxos = await scanBoardingFor(client);
+      await client.settle(boardingUtxos: boardingUtxos);
     } finally {
       settling = false;
       timer.cancel();
@@ -279,32 +243,95 @@ void main() {
 
   test('eVTXO through arkd: mint via send, arkd co-signs cooperative spend, deny over-limit/bad-arg',
       () async {
-    // 1. Alice + Bob real 2-of-2 DKG (no signer; distinct local stores).
+    // 1. Alice (author), Bob (the contract RECEIVER), Carol (a clean payee) DKG.
     final alice =
         MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'alice');
     await alice.doDkg();
     final bob = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'bob');
     await bob.doDkg();
-    final bobArk = await bob.getArkAddress();
+    final carol =
+        MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'carol');
+    await carol.doDkg();
+    final carolArk = await carol.getArkAddress();
     print('1. DKG done. alice=${alice.userId?.substring(0, 12)}, bob=${bob.userId?.substring(0, 12)}');
 
-    // 2. eVTXO key bound to the oracle-gate contract.
+    // 2. eVTXO bound to the oracle-gate contract, created WITH Bob as the receiver: the
+    // cosigner refreshes Alice's V onto {Bob, cosigner} and drops BOTH ECIES halves of
+    // Bob's share into Bob's inbox. No service, no URL.
     final arkInfo = await alice.getArkInfo();
     var serverPkHex = arkInfo.signerPubkey;
     if (serverPkHex.length == 66) serverPkHex = serverPkHex.substring(2);
     final serverPk = Uint8List.fromList(BytesUtils.fromHexString(serverPkHex));
     final exitDelay = arkInfo.unilateralExitDelay.toInt();
-    final wasmBytes = await File(oracleGateWasmPath).readAsBytes();
-    final contractId = Uint8List.fromList(QuickCrypto.sha256Hash(wasmBytes));
-    // createEvtxoKey refreshes V onto {service, cosigner}: the cosigner delivers its
-    // b@service half to the service (via SERVICE_URL), and the wallet delivers its own
-    // a@service half directly through serviceApi (role="user").
-    final serviceApi = RestWalletApi('http://127.0.0.1:$servicePort');
-    final evtxo = await alice.createEvtxoKey(
-        contractId, wasmBytes, serverPk, exitDelay,
-        serviceVk: serviceVk, serviceApi: serviceApi);
+    // 2a. Bob PUBLISHES the oracle-gate TEMPLATE (a wasm importing a typed, self-documenting
+    // `oracle:gate/config` interface) + its provider STUB + the config schema. Alice DISCOVERS it,
+    // then creates a contract FROM the template with her own TYPED config: oracle-token "ORACLE-OK"
+    // + a per-instance max-sats of 50_000. The cosigner synthesizes a provider from those values,
+    // COMPOSES it into the template, and the composed sha256 becomes the bound contract_id.
+    final dir = ContractDirectory();
+    final serverUrl = 'http://127.0.0.1:$serverPort';
+    final templateWasm = await File(oracleGateTemplateWasmPath).readAsBytes();
+    final stubWasm = await File(configProviderWasmPath).readAsBytes();
+    final templateId = Uint8List.fromList(QuickCrypto.sha256Hash(templateWasm));
+    await dir.registerTemplate(
+        cosignerBase: serverUrl,
+        authorVkHex: bob.userId!,
+        contractIdHex: BytesUtils.toHexString(templateId),
+        wasm: templateWasm,
+        providerStubWasm: stubWasm,
+        schema: '[{"name":"oracle-token","type":"bytes"},{"name":"max-sats","type":"u64"}]',
+        name: 'Oracle Gate',
+        description: 'spend if oracle token matches + total ≤ max-sats');
+    final rows = await dir.listContracts(serverUrl);
+    final row = rows.firstWhere((r) =>
+        r.authorVkHex == bob.userId! &&
+        r.contractIdHex == BytesUtils.toHexString(templateId));
+    expect(row.isTemplate, isTrue, reason: 'published entry carries a provider stub');
+    print('2a. Bob published the "Oracle Gate" TEMPLATE; Alice discovered it (schema: ${row.schema})');
+
+    // Phase 3 — a BACKEND subscriber (Bob, acting as a server-side service) holds an SSE event
+    // stream open and reacts to cosigner events; a mobile wallet would get the same event via FCM.
+    // Register Bob's device token (FCM) + open his SSE stream BEFORE Alice creates, so BOTH channels
+    // are live when the contract-share event fires.
+    await bob.registerDeviceToken(fcmToken: 'bob-token-e2e', platform: 'android');
+    mockFcm.clearSends();
+    final sseEvents = <String>[];
+    final sseSub =
+        bob.subscribeEvents().listen((e) => sseEvents.add(e.type), onError: (_) {});
+    await Future.delayed(Duration(seconds: 2)); // let the SSE connection establish
+
+    final configBlob = encodeContractConfig([
+      ('oracle-token', CfgBytes(Uint8List.fromList(utf8.encode('ORACLE-OK')))),
+      ('max-sats', CfgU64(50000)),
+    ]);
+    final evtxo = await alice.createEvtxoFromTemplate(
+        templateId: row.contractIdHex,
+        stubId: row.stubId,
+        configBlob: configBlob,
+        serverPk: serverPk,
+        exitDelay: exitDelay,
+        receiverVk: row.authorVk);
+    expect(evtxo.contractId, isNotEmpty,
+        reason: 'cosigner returns the COMPOSED contract id (binds the variables)');
+    expect(evtxo.contractId, isNot(equals(templateId)),
+        reason: 'composed contract id differs from the bare template id');
+
+    // 2a-bis. The contract-share event fired on BOTH channels: the live backend SSE stream and
+    // (for a mobile wallet) the FCM push.
+    var gotSse = false;
+    for (var i = 0; i < 20 && !gotSse; i++) {
+      gotSse = sseEvents.contains('contract_share');
+      if (!gotSse) await Future.delayed(Duration(milliseconds: 250));
+    }
+    expect(gotSse, isTrue,
+        reason: 'backend SSE subscriber should receive a live contract_share event');
+    unawaited(sseSub.cancel()); // long-lived SSE; don't block the test on teardown
+    final push = await mockFcm.waitForFirstSend(timeout: Duration(seconds: 10));
+    expect(push?.data?['type'], equals('contract_share'),
+        reason: 'a mobile FCM push should also fire for the contract share');
+    print('2a-bis. contract_share delivered to a live backend (SSE) + mobile (FCM)');
     // qEvtxo = the eVTXO's taproot OUTPUT key (the address). The cooperative multisig
-    // leaf now reuses the wallet's key V (no separate V′).
+    // leaf reuses the wallet's key V (no separate V′).
     final qEvtxo = Uint8List.fromList(evtxo.scriptPubkey.sublist(2));
     final vPrimeXonly = _xonlyOf(evtxo.publicKeyPackage);
 
@@ -314,6 +341,20 @@ void main() {
         equals(BytesUtils.toHexString(vXonly)),
         reason: 'coop leaf reuses V — createEvtxoKey no longer reshares');
     print('   V (coop leaf) x-only: ${BytesUtils.toHexString(vXonly)}');
+
+    // 2b. Bob picks up his contract share from his inbox, decrypts BOTH ECIES halves,
+    // and assembles his {Bob, cosigner} pairing key package — INDEPENDENT of Alice.
+    final shares = await bob.fetchContractShares();
+    expect(shares, hasLength(1), reason: 'Bob should have one pending contract share');
+    final share = shares.first;
+    expect(BytesUtils.toHexString(_xonlyOf(share.publicKeyPackage)),
+        equals(BytesUtils.toHexString(vXonly)),
+        reason: 'Bob assembles a share of the SAME key V');
+    expect(BytesUtils.toHexString(Uint8List.fromList(share.scriptPubkey)),
+        equals(BytesUtils.toHexString(evtxo.scriptPubkey)),
+        reason: 'Bob receives the share for Alice\'s eVTXO');
+    await bob.ackContractShare(Uint8List.fromList(share.scriptPubkey));
+    print('2b. Bob assembled his pairing share for the eVTXO');
 
     final evtxoArkAddr =
         arkEvtxoArkAddress(serverPk: serverPk, qEvtxo: qEvtxo, network: arkInfo.network);
@@ -331,10 +372,10 @@ void main() {
     print('3. Settled. Alice balance=${afterSettle.totalBalance}');
 
     // 4. Mint the eVTXO: send to its Ark address → arkd tracks a VTXO at Q_evtxo.
-    // The contract gate runs on the CHECKPOINT PSBT, whose single output forwards
-    // the FULL eVTXO value into the Ark layer — so the oracle-gate limit (100k)
-    // effectively caps the eVTXO denomination. Mint two eVTXOs at the same address:
-    // a 90k one (under the limit → allow) and a 300k one (over the limit → deny).
+    // The contract gate runs on the CHECKPOINT PSBT, whose single output forwards the FULL eVTXO
+    // value into the Ark layer — so the contract's max-sats effectively caps the eVTXO denomination.
+    // Here max-sats is the PER-INSTANCE 50_000 Alice supplied (NOT any hardcoded template value):
+    // mint a 40k one (under → allow) and a 60k one (over → deny).
     final wallet = MpcArkWallet(alice);
     Future<String> mint(int sats) async {
       final u = await wallet.createTransaction(destination: evtxoArkAddr, amountSats: sats);
@@ -345,67 +386,73 @@ void main() {
       return txid; // recipient (eVTXO) is output 0; change is output 1
     }
 
-    final mint90 = await mint(90000);
-    final mint300 = await mint(300000);
-    print('4. Minted eVTXOs: $mint90:0 (90k), $mint300:0 (300k)');
+    final mint40 = await mint(40000);
+    final mint60 = await mint(60000);
+    print('4. Minted eVTXOs: $mint40:0 (40k), $mint60:0 (60k)');
 
+    // 5. BOB — using only his assembled pairing share — INDEPENDENTLY spends the eVTXO.
+    // His spend routes to the {Bob, cosigner} pairing actor (keyed by the eVTXO spk); the
+    // cosigner co-signs with its counter-share C (and gates the spend), with Alice OFFLINE.
+    final bobWallet = MpcArkWallet(bob);
+    final spkRoute =
+        BytesUtils.toHexString(Uint8List.fromList(share.scriptPubkey));
     Future<UnsignedArkTransaction> buildSpend(
             String txid, int inAmt, String args) =>
-        wallet.createEvtxoSpend(
-          destination: bobArk,
-          amountSats: 50000,
+        bobWallet.createEvtxoSpend(
+          destination: carolArk,
+          amountSats: 25000,
           inputTxid: txid,
           inputVout: 0,
           inputAmountSats: inAmt,
-          contractId: contractId,
+          contractId: Uint8List.fromList(share.contractId),
           evtxoPk: vPrimeXonly,
-          exitDelay: exitDelay,
+          exitDelay: share.exitDelay,
+          ownerPkOverride:
+              BytesUtils.toHexString(Uint8List.fromList(share.ownerPk)),
           contractArgs: Uint8List.fromList(utf8.encode(args)),
         );
 
-    // 5a. DENY (over-limit): the 300k eVTXO exceeds the 100k limit. The gate fires
-    // at sign time (before submit), so the input needn't be unspent.
+    // 5a. DENY (over per-instance limit): the 60k eVTXO exceeds the composed-in max-sats=50k. The
+    // gate fires at sign time (before submit), so the input needn't be unspent.
     await _expectDenied(
-        () async => wallet.signEvtxoSpend(await buildSpend(mint300, 300000, 'ORACLE-OK'),
-            evtxoKeyPkg: evtxo.keyPackage, evtxoPkp: evtxo.publicKeyPackage),
+        () async => bobWallet.signEvtxoSpend(await buildSpend(mint60, 60000, 'ORACLE-OK'),
+            evtxoKeyPkg: share.keyPackage, evtxoPkp: share.publicKeyPackage,
+            routeGroupKeyHex: spkRoute),
         'over-limit');
-    print('5a. DENY over-limit: cosigner refused (gate)');
+    print('5a. DENY over per-instance limit: cosigner refused (gate)');
 
-    // 5b. DENY (bad arg): wrong oracle token on the 90k eVTXO.
+    // 5b. DENY (bad arg): wrong oracle token on the 40k eVTXO.
     await _expectDenied(
-        () async => wallet.signEvtxoSpend(await buildSpend(mint90, 90000, 'WRONG-TOKEN'),
-            evtxoKeyPkg: evtxo.keyPackage, evtxoPkp: evtxo.publicKeyPackage),
+        () async => bobWallet.signEvtxoSpend(await buildSpend(mint40, 40000, 'WRONG-TOKEN'),
+            evtxoKeyPkg: share.keyPackage, evtxoPkp: share.publicKeyPackage,
+            routeGroupKeyHex: spkRoute),
         'bad-arg');
     print('5b. DENY bad-arg: cosigner refused (gate)');
 
-    // 5c. ALLOW — 90k eVTXO (≤ limit) + good arg: arkd co-signs the cooperative spend.
-    final allowSigned = await wallet.signEvtxoSpend(
-        await buildSpend(mint90, 90000, 'ORACLE-OK'),
-        evtxoKeyPkg: evtxo.keyPackage,
-        evtxoPkp: evtxo.publicKeyPackage);
-    final spendArkTxid = await wallet.submit(allowSigned);
+    // 5c. ALLOW — 40k eVTXO (≤ per-instance 50k) + good arg: the cosigner co-signs Bob's
+    // independent spend with its counter-share, arkd finalizes the cooperative spend.
+    final allowSigned = await bobWallet.signEvtxoSpend(
+        await buildSpend(mint40, 40000, 'ORACLE-OK'),
+        evtxoKeyPkg: share.keyPackage,
+        evtxoPkp: share.publicKeyPackage,
+        routeGroupKeyHex: spkRoute);
+    final spendArkTxid = await bobWallet.submit(allowSigned);
     expect(spendArkTxid, isNotEmpty,
-        reason: 'arkd must co-sign + finalize the eVTXO cooperative spend');
-    print('5c. ALLOW: arkd co-signed eVTXO spend, ark_txid=$spendArkTxid');
+        reason: 'cosigner+arkd must co-sign Bob\'s independent eVTXO spend');
+    print('5c. ALLOW: cosigner co-signed Bob\'s independent eVTXO spend, ark_txid=$spendArkTxid');
 
-    // Bob credited by the eVTXO spend (proves the off-chain transfer landed).
-    int bobBalance = 0;
+    // Carol credited by Bob's eVTXO spend (proves the peer off-chain transfer landed).
+    int carolBalance = 0;
     for (int i = 0; i < 10; i++) {
-      bobBalance = (await bob.listVtxos()).totalBalance.toInt();
-      if (bobBalance >= 50000) break;
+      carolBalance = (await carol.listVtxos()).totalBalance.toInt();
+      if (carolBalance >= 25000) break;
       await Future.delayed(Duration(seconds: 1));
     }
-    expect(bobBalance, equals(50000), reason: 'Bob should receive 50000 sats from the eVTXO spend');
+    expect(carolBalance, equals(25000),
+        reason: 'Carol should receive 25000 sats from Bob\'s independent eVTXO spend');
 
-    // NOTE: the former Phase 5 (multi-user — Alice onboards Bob to the SAME
-    // contract, Bob independently spends with his own counter-share) is removed.
-    // The new model reuses V (no per-participant V′ reshare) and instead refreshes
-    // V onto an always-online {service, cosigner} pairing; multi-user sharing will
-    // be re-expressed against the external contract-signer service when it lands.
-    // See HANDOFF.md TODO #2/#3.
-
-    print('eVTXO-through-arkd E2E complete: arkd co-signed the allow; over-limit + '
-        'bad-arg refused.');
+    print('eVTXO-through-arkd E2E complete (Phase 2): template+typed-config composed; Bob '
+        'independently spent (allow); over per-instance-limit + bad-arg refused.');
   }, timeout: Timeout(Duration(minutes: 12)));
 }
 

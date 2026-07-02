@@ -37,12 +37,6 @@ class HomeScreen extends StatelessWidget {
             icon: const Icon(Icons.notifications_none),
             onPressed: () {},
           ),
-          if (mpcService.signerKind == SignerKind.software)
-            IconButton(
-              icon: const Icon(Icons.cloud_outlined),
-              tooltip: 'Drive backup',
-              onPressed: () => context.push('/settings/backup'),
-            ),
         ],
       ),
       body: SafeArea(
@@ -129,6 +123,7 @@ class HomeScreen extends StatelessWidget {
         onTap: (index) {
           if (index == 1) context.go('/ark');
           if (index == 2) context.push('/spending/send');
+          if (index == 3) context.go('/services');
         },
         items: const [
           BottomNavigationBarItem(
@@ -145,6 +140,11 @@ class HomeScreen extends StatelessWidget {
             icon: Icon(Icons.send_outlined),
             activeIcon: Icon(Icons.send),
             label: 'Send',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.storefront_outlined),
+            activeIcon: Icon(Icons.storefront),
+            label: 'Services',
           ),
         ],
       ),

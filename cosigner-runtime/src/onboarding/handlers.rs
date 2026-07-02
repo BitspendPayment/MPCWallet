@@ -274,18 +274,15 @@ pub fn onboarding_step3(
         let kp_json = kp.to_json();
         let pkp_json = pkp.to_json();
 
-        // The wallet's FROST verifying share is the canonical user_id (the client
-        // authenticates as it). The actor's cosigner id is the GROUP KEY V; the
-        // wallet addresses by its verifying share and resolves via policy_owner_idx.
+        // `policy_user_id` = the wallet's VERIFYING SHARE — the id the client uses for ALL
+        // post-DKG requests (`_userId = compressed(verifyingShare)`). The DKG-time `user_id_hex`
+        // is a temp id that's never used again, so the routing index keys on THIS, not that.
         let policy_user_id = parsers::extract_verifying_share(&pkp_json, &wallet_identifier_hex)?;
         let group_key = parsers::extract_verifying_key(&pkp_json)?;
 
         let user_signing_identifier_hex = Some(wallet_identifier_hex);
         let server_dkg_secret_hex = Some(sess.server_internal_secret_hex.clone());
-        // Plan A: nothing is persisted to a host `policies` tree. The actor is seeded from
-        // `seed_material` (below, via SeedPolicy) and seals its own state; the host `policy_state`
-        // projection is later loaded back FROM the actor on spawn (`ensure_actor`).
-        // Stash the in-memory key material so the manager seeds it into the actor (no read-back).
+
         sess.seed_material = Some(crate::onboarding::session::SeedMaterial {
             group_key: group_key.clone(),
             key_package_json: kp_json,
@@ -294,17 +291,13 @@ pub fn onboarding_step3(
             server_dkg_secret_hex,
         });
 
-        for member_id in [policy_user_id.as_str(), user_id_hex.as_str()] {
-            if member_id != group_key {
-                shared
-                    .persistence
-                    .put("policy_owner_idx", member_id, &group_key)
-                    .map_err(|e| {
-                        tracing::error!("persist policy_owner_idx/{member_id} failed: {e}");
-                        Status::internal(format!("persist policy_owner_idx failed: {e}"))
-                    })?;
-            }
-        }
+        shared
+            .persistence
+            .put("policy_owner_idx", &policy_user_id, &group_key)
+            .map_err(|e| {
+                tracing::error!("persist policy_owner_idx/{policy_user_id} failed: {e}");
+                Status::internal(format!("persist policy_owner_idx failed: {e}"))
+            })?;
         tracing::info!("[{user_id_hex}] Onboarding complete; cosigner_id (group key)={group_key}");
         Ok(())
     })();

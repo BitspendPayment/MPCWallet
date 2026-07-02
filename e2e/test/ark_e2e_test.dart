@@ -1,13 +1,44 @@
 import 'dart:io';
 import 'dart:convert';
 import 'dart:async';
+import 'dart:typed_data';
 import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
+import 'package:app_core/passkey/seed_source.dart';
+import 'package:app_core/passkey/session_token_source.dart';
+import 'package:cryptography/cryptography.dart';
+import 'package:e2e/boarding_poll.dart';
 import 'package:e2e/mock_fcm_server.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:hive/hive.dart';
 import 'package:http/http.dart' as http;
+
+/// 32-byte seed for the cosigner's Ed25519 session-token keypair (env `WEBAUTH_TOKEN_SECRET`).
+/// The gated test mints Bearer tokens with the same seed so `SessionAuthority::verify` accepts them.
+final List<int> webauthTokenSecret = List<int>.generate(32, (i) => i + 1);
+final String webauthTokenSecretHex =
+    webauthTokenSecret.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+/// Mint a session token in the cosigner's compact-EdDSA-JWT shape: `b64u(header).b64u(payload).
+/// b64u(Ed25519_sig over "header.payload")`. The cosigner verifies the signature over the received
+/// bytes (it doesn't re-serialize), so no JSON canonicalization is required — only a matching key.
+Future<String> mintSessionToken(String subHex, List<int> seed) async {
+  final algo = Ed25519();
+  final keyPair = await algo.newKeyPairFromSeed(seed);
+  String b64u(List<int> b) => base64Url.encode(b).replaceAll('=', '');
+  final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  final header = b64u(utf8.encode('{"alg":"EdDSA","typ":"JWT"}'));
+  final payload = b64u(utf8.encode(jsonEncode({
+    'sub': subHex,
+    'exp': now + 900,
+    'iat': now,
+    'jti': 'e2e-gated',
+  })));
+  final signingInput = '$header.$payload';
+  final sig = await algo.sign(utf8.encode(signingInput), keyPair: keyPair);
+  return '$signingInput.${b64u(sig.bytes)}';
+}
 
 /// Helper to call the arkd admin REST API.
 class ArkdAdmin {
@@ -85,11 +116,12 @@ Future<Process> startCosignerRuntime(
   final serverReady = Completer<void>();
   final serverFailed = Completer<void>();
   final env = {
-    'ELECTRUM_URL': '127.0.0.1',
-    'ELECTRUM_PORT': '50001',
     'BITCOIN_RPC_USER': 'admin1',
     'BITCOIN_RPC_PASSWORD': '123',
     'ASP_URL': 'http://127.0.0.1:7070',
+    // Boarding watcher: poll the local electrs esplora; sweep fast for tests.
+    'ESPLORA_URL': 'http://127.0.0.1:30000',
+    'BOARDING_WATCH_INTERVAL_SECS': '3',
     // Asserted by the GetServerInfo test — set explicitly so the
     // expectation isn't dependent on the cosigner-runtime default.
     'BITCOIN_NETWORK': 'regtest',
@@ -275,6 +307,10 @@ void main() {
     cosignerExtraEnv = {
       'FCM_SERVICE_ACCOUNT_JSON': fcmServiceAccountJson,
       'FCM_BASE_URL': mockFcm.baseUrl,
+      // Enable session-token auth so the gated-wallet test can present a minted
+      // Bearer token. Harmless for the other tests: verify_auth falls back to
+      // Schnorr when no token is presented.
+      'WEBAUTH_TOKEN_SECRET': webauthTokenSecretHex,
     };
 
     // 5. Start MPC Server with ASP_URL
@@ -439,8 +475,10 @@ void main() {
       }
     });
 
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 1);
+    expect(boardingUtxos, isNotEmpty);
     try {
-      final commitmentTxid = await alice.settle();
+      final commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
       settling = false;
       miningTimer.cancel();
       print('   Settled! commitment_txid=$commitmentTxid');
@@ -659,6 +697,92 @@ void main() {
     print('Full Ark E2E flow complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
 
+  // Phase 5 — gated wallet. The FROST share is PIN/PRF-blinded (δ); auth rides a minted session
+  // token; the raw share is reconstructed transiently ONLY to FROST-sign an ARK op. Proves the
+  // whole "PIN only for ARK" design headlessly (FixedSeedSource stands in for the passkey PRF):
+  //  - reads authenticate token-only, with NO seed reconstructed;
+  //  - a right-seed settle FROST-signs validly (reconstruction integrates end-to-end);
+  //  - a WRONG seed cannot sign — the cosigner rejects the bad signature share.
+  test('Ark gated: PIN/PRF-blinded share — token auth + reconstructed FROST sign',
+      () async {
+    final seed =
+        Uint8List.fromList(List<int>.generate(32, (i) => (i * 7 + 3) & 0xff));
+    final wrongSeed =
+        Uint8List.fromList(List<int>.generate(32, (i) => (i * 7 + 4) & 0xff));
+
+    // 1. Gated DKG: the seed is wired BEFORE DKG, so the share is stored blinded and no Schnorr
+    //    auth helper is built. DKG itself is unauthenticated, so no token is needed yet.
+    print('1. Gated DKG');
+    final alice = createClient(storageId: "gated_alice");
+    alice.setSeedSource(FixedSeedSource(seed));
+    await alice.doDkg();
+    expect(alice.userId, isNotNull);
+    print('   userId=${alice.userId!.substring(0, 16)}...');
+
+    // 2. Mint an upstream-style session token bound to this user (sub = group key) and wire it.
+    //    Every authenticated RPC now rides the Bearer token; the share is never used for auth.
+    final token = await mintSessionToken(alice.userId!, webauthTokenSecret);
+    alice.setSessionTokenSource(StaticSessionToken(token));
+
+    // 3. Reads work token-only — no seed reconstructed. Proves auth is off the share.
+    print('2. Reads via token (no seed)');
+    final arkInfo = await alice.getArkInfo();
+    expect(arkInfo.signerPubkey, isNotEmpty);
+    final boardingAddress = await alice.getBoardingAddress();
+    expect(boardingAddress, isNotEmpty);
+
+    // 4. Fund + settle — the first FROST sign. The share is reconstructed from δ + the seed
+    //    transiently; a valid commitment proves the gating integrates end-to-end.
+    print('3. Fund + settle (gated FROST sign)');
+    final minerAddr = await btc.getNewAddress();
+    await btc.sendToAddress(boardingAddress, 0.01);
+    await btc.generateToAddress(1, minerAddr);
+    await Future.delayed(Duration(seconds: 5));
+
+    bool settling = true;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (t) async {
+      if (!settling) {
+        t.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 1);
+    expect(boardingUtxos, isNotEmpty);
+    String commitmentTxid;
+    try {
+      commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
+    } finally {
+      settling = false;
+      miningTimer.cancel();
+    }
+    expect(commitmentTxid, isNotEmpty,
+        reason: 'gated settle must FROST-sign validly with the reconstructed share');
+    final vtxos = await alice.listVtxos();
+    expect(vtxos.vtxos.length, equals(1),
+        reason: 'a VTXO ⇒ the gated signature was accepted on-chain');
+    print('   Settled — reconstructed share signed validly');
+
+    // 5. WRONG seed ⇒ reconstruction yields the wrong share ⇒ the cosigner rejects the FROST
+    //    signature share. The gate holds: a wrong PIN/PRF cannot spend.
+    print('4. Wrong seed must fail to sign');
+    alice.setSeedSource(FixedSeedSource(wrongSeed));
+    final aliceArk = MpcArkWallet(alice);
+    final selfAddr = await alice.getArkAddress();
+    final unsigned = await aliceArk.createTransaction(
+      destination: selfAddr,
+      amountSats: 1000,
+    );
+    await expectLater(
+      aliceArk.signTransaction(unsigned),
+      throwsA(anything),
+      reason: 'a wrong PIN/PRF seed must not produce a valid FROST signature',
+    );
+    print('   Wrong seed correctly rejected — gate holds');
+  }, timeout: Timeout(Duration(minutes: 10)));
+
   // Auto-settle round-trip: register a delegate intent with store_only=true,
   // then verify the cosigner's tick task drives it to completion on its own.
   //
@@ -677,22 +801,11 @@ void main() {
     await btc.sendToAddress(boardingAddress, 0.005);
     await btc.generateToAddress(1, minerAddr);
 
-    // Wait until the cosigner can see the boarding UTXO through Electrum.
-    // Bitcoind sees it immediately after the block; Electrum needs a few
-    // seconds to index. checkBoardingBalance routes through the cosigner's
-    // Electrum client so this is the right sync barrier.
-    bool boardingSeen = false;
-    for (int i = 0; i < 30; i++) {
-      try {
-        final bal = await alice.checkBoardingBalance();
-        if (bal.balance.toInt() >= 500000) {
-          boardingSeen = true;
-          break;
-        }
-      } catch (_) {}
-      await Future.delayed(Duration(seconds: 1));
-    }
-    expect(boardingSeen, isTrue,
+    // The wallet polls the boarding address via electrum (bitcoind sees the
+    // deposit immediately; electrs needs a few seconds to index) and supplies
+    // the UTXO to settle().
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 500000);
+    expect(boardingUtxos, isNotEmpty,
         reason: 'Electrum should index the boarding UTXO within 30s');
 
     bool stillMining = true;
@@ -706,7 +819,7 @@ void main() {
       } catch (_) {}
     });
     try {
-      final commitment = await alice.settle();
+      final commitment = await alice.settle(boardingUtxos: boardingUtxos);
       expect(commitment, isNotEmpty);
       print('   Settled commitment=$commitment');
     } finally {
@@ -802,18 +915,8 @@ void main() {
     await btc.sendToAddress(boardingAddress, 0.003);
     await btc.generateToAddress(1, minerAddr);
 
-    bool boardingSeen = false;
-    for (int i = 0; i < 30; i++) {
-      try {
-        final bal = await alice.checkBoardingBalance();
-        if (bal.balance.toInt() >= 300000) {
-          boardingSeen = true;
-          break;
-        }
-      } catch (_) {}
-      await Future.delayed(Duration(seconds: 1));
-    }
-    expect(boardingSeen, isTrue,
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 300000);
+    expect(boardingUtxos, isNotEmpty,
         reason: 'Electrum should index the boarding UTXO within 30s');
 
     bool stillMining = true;
@@ -826,7 +929,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle();
+    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
     expect(commitment, isNotEmpty);
     stillMining = false;
     miningTimer.cancel();
@@ -932,18 +1035,8 @@ void main() {
     await btc.sendToAddress(boardingAddress, 0.003);
     await btc.generateToAddress(1, minerAddr);
 
-    bool boardingSeen = false;
-    for (int i = 0; i < 30; i++) {
-      try {
-        final bal = await alice.checkBoardingBalance();
-        if (bal.balance.toInt() >= 300000) {
-          boardingSeen = true;
-          break;
-        }
-      } catch (_) {}
-      await Future.delayed(Duration(seconds: 1));
-    }
-    expect(boardingSeen, isTrue);
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 300000);
+    expect(boardingUtxos, isNotEmpty);
 
     bool stillMining = true;
     final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
@@ -956,7 +1049,7 @@ void main() {
       } catch (_) {}
     });
 
-    final commitment = await alice.settle();
+    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('4. Alice sends to Bob (triggers receive on Bob → push fires)');
@@ -1032,6 +1125,53 @@ void main() {
     print('FCM push test complete!');
   }, timeout: Timeout(Duration(minutes: 4)));
 
+  // Boarding watcher: the cosigner has no chain view for the WALLET's money,
+  // but it runs a thin read-only esplora watcher over each user's boarding
+  // address. On a new confirmed deposit it pushes a user-visible "tap to
+  // board" notification — the device boards on tap. This test funds a boarding
+  // address WITHOUT the client polling, and asserts the cosigner autonomously
+  // pushes a `boarding_deposit` notification with the deposit's outpoint.
+  test('Ark: boarding watcher pushes tap-to-board on a confirmed deposit',
+      () async {
+    print('1. DKG + register device token');
+    final alice = createClient(storageId: 'boardwatch');
+    await alice.doDkg();
+    // getBoardingAddress records the address in the cosigner's boarding_watches.
+    final boardingAddress = await alice.getBoardingAddress();
+    const fakeToken = 'fake-fcm-token-boardwatch';
+    await alice.registerDeviceToken(
+      fcmToken: fakeToken,
+      platform: 'android',
+      appVersion: '1.0.0-e2e',
+    );
+
+    mockFcm.clearSends();
+
+    print('2. Fund + confirm the boarding deposit (client does NOT poll)');
+    await btc.sendToAddress(boardingAddress, 0.004);
+    await btc.generateToAddress(1, await btc.getNewAddress());
+
+    print('3. Wait for the watcher to detect + push (3s sweep + index lag)');
+    final push = await mockFcm.waitForFirstSend(timeout: Duration(seconds: 40));
+    expect(push, isNotNull,
+        reason: 'cosigner boarding watcher should push within the sweep window');
+    final p = push!;
+    expect(p.targetToken, equals(fakeToken));
+
+    final data = p.data;
+    expect(data, isNotNull);
+    expect(data!['type'], equals('boarding_deposit'));
+    expect(data['txid'], isNotEmpty);
+    expect(int.parse(data['amount_sats']!), equals(400000));
+
+    // Visible notification (tap-to-board), unlike the silent vtxo_received push.
+    final message = p.body['message'] as Map<String, dynamic>;
+    expect(message['notification'], isNotNull,
+        reason: 'boarding push is a user-visible notification to tap');
+
+    print('Boarding watcher push test complete!');
+  }, timeout: Timeout(Duration(minutes: 3)));
+
   // Delegate persistence across cosigner restart (Phase 2, issue #31).
   //
   // Verifies the full round-trip:
@@ -1059,18 +1199,8 @@ void main() {
     await btc.sendToAddress(boardingAddress, 0.003);
     await btc.generateToAddress(1, minerAddr);
 
-    bool boardingSeen = false;
-    for (int i = 0; i < 30; i++) {
-      try {
-        final bal = await alice.checkBoardingBalance();
-        if (bal.balance.toInt() >= 300000) {
-          boardingSeen = true;
-          break;
-        }
-      } catch (_) {}
-      await Future.delayed(Duration(seconds: 1));
-    }
-    expect(boardingSeen, isTrue);
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 300000);
+    expect(boardingUtxos, isNotEmpty);
 
     bool stillMining = true;
     final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
@@ -1082,7 +1212,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle();
+    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('3. Wait for expires_at backfill');
@@ -1205,18 +1335,8 @@ void main() {
     await btc.sendToAddress(boardingAddress, 0.003);
     await btc.generateToAddress(1, minerAddr);
 
-    bool boardingSeen = false;
-    for (int i = 0; i < 30; i++) {
-      try {
-        final bal = await alice.checkBoardingBalance();
-        if (bal.balance.toInt() >= 300000) {
-          boardingSeen = true;
-          break;
-        }
-      } catch (_) {}
-      await Future.delayed(Duration(seconds: 1));
-    }
-    expect(boardingSeen, isTrue);
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 300000);
+    expect(boardingUtxos, isNotEmpty);
 
     bool stillMining = true;
     final miningTimer = Timer.periodic(Duration(seconds: 3), (timer) async {
@@ -1228,7 +1348,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle();
+    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('3. Wait for expires_at backfill, then store delegate intent');

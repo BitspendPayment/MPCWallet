@@ -132,6 +132,13 @@ impl ContractHost {
         self.engine.validate(wasm)
     }
 
+    /// Validate a contract TEMPLATE (Phase 2): a valid component with no `wasi:*` import. A template
+    /// also imports its per-instance config interface, satisfied by composition (the composed result
+    /// still passes the strict `validate`).
+    pub fn validate_template(&self, wasm: &[u8]) -> Result<(), String> {
+        self.engine.validate_template(wasm)
+    }
+
     /// Fetch (if needed), compile (cached), and evaluate the contract against
     /// `ctx`. Any registry/compile failure is fail-closed (`Verdict::Deny`).
     pub fn evaluate_by_id(&self, id: &ContractId, ctx: &EvalContext) -> Verdict {
@@ -219,5 +226,149 @@ mod tests {
             )
             .unwrap();
         assert!(matches!(reg.fetch(&id), Err(RegistryError::HashMismatch)));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Contract template directory (PEER model).
+//
+// Beyond content-addressed wasm storage (above), the registry also indexes published
+// TEMPLATES by their author's verifying key (the CosignerID), so users can browse the
+// directory — `CosignerID -> [Contract Template, VerifyingShare]` — and create a contract
+// WITH a chosen author as the receiver. Public read; the publish path stores + addresses
+// the wasm in the same `CONTRACT_WASM_TREE`.
+// ---------------------------------------------------------------------------
+
+/// `author_vk_hex` (CosignerID) -> JSON list of that author's published templates.
+pub const REGISTRY_TREE: &str = "contract_registry";
+
+/// One published template (metadata; the template + provider-stub wasm live in `CONTRACT_WASM_TREE`).
+#[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
+pub struct RegistryEntry {
+    pub contract_id_hex: String,
+    pub name: String,
+    pub description: String,
+    /// Phase 2: content id of the template's provider STUB (exports its typed config interface,
+    /// reading values from a patchable slot). Empty for a Phase-1 single-wasm contract.
+    #[serde(default)]
+    pub stub_id_hex: String,
+    /// Phase 2: the typed config SCHEMA (JSON: `[{name,type}]`) the app renders as a form. Empty
+    /// when the template takes no per-instance config.
+    #[serde(default)]
+    pub schema_json: String,
+}
+
+/// A directory row: the author (CosignerID = VerifyingShare) and one of its templates.
+#[derive(serde::Serialize, Clone)]
+pub struct DirectoryRow {
+    pub author_vk_hex: String,
+    pub contract_id_hex: String,
+    pub name: String,
+    pub description: String,
+    pub stub_id_hex: String,
+    pub schema_json: String,
+}
+
+fn load_registry(persistence: &dyn KvStore, author_vk_hex: &str) -> Vec<RegistryEntry> {
+    match persistence.get(REGISTRY_TREE, author_vk_hex) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
+/// Publish (or replace) a contract template under `author_vk_hex`. Validates `sha256(wasm) ==
+/// contract_id` + the template sandbox (no wasi), stores the template + its provider STUB
+/// content-addressed, and indexes the template (with the config schema) by the author's verifying
+/// key. `stub_wasm`/`schema_json` are empty for a Phase-1 contract that takes no per-instance config.
+pub fn register_template(
+    persistence: &dyn KvStore,
+    host: Option<&ContractHost>,
+    author_vk_hex: &str,
+    contract_id: &[u8],
+    wasm: &[u8],
+    stub_wasm: &[u8],
+    schema_json: &str,
+    name: &str,
+    description: &str,
+) -> Result<(), tonic::Status> {
+    if contract_id.len() != 32 {
+        return Err(tonic::Status::invalid_argument(
+            "contract_id must be 32 bytes",
+        ));
+    }
+    if wasm.is_empty() {
+        return Err(tonic::Status::invalid_argument("contract_wasm is required"));
+    }
+    if sha256_id(wasm).as_slice() != contract_id {
+        return Err(tonic::Status::invalid_argument(
+            "contract_wasm does not match contract_id (sha256 mismatch)",
+        ));
+    }
+    if let Some(host) = host {
+        host.validate_template(wasm)
+            .map_err(|e| tonic::Status::invalid_argument(format!("invalid template: {e}")))?;
+        if !stub_wasm.is_empty() {
+            host.validate_template(stub_wasm).map_err(|e| {
+                tonic::Status::invalid_argument(format!("invalid provider stub: {e}"))
+            })?;
+        }
+    }
+    let contract_id_hex = hex::encode(contract_id);
+    persistence
+        .put(CONTRACT_WASM_TREE, &contract_id_hex, &hex::encode(wasm))
+        .map_err(|e| tonic::Status::internal(format!("store template wasm: {e}")))?;
+
+    let stub_id_hex = if stub_wasm.is_empty() {
+        String::new()
+    } else {
+        let id = hex::encode(sha256_id(stub_wasm));
+        persistence
+            .put(CONTRACT_WASM_TREE, &id, &hex::encode(stub_wasm))
+            .map_err(|e| tonic::Status::internal(format!("store stub wasm: {e}")))?;
+        id
+    };
+
+    let mut entries = load_registry(persistence, author_vk_hex);
+    entries.retain(|e| e.contract_id_hex != contract_id_hex);
+    entries.push(RegistryEntry {
+        contract_id_hex,
+        name: name.to_string(),
+        description: description.to_string(),
+        stub_id_hex,
+        schema_json: schema_json.to_string(),
+    });
+    let json = serde_json::to_string(&entries)
+        .map_err(|e| tonic::Status::internal(format!("encode registry: {e}")))?;
+    persistence
+        .put(REGISTRY_TREE, author_vk_hex, &json)
+        .map_err(|e| tonic::Status::internal(format!("persist registry: {e}")))?;
+    Ok(())
+}
+
+/// Browse the whole directory: every author's published templates, flattened to rows.
+pub fn list_templates(persistence: &dyn KvStore) -> Vec<DirectoryRow> {
+    let all = persistence.get_all(REGISTRY_TREE).unwrap_or_default();
+    let mut rows = Vec::new();
+    for (author_vk_hex, json) in all {
+        let entries: Vec<RegistryEntry> = serde_json::from_str(&json).unwrap_or_default();
+        for e in entries {
+            rows.push(DirectoryRow {
+                author_vk_hex: author_vk_hex.clone(),
+                contract_id_hex: e.contract_id_hex,
+                name: e.name,
+                description: e.description,
+                stub_id_hex: e.stub_id_hex,
+                schema_json: e.schema_json,
+            });
+        }
+    }
+    rows
+}
+
+/// Fetch a template's wasm bytes by its content id (sha256 hex).
+pub fn get_template_wasm(persistence: &dyn KvStore, contract_id_hex: &str) -> Option<Vec<u8>> {
+    match persistence.get(CONTRACT_WASM_TREE, contract_id_hex) {
+        Ok(Some(hex_str)) => hex::decode(hex_str).ok(),
+        _ => None,
     }
 }

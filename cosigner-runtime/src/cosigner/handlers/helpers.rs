@@ -6,18 +6,31 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tonic::Status;
 
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
+use crate::auth::session::SessionClaims;
 use crate::cosigner::state::CosignerState;
 use crate::resp_store::KvStore;
 
-/// Per-user Schnorr-auth check. Verifies a single-key BIP-340 signature against the URL
-/// `user_id` (owner pubkey) host-side via the `threshold` crate.
+/// Per-user auth check. A valid upstream session token bound to this user (`session`, already
+/// signature+exp-verified at the REST boundary) authenticates the request; otherwise we fall back
+/// to the single-key BIP-340 Schnorr signature verified against the `user_id` (owner pubkey)
+/// host-side via the `threshold` crate. A token for a DIFFERENT user is rejected (no fallback).
 pub fn auth_check(
     state: &mut CosignerState,
     user_id_bytes: &[u8],
     signature: &[u8],
     timestamp_ms: i64,
     operation: &str,
+    session: Option<&SessionClaims>,
 ) -> Result<(), Status> {
+    if let Some(claims) = session {
+        if claims.authenticates(user_id_bytes) {
+            return Ok(());
+        }
+        return Err(Status::unauthenticated(
+            "session token does not match request user",
+        ));
+    }
+
     let user_id_hex = hex::encode(user_id_bytes);
     timestamp_check(state, timestamp_ms, &user_id_hex, operation)?;
 
@@ -38,6 +51,48 @@ pub fn auth_check(
         return Err(Status::unauthenticated("Invalid authentication signature"));
     }
 
+    Ok(())
+}
+
+/// Stateless variant of [`auth_check`] for endpoints that run OUTSIDE an actor (e.g. the SSE
+/// event stream): verifies the BIP-340 signature + the timestamp drift without a `CosignerState`.
+/// (The replay window is the same; auth carries no replay cache — see `timestamp_check`.)
+pub fn verify_auth(
+    user_id_bytes: &[u8],
+    signature: &[u8],
+    timestamp_ms: i64,
+    operation: &str,
+    session: Option<&SessionClaims>,
+) -> Result<(), Status> {
+    if let Some(claims) = session {
+        if claims.authenticates(user_id_bytes) {
+            return Ok(());
+        }
+        return Err(Status::unauthenticated(
+            "session token does not match request user",
+        ));
+    }
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    if (now - timestamp_ms).abs() > MAX_TIMESTAMP_DRIFT_MS {
+        return Err(Status::unauthenticated(
+            "Request timestamp is outside acceptable range",
+        ));
+    }
+    let user_id_hex = hex::encode(user_id_bytes);
+    let auth_message = build_auth_message(operation, timestamp_ms, &user_id_hex);
+    let pk: &[u8; 33] = user_id_bytes
+        .try_into()
+        .map_err(|_| Status::unauthenticated("user_id must be a 33-byte public key"))?;
+    let sig: &[u8; 64] = signature
+        .try_into()
+        .map_err(|_| Status::unauthenticated("signature must be 64 bytes"))?;
+    if !threshold::auth::verify_schnorr_signature(pk, &auth_message, sig) {
+        return Err(Status::unauthenticated("Invalid authentication signature"));
+    }
     Ok(())
 }
 
@@ -92,12 +147,15 @@ pub fn auth_check_group(
             "signer not authorized for this group",
         ));
     }
+    // Group/contract ops identify by the claimed verifying share, not by the token's `sub`, so they
+    // stay on Schnorr — a session token (bound to the main group key) does not apply here.
     auth_check(
         state,
         claimed_share_bytes,
         signature,
         timestamp_ms,
         operation,
+        None,
     )
 }
 
@@ -144,7 +202,6 @@ pub fn get_user_xonly_pubkey(
         )))
     }
 }
-
 
 /// Resolve an addressing id (a member's verifying share) to its GROUP KEY
 /// (`cosigner_id`) via `policy_owner_idx`, so all of a group's per-user data is keyed
@@ -259,6 +316,38 @@ pub fn load_user_device_tokens(
     }
 }
 
+/// Record a user's boarding address so the boarding watcher can poll it. Keyed
+/// by the canonical group key (one entry per group).
+pub fn save_user_boarding_address(
+    persistence: &dyn KvStore,
+    user_id_hex: &str,
+    boarding_address: &str,
+) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    if let Err(e) = persistence.put("boarding_watches", user_id_hex, boarding_address) {
+        tracing::warn!("persist boarding_watches/{user_id_hex} failed: {e}");
+    }
+}
+
+/// The set of boarding outpoints (`txid:vout`) already pushed for, so the
+/// watcher notifies once per deposit and survives a restart.
+pub fn save_user_boarding_seen(persistence: &dyn KvStore, user_id_hex: &str, seen: &[String]) {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    if let Ok(json) = serde_json::to_string(seen) {
+        if let Err(e) = persistence.put("boarding_seen_outpoints", user_id_hex, &json) {
+            tracing::warn!("persist boarding_seen_outpoints/{user_id_hex} failed: {e}");
+        }
+    }
+}
+
+pub fn load_user_boarding_seen(persistence: &dyn KvStore, user_id_hex: &str) -> Vec<String> {
+    let user_id_hex = &group_key_of(persistence, user_id_hex);
+    match persistence.get("boarding_seen_outpoints", user_id_hex) {
+        Ok(Some(json)) => serde_json::from_str(&json).unwrap_or_default(),
+        _ => Vec::new(),
+    }
+}
+
 /// Persist a stored signed delegate intent. The on-disk record carries no
 /// secret material — the cosigner secret stays in `SecretStore` and is
 /// reattached only at rehydration time (issue #31).
@@ -317,9 +406,11 @@ pub fn delete_user_delegate(persistence: &dyn KvStore, user_id_hex: &str) {
 /// legacy `delegate_sessions` row, which carried no secret either but needed the dkg-secret to rehydrate).
 pub fn save_guest_delegate_threshold(persistence: &dyn KvStore, user_id_hex: &str, threshold: i64) {
     let user_id_hex = &group_key_of(persistence, user_id_hex);
-    if let Err(e) =
-        persistence.put("guest_delegate_thresholds", user_id_hex, &threshold.to_string())
-    {
+    if let Err(e) = persistence.put(
+        "guest_delegate_thresholds",
+        user_id_hex,
+        &threshold.to_string(),
+    ) {
         tracing::warn!("persist guest_delegate_thresholds/{user_id_hex} failed: {e}");
     }
 }
@@ -412,7 +503,8 @@ pub fn calculate_spent_amount(
     let spent = crate::bitcoin::tx_parser::calculate_spent_amount(
         full_tx,
         &script_hex,
-        state.utxo_state
+        state
+            .utxo_state
             .as_ref()
             .map(|u| &u.utxos[..])
             .unwrap_or(&[]),

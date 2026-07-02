@@ -24,26 +24,21 @@ class GrpcWalletApi implements WalletApi {
   Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) =>
       _stub.contractCreate(r);
   @override
-  Future<AssembleContractShareResponse> assembleContractShare(
-          AssembleContractShareRequest r) =>
-      _stub.assembleContractShare(r);
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+          EvtxoPendingSharesRequest r) =>
+      _stub.evtxoPendingShares(r);
+  @override
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) =>
+      _stub.evtxoAckShare(r);
 
   @override
-  Future<SignStep1Response> signStep1(SignStep1Request r) => _stub.signStep1(r);
+  Future<SignStep1Response> signStep1(SignStep1Request r,
+          {String? routeGroupKeyHex}) =>
+      _stub.signStep1(r);
   @override
-  Future<SignStep2Response> signStep2(SignStep2Request r) => _stub.signStep2(r);
-
-  @override
-  Future<BroadcastTransactionResponse> broadcastTransaction(
-          BroadcastTransactionRequest r) =>
-      _stub.broadcastTransaction(r);
-  @override
-  Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) =>
-      _stub.fetchHistory(r);
-  @override
-  Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
-          FetchRecentTransactionsRequest r) =>
-      _stub.fetchRecentTransactions(r);
+  Future<SignStep2Response> signStep2(SignStep2Request r,
+          {String? routeGroupKeyHex}) =>
+      _stub.signStep2(r);
 
   @override
   Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest r) =>
@@ -55,10 +50,6 @@ class GrpcWalletApi implements WalletApi {
   Future<GetBoardingAddressResponse> getBoardingAddress(
           GetBoardingAddressRequest r) =>
       _stub.getBoardingAddress(r);
-  @override
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance(
-          CheckBoardingBalanceRequest r) =>
-      _stub.checkBoardingBalance(r);
   @override
   Future<ListVtxosResponse> listVtxos(ListVtxosRequest r) =>
       _stub.listVtxos(r);
@@ -88,11 +79,6 @@ class GrpcWalletApi implements WalletApi {
   Future<RegisterDeviceTokenResponse> registerDeviceToken(
           RegisterDeviceTokenRequest r) =>
       _stub.registerDeviceToken(r);
-
-  /// Server streaming RPC (gRPC only, not part of WalletApi interface).
-  Stream<TransactionNotification> subscribeToHistory(
-          SubscribeToHistoryRequest r) =>
-      _stub.subscribeToHistory(r);
 
   @override
   Future<void> shutdown() => _channel.shutdown();

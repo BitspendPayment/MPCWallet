@@ -3,12 +3,15 @@
 
 use std::sync::Arc;
 
-use axum::extract::{FromRef, Path, State};
+use axum::extract::{FromRef, Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::{json, Value};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 use tonic::Status;
 
 use crate::contract::ContractManager;
@@ -58,29 +61,36 @@ impl FromRef<AppState> for Arc<wallet_proto::GetServerInfoResponse> {
 pub fn routes(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health))
-        // DKG
-        .route("/u/{group_key}/dkg/step1", post(dkg_step1))
-        .route("/u/{group_key}/dkg/step2", post(dkg_step2))
-        .route("/u/{group_key}/dkg/step3", post(dkg_step3))
+        // DKG — not actor-routed by path: the group key V doesn't exist yet, so these route by
+        // the `user_id` in the body (the wallet's pre-DKG identity).
+        .route("/dkg/step1", post(onboarding_step1))
+        .route("/dkg/step2", post(onboarding_step2))
+        .route("/dkg/step3", post(onboarding_step3))
         // Contract creation (refresh V onto {service, cosigner})
         .route("/u/{group_key}/contract/create", post(contract_create))
+        .route(
+            "/u/{group_key}/evtxo/pending",
+            post(contract_pending_shares),
+        )
+        .route("/u/{group_key}/evtxo/ack", post(contract_ack_share))
+        // SSE event stream — a backend user holds this open and reacts to cosigner events.
+        .route("/u/{group_key}/events", get(events_stream))
+        // Contract template directory (peer model): publish + browse
+        .route(
+            "/u/{group_key}/contract/register-template",
+            post(register_template),
+        )
+        .route("/contracts", get(list_contracts))
+        .route("/contracts/{contract_id}/wasm", get(get_contract_template))
         // Signing
         .route("/u/{group_key}/sign/step1", post(sign_step1))
         .route("/u/{group_key}/sign/step2", post(sign_step2))
-        // Transactions
-        .route("/u/{group_key}/tx/broadcast", post(broadcast_transaction))
-        .route("/u/{group_key}/tx/history", post(fetch_history))
-        .route("/u/{group_key}/tx/recent", post(fetch_recent_transactions))
         // Ark
         .route("/u/{group_key}/ark/info", post(get_ark_info))
         .route("/u/{group_key}/ark/address", post(get_ark_address))
         .route(
             "/u/{group_key}/ark/boarding-address",
             post(get_boarding_address),
-        )
-        .route(
-            "/u/{group_key}/ark/boarding-balance",
-            post(check_boarding_balance),
         )
         .route("/u/{group_key}/ark/vtxos", post(list_vtxos))
         .route(
@@ -97,9 +107,12 @@ pub fn routes(state: AppState) -> Router {
             "/u/{group_key}/push/register-device-token",
             post(register_device_token),
         )
-        // Server deployment metadata. Unauthenticated, not user-scoped.
-        // Accepts both GET and POST so the enclave-FFI transport (which only
-        // models POST) can reach it the same way regular HTTP clients do.
+        // WebAuthn ceremonies — UNAUTHENTICATED at the boundary (they ARE the auth bootstrap that
+        // mints a session token); no `auth_check`. The cosigner is its own Relying Party.
+        .route("/passkey/register/begin", post(passkey_register_begin))
+        .route("/passkey/register/finish", post(passkey_register_finish))
+        .route("/passkey/assert/begin", post(passkey_assert_begin))
+        .route("/passkey/assert/finish", post(passkey_assert_finish))
         .route("/server-info", get(get_server_info).post(get_server_info))
         .with_state(state)
 }
@@ -175,6 +188,23 @@ fn user_id_bytes(path: &str) -> Vec<u8> {
     hex::decode(path).unwrap_or_default()
 }
 
+/// Extract + verify an upstream session token from the `Authorization: Bearer <jwt>` header.
+/// Returns the verified claims, or `None` when the header is absent/malformed or the token fails
+/// verification (disabled verifier, bad signature, expired) — in which case handlers transparently
+/// fall back to the legacy Schnorr auth path. `shared` is the per-request `SharedServices` (from
+/// `reg.shared()` / `coord.shared()`), which holds the cosigner's `session_authority`.
+fn session_from_headers(
+    headers: &axum::http::HeaderMap,
+    shared: &crate::shared::SharedServices,
+) -> Option<crate::auth::session::SessionClaims> {
+    let tok = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?;
+    shared.session_authority.verify(tok).ok()
+}
+
 /// The signer's verifying share for a sign request: the body `user_id` (the user or the service),
 /// falling back to the URL `group_key` for callers that route by their own id.
 fn signer_user_id(body: &Value, group_key: &str) -> Vec<u8> {
@@ -204,8 +234,34 @@ fn status_to_response(status: Status) -> (StatusCode, Json<Value>) {
     )
 }
 
-/// Dispatch a command and serialize the response with `serde`.
+/// Dispatch an AUTHENTICATED command. Authentication runs HERE at the REST boundary — the request's
+/// `user_id`/`signature`/`timestamp_ms` are verified against `$op` (a valid session token bound to
+/// the user, else the Schnorr signature) BEFORE dispatch; the actor no longer re-checks. `$session`
+/// is the verified upstream session token (or `None`).
 macro_rules! dispatch_json {
+    ($reg:ident, $group_key:ident, $variant:ident, $op:expr, $session:expr, $req:expr) => {{
+        let req = $req;
+        if let Err(status) = crate::cosigner::handlers::helpers::verify_auth(
+            &req.user_id,
+            &req.signature,
+            req.timestamp_ms,
+            $op,
+            ($session).as_ref(),
+        ) {
+            return Err(status_to_response(status));
+        }
+        match $reg
+            .dispatch(&$group_key, move |reply| CosignerCommand::$variant {
+                req,
+                reply,
+            })
+            .await
+        {
+            Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
+            Err(status) => Err(status_to_response(status)),
+        }
+    }};
+    // No-session form for genuinely UNAUTHENTICATED variants (e.g. redeem_vtxo).
     ($reg:ident, $group_key:ident, $variant:ident, $req:expr) => {{
         let req = $req;
         match $reg
@@ -249,52 +305,52 @@ async fn get_server_info(
 // DKG
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::dkg_step1", fields(group_key = %group_key))]
-async fn dkg_step1(
+#[tracing::instrument(skip_all, name = "rest::dkg_step1")]
+async fn onboarding_step1(
     State(coord): State<Arc<OnboardingManager>>,
-    Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id_hex = str_field(&body, "user_id");
     let req = wallet_proto::DkgStep1Request {
-        user_id: user_id_bytes(&group_key),
+        user_id: hex_field(&body, "user_id"),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
     };
-    match coord.onboarding_step1(&group_key, req).await {
+    match coord.onboarding_step1(&user_id_hex, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::dkg_step2", fields(group_key = %group_key))]
-async fn dkg_step2(
+#[tracing::instrument(skip_all, name = "rest::dkg_step2")]
+async fn onboarding_step2(
     State(coord): State<Arc<OnboardingManager>>,
-    Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id_hex = str_field(&body, "user_id");
     let req = wallet_proto::DkgStep2Request {
-        user_id: user_id_bytes(&group_key),
+        user_id: hex_field(&body, "user_id"),
         identifier: hex_field(&body, "identifier"),
         round1_package: str_field(&body, "round1_package"),
     };
-    match coord.onboarding_step2(&group_key, req).await {
+    match coord.onboarding_step2(&user_id_hex, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
 }
 
-#[tracing::instrument(skip_all, name = "rest::dkg_step3", fields(group_key = %group_key))]
-async fn dkg_step3(
+#[tracing::instrument(skip_all, name = "rest::dkg_step3")]
+async fn onboarding_step3(
     State(coord): State<Arc<OnboardingManager>>,
-    Path(group_key): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let user_id_hex = str_field(&body, "user_id");
     let req = wallet_proto::DkgStep3Request {
-        user_id: user_id_bytes(&group_key),
+        user_id: hex_field(&body, "user_id"),
         identifier: hex_field(&body, "identifier"),
         round2_packages_for_others: map_field(&body, "round2_packages_for_others"),
     };
-    match coord.onboarding_step3(&group_key, req).await {
+    match coord.onboarding_step3(&user_id_hex, req).await {
         Ok(resp) => Ok(Json(serde_json::to_value(resp).unwrap_or(json!({})))),
         Err(status) => Err(status_to_response(status)),
     }
@@ -318,18 +374,224 @@ async fn contract_create(
         server_pk: hex_field(&body, "server_pk"),
         exit_delay: i64_field(&body, "exit_delay") as u32,
         owner_pk: hex_field(&body, "owner_pk"),
-        service_vk: hex_field(&body, "service_vk"),
+        receiver_vk: hex_field(&body, "receiver_vk"),
         a_at_cosigner: hex_field(&body, "a_at_cosigner"),
-        a_at_service_point: hex_field(&body, "a_at_service_point"),
+        a_at_receiver_point: hex_field(&body, "a_at_receiver_point"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
+        ecies_a_at_receiver: hex_field(&body, "ecies_a_at_receiver"),
+        template_id: str_field(&body, "template_id"),
+        stub_id: str_field(&body, "stub_id"),
+        config_blob: hex_field(&body, "config_blob"),
     };
     match coord.create_contract(&group_key, req).await {
         Ok(resp) => Ok(Json(json!({
             "contract_script_pubkey": to_hex(&resp.contract_script_pubkey),
-            "b_at_service": to_hex(&resp.b_at_service),
+            "contract_id": to_hex(&resp.contract_id),
         }))),
         Err(status) => Err(status_to_response(status)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Peer-contract share inbox (the receiver's own actor)
+// ---------------------------------------------------------------------------
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_pending", fields(group_key = %group_key))]
+async fn contract_pending_shares(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::EvtxoPendingSharesRequest {
+        user_id: signer_user_id(&body, &group_key),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_EVTXO_PENDING,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
+    match reg
+        .dispatch(&group_key, move |reply| {
+            CosignerCommand::EvtxoPendingShares { req, reply }
+        })
+        .await
+    {
+        Ok(r) => {
+            let shares: Vec<Value> = r
+                .shares
+                .iter()
+                .map(|s| {
+                    json!({
+                        "evtxo_script_pubkey": to_hex(&s.evtxo_script_pubkey),
+                        "contract_id": to_hex(&s.contract_id),
+                        "ecies_half_author": to_hex(&s.ecies_half_author),
+                        "ecies_half_cosigner": to_hex(&s.ecies_half_cosigner),
+                        "public_key_package_json": s.public_key_package_json,
+                        "exit_delay": s.exit_delay,
+                        "server_pk": to_hex(&s.server_pk),
+                        "owner_pk": to_hex(&s.owner_pk),
+                    })
+                })
+                .collect();
+            Ok(Json(json!({ "shares": shares })))
+        }
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+#[tracing::instrument(skip_all, name = "rest::evtxo_ack", fields(group_key = %group_key))]
+async fn contract_ack_share(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::EvtxoAckShareRequest {
+        user_id: signer_user_id(&body, &group_key),
+        evtxo_script_pubkey: hex_field(&body, "evtxo_script_pubkey"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_EVTXO_ACK,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
+    match reg
+        .dispatch(&group_key, move |reply| CosignerCommand::EvtxoAckShare {
+            req,
+            reply,
+        })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({ "ok": r.ok }))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Event stream (Phase 3) — a backend user holds this SSE connection open and reacts to events
+// about itself (e.g. a contract share landed in its inbox). Auth at connect via signed query params.
+// ---------------------------------------------------------------------------
+
+#[derive(serde::Deserialize)]
+struct EventsAuth {
+    signature: String,
+    timestamp_ms: i64,
+}
+
+#[tracing::instrument(skip_all, name = "rest::events", fields(group_key = %group_key))]
+async fn events_stream(
+    State(coord): State<Arc<ContractManager>>,
+    Path(group_key): Path<String>,
+    Query(q): Query<EventsAuth>,
+    headers: axum::http::HeaderMap,
+) -> Result<axum::response::Response, (StatusCode, Json<Value>)> {
+    let user_id = user_id_bytes(&group_key);
+    let signature = hex::decode(&q.signature).unwrap_or_default();
+    // EventSource can't set headers, so auth is via signed query params; still offer a Bearer token
+    // if one is somehow present (harmless — `None` for EventSource, then the query-param path runs).
+    let session = session_from_headers(&headers, coord.shared());
+    crate::cosigner::handlers::helpers::verify_auth(
+        &user_id,
+        &signature,
+        q.timestamp_ms,
+        crate::auth::message::OP_EVENTS_SUBSCRIBE,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
+
+    let rx = coord.shared().events.subscribe(&group_key);
+    // Lagged (slow subscriber overran the buffer) → drop those events; the client catches up via
+    // `evtxo/pending`. Each event becomes an SSE frame `event: <kind>\ndata: <json>`.
+    let stream = BroadcastStream::new(rx).filter_map(|ev| {
+        ev.ok().map(|e| {
+            Ok::<_, std::convert::Infallible>(Event::default().event(e.kind()).data(e.data_json()))
+        })
+    });
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Contract template directory (publish + browse). Discovery for the peer model:
+// `CosignerID -> [Contract Template, VerifyingShare]`.
+// ---------------------------------------------------------------------------
+
+/// Publish a contract template under the author's verifying key (the URL `group_key`).
+#[tracing::instrument(skip_all, name = "rest::register_template", fields(group_key = %group_key))]
+async fn register_template(
+    State(coord): State<Arc<ContractManager>>,
+    Path(group_key): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let shared = coord.shared();
+    let author_vk_hex = group_key;
+    let contract_id = hex_field(&body, "contract_id");
+    let wasm = hex_field(&body, "contract_wasm");
+    let stub_wasm = hex_field(&body, "provider_stub_wasm");
+    let schema = str_field(&body, "schema");
+    let name = str_field(&body, "name");
+    let description = str_field(&body, "description");
+    match crate::contract::register_template(
+        shared.persistence.as_ref(),
+        shared.contract_host.as_deref(),
+        &author_vk_hex,
+        &contract_id,
+        &wasm,
+        &stub_wasm,
+        &schema,
+        &name,
+        &description,
+    ) {
+        Ok(()) => Ok(Json(json!({ "ok": true }))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+/// Browse the whole directory: every author's published templates (public).
+async fn list_contracts(State(coord): State<Arc<ContractManager>>) -> Json<Value> {
+    let rows = crate::contract::list_templates(coord.shared().persistence.as_ref());
+    let out: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "author_vk": r.author_vk_hex,
+                "contract_id": r.contract_id_hex,
+                "name": r.name,
+                "description": r.description,
+                "stub_id": r.stub_id_hex,
+                "schema": r.schema_json,
+            })
+        })
+        .collect();
+    Json(json!({ "contracts": out }))
+}
+
+/// Fetch a template's wasm bytes by its content id (public).
+async fn get_contract_template(
+    State(coord): State<Arc<ContractManager>>,
+    Path(contract_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    match crate::contract::get_template_wasm(coord.shared().persistence.as_ref(), &contract_id) {
+        Some(wasm) => Ok(Json(json!({ "contract_wasm": to_hex(&wasm) }))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "unknown contract_id" })),
+        )),
     }
 }
 
@@ -341,11 +603,13 @@ async fn contract_create(
 async fn sign_step1(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     // Routing is by the URL path (`group_key` — the actor); `user_id` is the signer's verifying
     // share (the user or the service), used for auth. Defaults to the group_key for callers that
     // route by their own id.
+    let session = session_from_headers(&headers, reg.shared());
     let req = wallet_proto::SignStep1Request {
         user_id: signer_user_id(&body, &group_key),
         hiding_commitment: hex_field(&body, "hiding_commitment"),
@@ -357,6 +621,14 @@ async fn sign_step1(
         script_path_spend: bool_field(&body, "script_path_spend"),
         ark_tx: hex_field(&body, "ark_tx"),
     };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_SIGN_STEP1,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SignStep1 {
             req,
@@ -390,14 +662,24 @@ async fn sign_step1(
 async fn sign_step2(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     let req = wallet_proto::SignStep2Request {
         user_id: signer_user_id(&body, &group_key),
         signature_share: hex_field(&body, "signature_share"),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
     };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_SIGN_STEP2,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SignStep2 {
             req,
@@ -414,63 +696,6 @@ async fn sign_step2(
 }
 
 // ---------------------------------------------------------------------------
-// Transactions
-// ---------------------------------------------------------------------------
-
-#[tracing::instrument(skip_all, name = "rest::broadcast_transaction", fields(group_key = %group_key))]
-async fn broadcast_transaction(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(
-        reg,
-        group_key,
-        BroadcastTransaction,
-        wallet_proto::BroadcastTransactionRequest {
-            user_id: user_id_bytes(&group_key),
-            tx_hex: str_field(&body, "tx_hex"),
-        }
-    )
-}
-
-#[tracing::instrument(skip_all, name = "rest::fetch_history", fields(group_key = %group_key))]
-async fn fetch_history(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(
-        reg,
-        group_key,
-        FetchHistory,
-        wallet_proto::FetchHistoryRequest {
-            user_id: user_id_bytes(&group_key),
-            signature: hex_field(&body, "signature"),
-            timestamp_ms: i64_field(&body, "timestamp_ms"),
-        }
-    )
-}
-
-#[tracing::instrument(skip_all, name = "rest::fetch_recent_transactions", fields(group_key = %group_key))]
-async fn fetch_recent_transactions(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(
-        reg,
-        group_key,
-        FetchRecentTransactions,
-        wallet_proto::FetchRecentTransactionsRequest {
-            user_id: user_id_bytes(&group_key),
-            signature: hex_field(&body, "signature"),
-            timestamp_ms: i64_field(&body, "timestamp_ms"),
-        }
-    )
-}
-
-// ---------------------------------------------------------------------------
 // Ark
 // ---------------------------------------------------------------------------
 
@@ -478,12 +703,16 @@ async fn fetch_recent_transactions(
 async fn get_ark_info(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         GetArkInfo,
+        crate::auth::message::OP_GET_ARK_INFO,
+        session,
         wallet_proto::GetArkInfoRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -496,12 +725,16 @@ async fn get_ark_info(
 async fn get_ark_address(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         GetArkAddress,
+        crate::auth::message::OP_GET_ARK_ADDRESS,
+        session,
         wallet_proto::GetArkAddressRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -514,31 +747,17 @@ async fn get_ark_address(
 async fn get_boarding_address(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         GetBoardingAddress,
+        crate::auth::message::OP_GET_BOARDING_ADDRESS,
+        session,
         wallet_proto::GetBoardingAddressRequest {
-            user_id: user_id_bytes(&group_key),
-            signature: hex_field(&body, "signature"),
-            timestamp_ms: i64_field(&body, "timestamp_ms"),
-        }
-    )
-}
-
-#[tracing::instrument(skip_all, name = "rest::check_boarding_balance", fields(group_key = %group_key))]
-async fn check_boarding_balance(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    dispatch_json!(
-        reg,
-        group_key,
-        CheckBoardingBalance,
-        wallet_proto::CheckBoardingBalanceRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
             timestamp_ms: i64_field(&body, "timestamp_ms"),
@@ -550,12 +769,16 @@ async fn check_boarding_balance(
 async fn list_vtxos(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         ListVtxos,
+        crate::auth::message::OP_LIST_VTXOS,
+        session,
         wallet_proto::ListVtxosRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -568,12 +791,16 @@ async fn list_vtxos(
 async fn list_ark_transactions(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         ListArkTransactions,
+        crate::auth::message::OP_LIST_ARK_TXS,
+        session,
         wallet_proto::ListArkTransactionsRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -586,8 +813,10 @@ async fn list_ark_transactions(
 async fn send_vtxo(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     let req = wallet_proto::SendVtxoRequest {
         user_id: user_id_bytes(&group_key),
         recipient_ark_address: str_field(&body, "recipient_ark_address"),
@@ -596,6 +825,14 @@ async fn send_vtxo(
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
     };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_SEND_VTXO,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SendVtxo {
             req,
@@ -638,14 +875,38 @@ async fn redeem_vtxo(
 async fn settle(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let boarding_utxos = body
+        .get("boarding_utxos")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .map(|u| wallet_proto::BoardingUtxo {
+                    txid: str_field(u, "txid"),
+                    vout: u.get("vout").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+                    amount_sats: u.get("amount_sats").and_then(|v| v.as_u64()).unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let req = wallet_proto::SettleRequest {
         user_id: user_id_bytes(&group_key),
         signature: hex_field(&body, "signature"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         signed_messages: hex_array_field(&body, "signed_messages"),
+        boarding_utxos,
     };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_SETTLE,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::Settle {
             req,
@@ -668,8 +929,10 @@ async fn settle(
 async fn settle_delegate(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     let req = wallet_proto::SettleDelegateRequest {
         user_id: user_id_bytes(&group_key),
         signature: hex_field(&body, "signature"),
@@ -680,6 +943,14 @@ async fn settle_delegate(
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
     };
+    crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_SETTLE_DELEGATE,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
     match reg
         .dispatch(&group_key, move |reply| CosignerCommand::SettleDelegate {
             req,
@@ -702,12 +973,16 @@ async fn settle_delegate(
 async fn submit_ark_send(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         SubmitArkSend,
+        crate::auth::message::OP_SEND_VTXO,
+        session,
         wallet_proto::SubmitArkSendRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -723,12 +998,16 @@ async fn submit_ark_send(
 async fn register_device_token(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
     dispatch_json!(
         reg,
         group_key,
         RegisterDeviceToken,
+        crate::auth::message::OP_REGISTER_DEVICE_TOKEN,
+        session,
         wallet_proto::RegisterDeviceTokenRequest {
             user_id: user_id_bytes(&group_key),
             signature: hex_field(&body, "signature"),
@@ -738,4 +1017,85 @@ async fn register_device_token(
             app_version: str_field(&body, "app_version"),
         }
     )
+}
+
+// ---------------------------------------------------------------------------
+// WebAuthn ceremonies — the cosigner is its own Relying Party. UNAUTHENTICATED
+// (they mint the session token that authenticates later requests). Each handler
+// calls the WebauthnServer directly (no actor dispatch). The webauthn-rs
+// challenge types serialize to the WebAuthn spec JSON, so we return them as-is.
+// ---------------------------------------------------------------------------
+
+/// 503 body used when `WEBAUTH_RP_*` was invalid so no WebauthnServer was built.
+fn webauthn_disabled() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(json!({ "error": "webauthn disabled" })),
+    )
+}
+
+fn webauthn_bad_request(msg: String) -> (StatusCode, Json<Value>) {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": msg })))
+}
+
+#[tracing::instrument(skip_all, name = "rest::passkey_register_begin")]
+async fn passkey_register_begin(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let server = reg.shared().webauthn.clone().ok_or_else(webauthn_disabled)?;
+    let user_id = str_field(&body, "user_id");
+    let (ceremony_id, options) = server
+        .register_begin(&user_id)
+        .map_err(webauthn_bad_request)?;
+    Ok(Json(json!({ "ceremony_id": ceremony_id, "options": options })))
+}
+
+#[tracing::instrument(skip_all, name = "rest::passkey_register_finish")]
+async fn passkey_register_finish(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let server = reg.shared().webauthn.clone().ok_or_else(webauthn_disabled)?;
+    let ceremony_id = str_field(&body, "ceremony_id");
+    let credential = body
+        .get("credential")
+        .cloned()
+        .ok_or_else(|| webauthn_bad_request("missing credential".into()))?;
+    let credential = serde_json::from_value(credential)
+        .map_err(|e| webauthn_bad_request(format!("bad credential: {e}")))?;
+    server
+        .register_finish(&ceremony_id, credential)
+        .map_err(webauthn_bad_request)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[tracing::instrument(skip_all, name = "rest::passkey_assert_begin")]
+async fn passkey_assert_begin(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let server = reg.shared().webauthn.clone().ok_or_else(webauthn_disabled)?;
+    let user_id = str_field(&body, "user_id");
+    let (ceremony_id, options) = server.assert_begin(&user_id).map_err(webauthn_bad_request)?;
+    Ok(Json(json!({ "ceremony_id": ceremony_id, "options": options })))
+}
+
+#[tracing::instrument(skip_all, name = "rest::passkey_assert_finish")]
+async fn passkey_assert_finish(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let server = reg.shared().webauthn.clone().ok_or_else(webauthn_disabled)?;
+    let ceremony_id = str_field(&body, "ceremony_id");
+    let credential = body
+        .get("credential")
+        .cloned()
+        .ok_or_else(|| webauthn_bad_request("missing credential".into()))?;
+    let credential = serde_json::from_value(credential)
+        .map_err(|e| webauthn_bad_request(format!("bad credential: {e}")))?;
+    let token = server
+        .assert_finish(&ceremony_id, credential)
+        .map_err(webauthn_bad_request)?;
+    Ok(Json(json!({ "token": token })))
 }

@@ -8,18 +8,19 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::cosigner::state::{CosignerState, VtxoEntry};
+use crate::cosigner::actor::CosignerActor;
+use crate::cosigner::registry::run_blocking;
+use crate::cosigner::state::VtxoEntry;
 use crate::cosigner::types::ArkTxEntry;
-use crate::shared::SharedServices;
 
 use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};
 
 /// Per-actor tick. No-ops when there is nothing to do.
-#[tracing::instrument(skip_all, name = "actor::tick_auto_settle", err)]
-pub fn tick_auto_settle(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-) -> Result<(), Status> {
+impl CosignerActor {
+    pub async fn tick_auto_settle(&mut self) -> Result<(), Status> {
+        let shared = self.shared.clone();
+        run_blocking(self.state.clone(), move |state| {
+    let shared = shared.as_ref();
     let Some(record) = state.delegate_session.as_ref() else {
         return Ok(());
     };
@@ -60,10 +61,7 @@ pub fn tick_auto_settle(
         return Ok(());
     }
 
-    let Some(asp) = shared.asp_client.clone() else {
-        tracing::warn!("tick_auto_settle: ASP not configured; cannot drive stored intent");
-        return Ok(());
-    };
+    let asp = shared.asp_client.clone();
 
     let record = state.delegate_session.take().expect("checked above");
     tracing::info!(
@@ -132,4 +130,7 @@ pub fn tick_auto_settle(
         "[{user_id_hex}] auto-settle: settled, new VTXO {vtxo_txid}:{vtxo_vout} amount={total_amount} commitment={commitment_txid}"
     );
     Ok(())
+        })
+        .await
+    }
 }

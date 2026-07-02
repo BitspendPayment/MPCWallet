@@ -125,18 +125,3 @@ pub fn derive_p2tr_script_hex(compressed_pubkey_hex: &str) -> Result<String, Str
 
     Ok(hex::encode(&script))
 }
-
-/// Derive the Electrum-compatible script hash from a P2TR script.
-/// Script hash = reversed SHA256 of the script bytes.
-pub fn derive_script_hash(script_hex: &str) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-
-    let script_bytes = hex::decode(script_hex).map_err(|e| format!("Invalid hex: {e}"))?;
-    let hash = Sha256::digest(&script_bytes);
-
-    // Electrum uses reversed hash
-    let mut reversed: Vec<u8> = hash.to_vec();
-    reversed.reverse();
-
-    Ok(hex::encode(&reversed))
-}

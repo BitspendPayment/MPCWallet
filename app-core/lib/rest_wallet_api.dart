@@ -10,6 +10,8 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'package:fixnum/fixnum.dart';
 import 'package:protocol/protocol.dart';
+
+import 'package:app_core/passkey/session_token_source.dart';
 import 'wallet_api.dart';
 
 /// Hex encode bytes for JSON.
@@ -36,6 +38,13 @@ class RestWalletApi implements WalletApi {
   final http.Client? _http;
   PostFn? customPost;
 
+  /// Source of the upstream Bearer session token (auth-off-the-share migration).
+  /// Defaults to [NoSessionToken] (Schnorr auth only, via the body `signature`);
+  /// set once a token is available and it rides as `Authorization: Bearer` on
+  /// every request. The cosigner prefers a valid token and ignores the Schnorr
+  /// signature, which is what frees the FROST share to be PIN-gated to ARK.
+  SessionTokenSource sessionTokens = const NoSessionToken();
+
   RestWalletApi(this.baseUrl, {http.Client? httpClient})
       : _http = httpClient ?? http.Client(),
         customPost = null;
@@ -50,9 +59,11 @@ class RestWalletApi implements WalletApi {
     if (customPost != null) {
       return customPost!(path, body);
     }
+    final headers = <String, String>{'content-type': 'application/json'};
+    await _addAuthHeader(headers);
     final resp = await _http!.post(
       Uri.parse('$baseUrl$path'),
-      headers: {'content-type': 'application/json'},
+      headers: headers,
       body: jsonEncode(body),
     );
     if (resp.statusCode != 200) {
@@ -70,11 +81,23 @@ class RestWalletApi implements WalletApi {
     if (customPost != null) {
       return customPost!(path, {});
     }
-    final resp = await _http!.get(Uri.parse('$baseUrl$path'));
+    final headers = <String, String>{};
+    await _addAuthHeader(headers);
+    final resp = await _http!.get(Uri.parse('$baseUrl$path'), headers: headers);
     if (resp.statusCode != 200) {
       throw Exception('HTTP ${resp.statusCode}: ${resp.body}');
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
+  }
+
+  /// Attach the upstream session token as `Authorization: Bearer <jwt>` when one
+  /// is available. No-op (Schnorr-only) otherwise. Body auth fields are still
+  /// sent during migration; the cosigner prefers a valid token.
+  Future<void> _addAuthHeader(Map<String, String> headers) async {
+    final token = await sessionTokens.currentToken();
+    if (token != null) {
+      headers['authorization'] = 'Bearer $token';
+    }
   }
 
   /// Common auth fields present on most requests.
@@ -93,7 +116,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep1Response> dKGStep1(DKGStep1Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step1', {
+    final resp = await _post('/api/dkg/step1', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
@@ -106,7 +129,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep2Response> dKGStep2(DKGStep2Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step2', {
+    final resp = await _post('/api/dkg/step2', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round1_package': r.round1Package,
@@ -119,7 +142,7 @@ class RestWalletApi implements WalletApi {
 
   @override
   Future<DKGStep3Response> dKGStep3(DKGStep3Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/dkg/step3', {
+    final resp = await _post('/api/dkg/step3', {
       'user_id': _hex(r.userId),
       'identifier': _hex(r.identifier),
       'round2_packages_for_others':
@@ -144,30 +167,50 @@ class RestWalletApi implements WalletApi {
       'server_pk': _hex(r.serverPk),
       'exit_delay': r.exitDelay,
       'owner_pk': _hex(r.ownerPk),
-      'service_vk': _hex(r.serviceVk),
+      'receiver_vk': _hex(r.receiverVk),
       'a_at_cosigner': _hex(r.aAtCosigner),
-      'a_at_service_point': _hex(r.aAtServicePoint),
+      'a_at_receiver_point': _hex(r.aAtReceiverPoint),
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
+      'ecies_a_at_receiver': _hex(r.eciesAAtReceiver),
+      'template_id': r.templateId,
+      'stub_id': r.stubId,
+      'config_blob': _hex(r.configBlob),
     });
     return ContractCreateResponse()
       ..contractScriptPubkey = _unhex(resp['contract_script_pubkey'] as String?)
-      ..bAtService = _unhex(resp['b_at_service'] as String?);
+      ..contractId = _unhex(resp['contract_id'] as String?);
   }
 
-  /// SERVICE-side API. [baseUrl] must point at the external contract-signer service
-  /// (not the cosigner). The wallet delivers its `a@service` half here (role="user").
   @override
-  Future<AssembleContractShareResponse> assembleContractShare(
-      AssembleContractShareRequest r) async {
-    final resp = await _post('/assemble-contract-share', {
-      'contract_group_id': _hex(r.contractGroupId),
-      'half_scalar': _hex(r.halfScalar),
-      'role': r.role,
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+      EvtxoPendingSharesRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/pending', {
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
     });
-    return AssembleContractShareResponse()
-      ..ok = resp['ok'] as bool? ?? false
-      ..serviceSharePoint = _unhex(resp['service_share_point'] as String?);
+    final shares = (resp['shares'] as List<dynamic>? ?? [])
+        .map((s) => PendingContractShare()
+          ..evtxoScriptPubkey = _unhex(s['evtxo_script_pubkey'] as String?)
+          ..contractId = _unhex(s['contract_id'] as String?)
+          ..eciesHalfAuthor = _unhex(s['ecies_half_author'] as String?)
+          ..eciesHalfCosigner = _unhex(s['ecies_half_cosigner'] as String?)
+          ..publicKeyPackageJson = s['public_key_package_json'] as String? ?? ''
+          ..exitDelay = (s['exit_delay'] as num?)?.toInt() ?? 0
+          ..serverPk = _unhex(s['server_pk'] as String?)
+          ..ownerPk = _unhex(s['owner_pk'] as String?))
+        .toList();
+    return EvtxoPendingSharesResponse()..shares.addAll(shares);
+  }
+
+  @override
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/ack', {
+      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
+      'signature': _hex(r.signature),
+      'timestamp_ms': r.timestampMs.toInt(),
+    });
+    return EvtxoAckShareResponse()..ok = resp['ok'] as bool? ?? false;
   }
 
   // -------------------------------------------------------------------------
@@ -175,14 +218,17 @@ class RestWalletApi implements WalletApi {
   // -------------------------------------------------------------------------
 
   @override
-  Future<SignStep1Response> signStep1(SignStep1Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/sign/step1', {
+  Future<SignStep1Response> signStep1(SignStep1Request r,
+      {String? routeGroupKeyHex}) async {
+    final route = routeGroupKeyHex ?? _hex(r.userId);
+    final resp = await _post('/api/u/$route/sign/step1', {
       'user_id': _hex(r.userId),
       'hiding_commitment': _hex(r.hidingCommitment),
       'binding_commitment': _hex(r.bindingCommitment),
       'message_to_sign': _hex(r.messageToSign),
       'signature': _hex(r.signature),
       'full_transaction': _hex(r.fullTransaction),
+      'ark_tx': _hex(r.arkTx),
       'timestamp_ms': r.timestampMs.toInt(),
       'script_path_spend': r.scriptPathSpend,
     });
@@ -200,8 +246,10 @@ class RestWalletApi implements WalletApi {
   }
 
   @override
-  Future<SignStep2Response> signStep2(SignStep2Request r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/sign/step2', {
+  Future<SignStep2Response> signStep2(SignStep2Request r,
+      {String? routeGroupKeyHex}) async {
+    final route = routeGroupKeyHex ?? _hex(r.userId);
+    final resp = await _post('/api/u/$route/sign/step2', {
       'user_id': _hex(r.userId),
       'signature_share': _hex(r.signatureShare),
       'signature': _hex(r.signature),
@@ -215,49 +263,6 @@ class RestWalletApi implements WalletApi {
   // -------------------------------------------------------------------------
   // Transactions
   // -------------------------------------------------------------------------
-
-  @override
-  Future<BroadcastTransactionResponse> broadcastTransaction(
-      BroadcastTransactionRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/tx/broadcast', {
-      'user_id': _hex(r.userId),
-      'tx_hex': r.txHex,
-    });
-    return BroadcastTransactionResponse()
-      ..txId = resp['tx_id'] as String? ?? '';
-  }
-
-  @override
-  Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/tx/history', {
-      ..._authFields(r.userId, r.signature, r.timestampMs),
-    });
-    final result = FetchHistoryResponse();
-    for (final u in (resp['utxos'] as List? ?? [])) {
-      result.utxos.add(UtxoInfo()
-        ..txHash = u['tx_hash'] as String? ?? ''
-        ..vout = (u['vout'] as num?)?.toInt() ?? 0
-        ..amount = Int64(u['amount'] as int? ?? 0));
-    }
-    return result;
-  }
-
-  @override
-  Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
-      FetchRecentTransactionsRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/tx/recent', {
-      ..._authFields(r.userId, r.signature, r.timestampMs),
-    });
-    final result = FetchRecentTransactionsResponse();
-    for (final t in (resp['transactions'] as List? ?? [])) {
-      result.transactions.add(TransactionSummary()
-        ..txHash = t['tx_hash'] as String? ?? ''
-        ..amountSats = Int64(t['amount_sats'] as int? ?? 0)
-        ..timestamp = Int64(t['timestamp'] as int? ?? 0)
-        ..isPending = t['is_pending'] as bool? ?? false);
-    }
-    return result;
-  }
 
   // -------------------------------------------------------------------------
   // Ark
@@ -300,17 +305,6 @@ class RestWalletApi implements WalletApi {
     });
     return GetBoardingAddressResponse()
       ..boardingAddress = resp['boarding_address'] as String? ?? '';
-  }
-
-  @override
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance(
-      CheckBoardingBalanceRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/ark/boarding-balance', {
-      ..._authFields(r.userId, r.signature, r.timestampMs),
-    });
-    return CheckBoardingBalanceResponse()
-      ..balance = Int64(resp['balance'] as int? ?? 0)
-      ..utxoCount = (resp['utxo_count'] as num?)?.toInt() ?? 0;
   }
 
   @override
@@ -397,6 +391,13 @@ class RestWalletApi implements WalletApi {
       'signature': _hex(r.signature),
       'timestamp_ms': r.timestampMs.toInt(),
       'signed_messages': r.signedMessages.map((m) => _hex(m)).toList(),
+      'boarding_utxos': r.boardingUtxos
+          .map((u) => {
+                'txid': u.txid,
+                'vout': u.vout,
+                'amount_sats': u.amountSats.toInt(),
+              })
+          .toList(),
     });
     final result = SettleResponse()
       ..status = SettleResponse_Status.valueOf(

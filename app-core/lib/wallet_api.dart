@@ -12,31 +12,29 @@ abstract class WalletApi {
   Future<DKGStep2Response> dKGStep2(DKGStep2Request request);
   Future<DKGStep3Response> dKGStep3(DKGStep3Request request);
 
-  // Contract eVTXO creation: a single key-preserving refresh of V onto
-  // {service, cosigner}. assembleContractShare is the SERVICE-side API the wallet
-  // calls to hand the service its own refresh half (role="user").
+  // Contract eVTXO creation (PEER model): a single key-preserving refresh of V onto
+  // {receiver, cosigner}. The receiver later picks up its two ECIES half-shares from
+  // its inbox (evtxoPendingShares) and acks them (evtxoAckShare).
   Future<ContractCreateResponse> contractCreate(ContractCreateRequest request);
-  Future<AssembleContractShareResponse> assembleContractShare(
-      AssembleContractShareRequest request);
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+      EvtxoPendingSharesRequest request);
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest request);
 
   // Signing
-  Future<SignStep1Response> signStep1(SignStep1Request request);
-  Future<SignStep2Response> signStep2(SignStep2Request request);
-
-  // Transactions
-  Future<BroadcastTransactionResponse> broadcastTransaction(
-      BroadcastTransactionRequest request);
-  Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest request);
-  Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
-      FetchRecentTransactionsRequest request);
+  // [routeGroupKeyHex] overrides the actor the request is routed to (the URL group_key),
+  // while `request.userId` stays the signer's auth identity. Used by a contract RECEIVER to
+  // route a spend to the eVTXO's `{receiver, cosigner}` pairing actor (keyed by the spk) while
+  // authenticating as itself. Null ⇒ route by `request.userId` (the normal case).
+  Future<SignStep1Response> signStep1(SignStep1Request request,
+      {String? routeGroupKeyHex});
+  Future<SignStep2Response> signStep2(SignStep2Request request,
+      {String? routeGroupKeyHex});
 
   // Ark
   Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest request);
   Future<GetArkAddressResponse> getArkAddress(GetArkAddressRequest request);
   Future<GetBoardingAddressResponse> getBoardingAddress(
       GetBoardingAddressRequest request);
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance(
-      CheckBoardingBalanceRequest request);
   Future<ListVtxosResponse> listVtxos(ListVtxosRequest request);
   Future<ListArkTransactionsResponse> listArkTransactions(
       ListArkTransactionsRequest request);

@@ -11,10 +11,6 @@ use crate::cosigner::registry::CosignerRegistry;
 use crate::shared::SharedServices;
 
 pub async fn run_vtxo_stream(registry: Arc<CosignerRegistry>, shared: Arc<SharedServices>) {
-    if shared.asp_client.is_none() {
-        tracing::info!("VTXO stream: ASP not configured, task exiting");
-        return;
-    }
     tracing::info!("VTXO stream task started");
     loop {
         tracing::info!("VTXO stream: attempting connection...");
@@ -59,10 +55,7 @@ async fn process_notification(
     // Resolve ASP info; bail if not yet cached (the indexer-subscription path
     // also handles VTXO discovery, so dropping a notification here is recoverable).
     let info = {
-        let asp = match shared.asp_client.as_ref() {
-            Some(a) => a,
-            None => return,
-        };
+        let asp = &shared.asp_client;
         let guard = asp.lock().await;
         match guard.info.as_ref() {
             Some(i) => i.clone(),

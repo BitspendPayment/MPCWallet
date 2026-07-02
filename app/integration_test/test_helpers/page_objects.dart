@@ -41,42 +41,17 @@ Future<void> _dismissKeyboard(WidgetTester tester) async {
 class WelcomePage {
   static Future<void> tapCreate(WidgetTester tester) =>
       _tapKey(tester, 'welcomeCreateBtn');
-  static Future<void> tapRestore(WidgetTester tester) =>
-      _tapKey(tester, 'welcomeRestoreBtn');
 }
 
-class SignerSelectionPage {
-  static Future<void> pickSoftware(WidgetTester tester) =>
-      _tapKey(tester, 'signerSoftwareCard');
-  static Future<void> pickHardware(WidgetTester tester) =>
-      _tapKey(tester, 'signerHardwareCard');
-  static Future<void> tapContinue(WidgetTester tester) =>
-      _tapKey(tester, 'signerContinueBtn');
-}
-
-class PasswordPage {
-  static Future<void> enter(WidgetTester tester, String password) async {
-    await _enterText(tester, 'passwordField1', password);
-    await _enterText(tester, 'passwordField2', password);
-    await _tapKey(tester, 'passwordAckCheckbox');
+class PinPage {
+  static Future<void> enter(WidgetTester tester, String pin) async {
+    await _enterText(tester, 'pinField1', pin);
+    await _enterText(tester, 'pinField2', pin);
     await tester.pumpAndSettle();
     await _dismissKeyboard(tester);
-    await tester.dragUntilVisible(
-      find.byKey(const Key('passwordContinueBtn')),
-      find.byType(SingleChildScrollView),
-      const Offset(0, -100),
-    );
-    await tester.pumpAndSettle();
-    await _tapKey(tester, 'passwordContinueBtn');
+    await _tapKey(tester, 'pinContinueBtn');
     await tester.pumpAndSettle();
   }
-}
-
-class GoogleSignInPage {
-  static Future<void> skip(WidgetTester tester) =>
-      _tapKey(tester, 'googleSkipBtn');
-  static Future<void> signIn(WidgetTester tester) =>
-      _tapKey(tester, 'googleSignInBtn');
 }
 
 class ServerConnectPage {
@@ -178,14 +153,5 @@ class ArkSendPage {
   static Future<void> tapSend(WidgetTester tester) async {
     await _dismissKeyboard(tester);
     await _tapKey(tester, 'arkSendVtxoBtn');
-  }
-}
-
-class RestorePage {
-  static Future<void> enterPassword(WidgetTester tester, String password) =>
-      _enterText(tester, 'restorePasswordField', password);
-  static Future<void> tapContinue(WidgetTester tester) async {
-    await _dismissKeyboard(tester);
-    await _tapKey(tester, 'restoreContinueBtn');
   }
 }

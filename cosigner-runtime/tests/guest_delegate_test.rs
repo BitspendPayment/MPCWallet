@@ -38,7 +38,10 @@ fn guest_wasm_path() -> PathBuf {
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 fn xonly_hex(seed: u8) -> String {
@@ -62,7 +65,9 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut r1_packages: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
     for _ in 0..max {
         let secret = random::mod_n_random(&mut rng);
-        let coefficients: Vec<_> = (0..min - 1).map(|_| random::mod_n_random(&mut rng)).collect();
+        let coefficients: Vec<_> = (0..min - 1)
+            .map(|_| random::mod_n_random(&mut rng))
+            .collect();
         let (secret_pkg, pub_pkg) =
             dkg::dkg_part1(max, min, &secret, &coefficients, &mut rng).expect("dkg_part1");
         r1_packages.insert(secret_pkg.identifier.clone(), pub_pkg);
@@ -117,7 +122,9 @@ fn grpc_frame<M: ProstMessage>(m: &M) -> Vec<u8> {
 /// Mock arkd: answers only GetInfo (the setup chain needs no other ASP call).
 async fn run_mock_arkd(listener: tokio::net::TcpListener) {
     loop {
-        let Ok((tcp, _)) = listener.accept().await else { continue };
+        let Ok((tcp, _)) = listener.accept().await else {
+            continue;
+        };
         tokio::spawn(async move {
             let svc = hyper::service::service_fn(handle);
             let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -258,7 +265,9 @@ fn boxed(bytes: Vec<u8>) -> UnsyncBoxBody<Bytes, Infallible> {
 
 async fn run_mock_arkd_drive(listener: tokio::net::TcpListener) {
     loop {
-        let Ok((tcp, _)) = listener.accept().await else { continue };
+        let Ok((tcp, _)) = listener.accept().await else {
+            continue;
+        };
         tokio::spawn(async move {
             let svc = hyper::service::service_fn(handle_drive);
             let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -273,7 +282,7 @@ async fn handle_drive(
 ) -> Result<hyper::Response<UnsyncBoxBody<Bytes, Infallible>>, Infallible> {
     use ark::client::proto::{
         get_event_stream_response::Event, BatchFinalizationEvent, BatchFinalizedEvent,
-        BatchStartedEvent, ConfirmRegistrationResponse, GetInfoResponse, GetEventStreamResponse,
+        BatchStartedEvent, ConfirmRegistrationResponse, GetEventStreamResponse, GetInfoResponse,
         RegisterIntentResponse,
     };
     let path = req.uri().path().to_string();
@@ -305,14 +314,18 @@ async fn handle_drive(
                     batch_expiry: 0,
                     ..Default::default()
                 })))),
-                Ok(Frame::data(mk(Event::BatchFinalization(BatchFinalizationEvent {
-                    id: "batch1".to_string(),
-                    ..Default::default()
-                })))),
-                Ok(Frame::data(mk(Event::BatchFinalized(BatchFinalizedEvent {
-                    id: "batch1".to_string(),
-                    commitment_txid: "commit_abc".to_string(),
-                })))),
+                Ok(Frame::data(mk(Event::BatchFinalization(
+                    BatchFinalizationEvent {
+                        id: "batch1".to_string(),
+                        ..Default::default()
+                    },
+                )))),
+                Ok(Frame::data(mk(Event::BatchFinalized(
+                    BatchFinalizedEvent {
+                        id: "batch1".to_string(),
+                        commitment_txid: "commit_abc".to_string(),
+                    },
+                )))),
             ];
             StreamBody::new(futures::stream::iter(frames)).boxed_unsync()
         }
@@ -387,7 +400,10 @@ async fn setup_ready_delegate(guest: &mut GuestInstance, asp_url: &str) {
         }))
         .await
         .unwrap();
-    assert!(matches!(r, GuestResponse::DelegateReady), "ApplyDelegateSigs: {r:?}");
+    assert!(
+        matches!(r, GuestResponse::DelegateReady),
+        "ApplyDelegateSigs: {r:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -522,7 +538,11 @@ async fn guest_snapshot_restore_roundtrip() {
         }
         other => panic!("ListVtxos after restore: {other:?}"),
     }
-    match guest_b.command(GuestCommand::ListArkTransactions).await.unwrap() {
+    match guest_b
+        .command(GuestCommand::ListArkTransactions)
+        .await
+        .unwrap()
+    {
         GuestResponse::ArkTransactions { entries } => {
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].txid, "hist1");
@@ -576,7 +596,9 @@ async fn guest_delegate_survives_snapshot_and_drives() {
         .await
         .unwrap();
     match resp {
-        GuestResponse::SettleSubmitted { commitment_txid, .. } => {
+        GuestResponse::SettleSubmitted {
+            commitment_txid, ..
+        } => {
             assert_eq!(commitment_txid, "commit_abc")
         }
         other => panic!("SettleDelegate after restore: {other:?}"),

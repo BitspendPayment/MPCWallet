@@ -8,31 +8,23 @@ service MPCWallet {
   rpc DKGStep2 (DKGStep2Request) returns (DKGStep2Response);
   rpc DKGStep3 (DKGStep3Request) returns (DKGStep3Response);
 
-  // Contract creation. NO reshare and NO new key: the wallet's existing 2-of-2 key V is
-  // reused; the contract is enforced by the cosigner gate (WASM evaluate + verifying-share
-  // allowlist), not by a distinct key. A single step REFRESHES V onto the always-online
-  // {service, cosigner} pairing (key unchanged) so the service can co-sign. The wallet sends
-  // a@service DIRECTLY to the service via AssembleContractShare (only the POINT a@service·G
-  // reaches the cosigner).
+  // Contract creation (PEER model). NO reshare and NO new key: the wallet's existing 2-of-2
+  // key V is reused; the contract is enforced by the cosigner gate (WASM evaluate +
+  // verifying-share allowlist), not by a distinct key. A single step REFRESHES V onto a
+  // {receiver, cosigner} pairing (key unchanged) so the chosen RECEIVER (another user) can
+  // co-sign. Both halves of the receiver's share are ECIES-encrypted to its verifying key and
+  // dropped into the receiver's pickup inbox: the wallet's a@receiver (in the request) and the
+  // cosigner's b@receiver. No external service, no URL.
   rpc ContractCreate (ContractCreateRequest) returns (ContractCreateResponse);
 
-  // SERVICE-side API (served by the external contract-signer service, NOT the
-  // cosigner). Both the wallet (role=user, a@service) and the cosigner
-  // (role=cosigner, b@service + context) deliver their refresh halves; the service
-  // sums them into its V′ share. Synchronous, no encryption.
-  rpc AssembleContractShare (AssembleContractShareRequest) returns (AssembleContractShareResponse);
+  // Inbox pickup (PEER model). The receiver fetches the ECIES contract-share halves held for
+  // it, decrypts BOTH with its signing secret, sums them into its share, then acks to clear.
+  rpc EvtxoPendingShares (EvtxoPendingSharesRequest) returns (EvtxoPendingSharesResponse);
+  rpc EvtxoAckShare (EvtxoAckShareRequest) returns (EvtxoAckShareResponse);
 
   // Signing
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
   rpc SignStep2 (SignStep2Request) returns (SignStep2Response);
-
-  // Broadcast
-  rpc BroadcastTransaction (BroadcastTransactionRequest) returns (BroadcastTransactionResponse);
-
-  // Sync / History
-  rpc FetchHistory (FetchHistoryRequest) returns (FetchHistoryResponse);
-  rpc FetchRecentTransactions (FetchRecentTransactionsRequest) returns (FetchRecentTransactionsResponse);
-  rpc SubscribeToHistory (SubscribeToHistoryRequest) returns (stream TransactionNotification);
 
   // Ark Protocol
   rpc GetArkInfo (GetArkInfoRequest) returns (GetArkInfoResponse);
@@ -40,7 +32,6 @@ service MPCWallet {
   rpc GetBoardingAddress (GetBoardingAddressRequest) returns (GetBoardingAddressResponse);
   rpc ListVtxos (ListVtxosRequest) returns (ListVtxosResponse);
   rpc ListArkTransactions (ListArkTransactionsRequest) returns (ListArkTransactionsResponse);
-  rpc CheckBoardingBalance (CheckBoardingBalanceRequest) returns (CheckBoardingBalanceResponse);
   rpc SendVtxo (SendVtxoRequest) returns (SendVtxoResponse);
   rpc RedeemVtxo (RedeemVtxoRequest) returns (RedeemVtxoResponse);
 
@@ -142,13 +133,6 @@ message SignStep2Request {
    reserved 6; // was claimed_share (see SignStep1Request)
 }
 
-message UtxoInfo {
-    string tx_hash = 1;
-    int32 vout = 2;
-    int64 amount = 3; // satoshis
-}
-
-
 message SignStep2Response {
    // Final aggregated signature
    // (R, z)
@@ -156,60 +140,6 @@ message SignStep2Response {
    bytes z_scalar = 2;
 }
 
-
-message BroadcastTransactionRequest {
-    bytes user_id = 1;
-    string tx_hex = 2;
-}
-
-message BroadcastTransactionResponse {
-    string tx_id = 1;
-}
-
-
-message FetchHistoryRequest {
-    bytes user_id = 1;
-    bytes signature = 2; // Schnorr signature over auth message for authentication
-    int64 timestamp_ms = 3; // Unix timestamp in milliseconds for replay protection
-}
-
-message FetchHistoryResponse {
-    repeated UtxoInfo utxos = 1; 
-    // Could add list of past transaction IDs if needed for UI history
-}
-
-message FetchRecentTransactionsRequest {
-    bytes user_id = 1;
-    bytes signature = 2; // Schnorr signature over auth message for authentication
-    int64 timestamp_ms = 3; // Unix timestamp in milliseconds for replay protection
-}
-
-message FetchRecentTransactionsResponse {
-    repeated TransactionSummary transactions = 1;
-}
-
-message TransactionSummary {
-    string tx_hash = 1;
-    int64 amount_sats = 2; // Signed amount (+ for receive, - for sent)
-    int64 timestamp = 3; // timestamp seconds
-    bool is_pending = 4; // if in mempool
-}
-
-message SubscribeToHistoryRequest {
-    bytes user_id = 1;
-    bytes signature = 2; // Schnorr signature over auth message for authentication
-    int64 timestamp_ms = 3; // Unix timestamp in milliseconds for replay protection
-}
-
-message TransactionNotification {
-    string tx_hash = 1;
-    int32 height = 2;
-    // Using a simple notification that "something changed" or sending the full update?
-    // User said "rely on server for maintaining state and updating it with latest transactions"
-    // Sending the relevant UTXOs involved (newly created ones owned by wallet)
-    repeated UtxoInfo added_utxos = 3;
-    repeated UtxoInfo spent_utxos = 4; // Inputs that consumed our UTXOs
-}
 
 // Ark Protocol Messages
 
@@ -282,17 +212,6 @@ message ListVtxosResponse {
     bool has_active_delegate = 3;
 }
 
-message CheckBoardingBalanceRequest {
-    bytes user_id = 1;
-    bytes signature = 2;
-    int64 timestamp_ms = 3;
-}
-
-message CheckBoardingBalanceResponse {
-    uint64 balance = 1;
-    uint32 utxo_count = 2;
-}
-
 message ArkTransactionSummary {
     string tx_type = 1;     // "board", "send", "receive", "settle"
     int64 amount_sats = 2;  // signed: + for inflows, - for outflows
@@ -352,12 +271,21 @@ message RedeemVtxoResponse {
 
 // Settle Messages
 
+message BoardingUtxo {
+    string txid = 1;
+    uint32 vout = 2;
+    uint64 amount_sats = 3;
+}
+
 message SettleRequest {
     bytes user_id = 1;
     bytes signature = 2;
     int64 timestamp_ms = 3;
     // FROST signatures for previously requested sighashes (phase 2+)
     repeated bytes signed_messages = 4;
+    // Wallet-scanned boarding UTXOs to settle. Required on the phase-1 (no-signatures)
+    // call; the cosigner no longer scans the chain. Currently the cosigner uses [0].
+    repeated BoardingUtxo boarding_utxos = 5;
 }
 
 message SettleResponse {
@@ -458,13 +386,15 @@ message RegisterDeviceTokenResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Contract creation (reshare V→V′, then refresh onto the service pairing).
-// Authenticated (the user's main key already exists). The result is a 2-of-2 V′
-// with two pairings: (user + cosigner_shareA) || (service + cosigner_shareB),
-// stored as an EvtxoPolicy on the user's own policy. Steps 1-3 are the simple
-// 2-party reshare {user, cosigner}; step 4 carries the user's refresh halves for
-// the always-online service (the user sends a@service DIRECTLY to the service via
-// AssembleContractShare, so only the POINT a@service·G reaches the cosigner).
+// Contract creation (PEER model). NO reshare and NO new key: the wallet's existing
+// 2-of-2 key V is reused; the contract is enforced by the cosigner gate (WASM
+// evaluate + verifying-share allowlist). A single key-preserving REFRESH of V onto a
+// {receiver, cosigner} pairing lets the chosen RECEIVER (another user, identified by
+// its verifying key) co-sign V independently. Both halves of the receiver's share are
+// ECIES-encrypted to receiver_vk and held in the receiver's inbox: the wallet's
+// a@receiver (ecies_a_at_receiver, in this request) and the cosigner's b@receiver
+// (computed + encrypted by the cosigner). Only the POINT a@receiver·G reaches the
+// cosigner, so it never learns the receiver's full share.
 // ---------------------------------------------------------------------------
 message ContractCreateRequest {
   bytes user_id = 1;
@@ -474,40 +404,57 @@ message ContractCreateRequest {
   bytes server_pk = 5;          // ASP signer x-only pubkey (cooperative leaf)
   uint32 exit_delay = 6;        // unilateral-exit CSV delay (exit leaf)
   bytes owner_pk = 7;           // user-supplied unilateral-exit x-only key (exit leaf)
-  bytes service_vk = 8;         // the always-online service's verifying key (33B)
+  bytes receiver_vk = 8;        // the peer RECEIVER's verifying key (33B)
   bytes a_at_cosigner = 9;      // wallet's refresh slice of V to the cosigner (scalar, 32B)
-  bytes a_at_service_point = 10; // wallet's refresh slice of V to the service, as POINT (33B)
+  bytes a_at_receiver_point = 10; // wallet's refresh slice of V to the receiver, as POINT (33B)
   bytes signature = 11;         // Schnorr auth signature
   int64 timestamp_ms = 12;      // replay protection
+  bytes ecies_a_at_receiver = 13; // ECIES(a@receiver) to receiver_vk — the wallet's encrypted half
+  // Phase 2 (template + variable composition). When `template_id` is set, the cosigner composes a
+  // CONTRACT from a published TEMPLATE + the author's typed config: it fetches the template + its
+  // provider STUB (both by content id), patches `config_blob` (the encoded key-value config) into
+  // the stub, composes them into one component, and the COMPOSED sha256 becomes the bound
+  // contract_id (committing the variables). When empty, `contract_id`/`contract_wasm` above are used.
+  string template_id = 14;      // content id (hex) of the registered template
+  string stub_id = 15;          // content id (hex) of the template's provider stub
+  bytes config_blob = 16;       // encoded KV config the cosigner patches into the stub
 }
 
 message ContractCreateResponse {
   bytes contract_script_pubkey = 1; // registered eVTXO scriptPubKey (cooperative leaf = V)
-  bytes b_at_service = 2;           // cosigner's refresh half for the service (scalar, 32B)
-  ContractContext context = 3;      // delivered by the wallet to the service
+  bytes contract_id = 2;            // the bound contract id (composed sha256 in template mode)
 }
 
-// SERVICE-side API. Served by the external contract-signer service. Both the
-// wallet (role="user", half=a@service) and the cosigner (role="cosigner",
-// half=b@service + context) deliver their refresh halves; the service sums them
-// into its V′ secret share. `context` is set only by the cosigner.
-message AssembleContractShareRequest {
-  bytes contract_group_id = 1;  // correlation key = the registered scriptPubKey
-  bytes half_scalar = 2;        // a@service (user) or b@service (cosigner), 32B
-  string role = 3;              // "user" | "cosigner"
-  ContractContext context = 4;  // set by the cosigner only
+// ---------------------------------------------------------------------------
+// Inbox pickup (PEER model). The receiver fetches the contract-share halves held for
+// it in its own inbox, decrypts BOTH ECIES halves with its signing secret, sums them
+// into its share P = a@receiver + b@receiver, then acks to clear. No FCM/poll loop is
+// required — the inbox is surfaced on the receiver's authenticated pull.
+// ---------------------------------------------------------------------------
+message EvtxoPendingSharesRequest {
+  bytes user_id = 1;       // the receiver (its own actor)
+  bytes signature = 2;
+  int64 timestamp_ms = 3;
 }
-message ContractContext {
-  bytes contract_script_pubkey = 1;
-  bytes contract_id = 2;             // sha256(wasm)
-  uint32 exit_delay = 3;
-  bytes owner_pk = 4;                // exit-leaf owner x-only
-  bytes server_pk = 5;              // ASP signer x-only
-  string public_key_package_json = 6; // 2-entry V′ PKP {service_id, cosigner_id}
-  bytes service_vk = 7;             // the service's verifying key
-  bytes cosigner_group_key = 8;     // the user's V — the cosigner actor the service addresses
+message EvtxoPendingSharesResponse {
+  repeated PendingContractShare shares = 1;
 }
-message AssembleContractShareResponse {
+message PendingContractShare {
+  bytes evtxo_script_pubkey = 1;        // the contract eVTXO (also the pairing actor to address at spend)
+  bytes contract_id = 2;                // sha256(wasm)
+  bytes ecies_half_author = 3;          // ECIES(a@receiver) — the wallet/author's half
+  bytes ecies_half_cosigner = 4;        // ECIES(b@receiver) — the cosigner's half
+  string public_key_package_json = 5;   // the 2-entry pairing PKP {receiver_id, cosigner_id}
+  uint32 exit_delay = 6;
+  bytes server_pk = 7;                  // ASP signer x-only (cooperative leaf)
+  bytes owner_pk = 8;                   // exit-leaf owner x-only (for the taptree)
+}
+message EvtxoAckShareRequest {
+  bytes user_id = 1;                    // the receiver
+  bytes evtxo_script_pubkey = 2;        // the share to clear from the inbox
+  bytes signature = 3;
+  int64 timestamp_ms = 4;
+}
+message EvtxoAckShareResponse {
   bool ok = 1;
-  bytes service_share_point = 2;  // service_share·G once both halves are in (else empty)
 }

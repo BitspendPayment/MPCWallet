@@ -5,27 +5,19 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::auth::message::OP_SEND_VTXO;
+use crate::cosigner::actor::CosignerActor;
 use crate::cosigner::handlers::parsers;
+use crate::cosigner::registry::run_blocking;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
 
-use crate::cosigner::wire::{SendVtxoStep1Wire, VtxoInputWire};
+use crate::cosigner::wire::VtxoInputWire;
 
 use super::helpers::{
-    auth_check, delete_user_delegate, now_secs, save_user_ark_history, save_user_vtxos,
+    delete_user_delegate, now_secs, save_user_ark_history, save_user_vtxos,
 };
-
-pub(crate) fn require_asp(
-    shared: &SharedServices,
-) -> Result<std::sync::Arc<tokio::sync::Mutex<ark::client::AspClient>>, Status> {
-    shared
-        .asp_client
-        .clone()
-        .ok_or_else(|| Status::unavailable("ASP not configured (set ASP_URL env var)"))
-}
 
 fn fetch_asp_info(
     asp: &std::sync::Arc<tokio::sync::Mutex<ark::client::AspClient>>,
@@ -47,47 +39,6 @@ fn fetch_asp_info(
 // send_vtxo — guest-routed helpers (the session + signing live in the WASM guest;
 // these only translate the host's VTXO projection in/out of the guest wires).
 // =============================================================================
-
-/// Phase 1: build the guest's `SendVtxoStep1` wire from the host VTXO projection + ASP
-/// config. Auth is enforced inside the guest. Returns a gRPC precondition error if there
-/// are no VTXOs or insufficient balance (nicer than surfacing the guest's build error).
-/// Returns `(step1_wire, vtxos_to_push)`: the wire no longer carries VTXOs (the guest reads
-/// its own store), so the caller pushes `vtxos_to_push` via `SetVtxos` first.
-pub fn build_send_step1_wire(
-    state: &CosignerState,
-    asp_url: String,
-    req: &SendVtxoRequest,
-) -> Result<(SendVtxoStep1Wire, Vec<VtxoInputWire>), Status> {
-    if state.vtxos.is_empty() {
-        return Err(Status::failed_precondition("no VTXOs available for sending"));
-    }
-    let total_available: u64 = state.vtxos.iter().map(|e| e.amount).sum();
-    if total_available < req.amount {
-        return Err(Status::failed_precondition(format!(
-            "insufficient balance: have {} sats, need {} sats",
-            total_available, req.amount
-        )));
-    }
-    let vtxos = state
-        .vtxos
-        .iter()
-        .map(|e| VtxoInputWire {
-            txid: e.txid.clone(),
-            vout: e.vout,
-            amount_sats: e.amount,
-            exit_delay: e.exit_delay,
-        })
-        .collect();
-    let wire = SendVtxoStep1Wire {
-        user_id: req.user_id.clone(),
-        signature: req.signature.clone(),
-        timestamp_ms: req.timestamp_ms,
-        asp_url,
-        recipient_ark_address: req.recipient_ark_address.clone(),
-        amount: req.amount,
-    };
-    Ok((wire, vtxos))
-}
 
 /// Guest-routed delegate-settle Phase 1 prep: the VTXOs to push into the guest + the
 /// host-computed intent renewal deadline (earliest VTXO expiry − safety margin). The guest
@@ -165,7 +116,11 @@ pub fn apply_send_result(
         txid: ark_txid.clone(),
         timestamp: now_secs(),
     });
-    save_user_ark_history(shared.persistence.as_ref(), &user_id_hex, &state.ark_tx_history);
+    save_user_ark_history(
+        shared.persistence.as_ref(),
+        &user_id_hex,
+        &state.ark_tx_history,
+    );
     SendVtxoResponse {
         status: send_vtxo_response::Status::Settled as i32,
         messages_to_sign: vec![],
@@ -179,25 +134,23 @@ pub fn apply_send_result(
 // submit_ark_send
 // =============================================================================
 
-#[tracing::instrument(skip_all, name = "actor::submit_ark_send", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn submit_ark_send(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    req: SubmitArkSendRequest,
-) -> Result<SubmitArkSendResponse, Status> {
+impl CosignerActor {
+    pub async fn submit_ark_send(
+        &mut self,
+        req: SubmitArkSendRequest,
+    ) -> Result<SubmitArkSendResponse, Status> {
+        let shared = self.shared.clone();
+        let span = tracing::info_span!("actor::submit_ark_send", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |state| {
+    let _enter = span.enter();
+    let shared = shared.as_ref();
     use bitcoin::base64::{self, Engine as _};
 
     let user_id_hex = parsers::user_id_hex(&req.user_id);
     tracing::info!("[{user_id_hex}] SubmitArkSend");
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_SEND_VTXO,
-    )?;
+    // Auth (OP_SEND_VTXO) ran at the REST boundary.
 
-    let asp = require_asp(shared)?;
+    let asp = shared.asp_client.clone();
 
     // Decode client's signed ark tx (base64 PSBT).
     let signed_ark_bytes = base64::engine::general_purpose::STANDARD
@@ -385,4 +338,7 @@ pub fn submit_ark_send(
         change_vout,
         change_amount,
     })
+        })
+        .await
+    }
 }

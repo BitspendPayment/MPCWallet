@@ -46,6 +46,39 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
+  /// Auth signature for EvtxoPendingShares (receiver fetches its inbox of contract shares).
+  AuthSignature signForEvtxoPending() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoPending,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for the SSE event subscription (`GET /u/{vk}/events`).
+  AuthSignature signForEventsSubscribe() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEventsSubscribe,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for EvtxoAckShare (receiver clears a picked-up share).
+  AuthSignature signForEvtxoAck() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoAck,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
   /// Creates an authentication signature for SignStep2.
   AuthSignature signForSignStep2() {
     final timestamp = currentTimestamp;

@@ -29,6 +29,15 @@ class PushService {
   /// foreground push handler can drive a re-delegate while the app is open.
   static MpcService? _svc;
 
+  /// Set when a "boarding_deposit" notification opened the app from a
+  /// terminated state before the service was ready; acted on in
+  /// [registerCurrentToken] once it is.
+  static bool _pendingBoarding = false;
+
+  /// Set when a "contract_share" notification opened the app from a terminated
+  /// state before the service was ready; acted on in [registerCurrentToken].
+  static bool _pendingContractShare = false;
+
   /// Foreground init. Called from `main()` before runApp.
   static Future<void> initialize() async {
     if (_initialized) return;
@@ -49,6 +58,12 @@ class PushService {
       );
       FirebaseMessaging.onBackgroundMessage(_handleBackgroundMessage);
       FirebaseMessaging.onMessage.listen(_handleForegroundMessage);
+      // "boarding_deposit" is a visible notification; tapping it opens the app.
+      FirebaseMessaging.onMessageOpenedApp.listen(_handleOpenedApp);
+      final initial = await FirebaseMessaging.instance.getInitialMessage();
+      if (initial != null) {
+        await _handleOpenedApp(initial);
+      }
       _initialized = true;
     } catch (e) {
       debugPrint('[push] permission/handler setup failed: $e');
@@ -59,6 +74,24 @@ class PushService {
   /// once `MpcService` has a client. Idempotent.
   static Future<void> registerCurrentToken(MpcService svc) async {
     _svc = svc;
+    // A boarding notification opened the app before the service was ready.
+    if (_pendingBoarding) {
+      _pendingBoarding = false;
+      try {
+        await svc.boardFunds();
+      } catch (e) {
+        debugPrint('[push] pending boardFunds failed: $e');
+      }
+    }
+    // A contract-share notification opened the app before the service was ready.
+    if (_pendingContractShare) {
+      _pendingContractShare = false;
+      try {
+        await svc.pickUpContractShares();
+      } catch (e) {
+        debugPrint('[push] pending pickUpContractShares failed: $e');
+      }
+    }
     if (!_initialized) return;
     try {
       final token = await FirebaseMessaging.instance.getToken();
@@ -82,20 +115,69 @@ class PushService {
 
   static Future<void> _handleForegroundMessage(RemoteMessage msg) async {
     debugPrint('[push] foreground: ${msg.data}');
-    if (msg.data['type'] != 'vtxo_received') return;
-    // App is open: nothing wakes a background isolate, so drive the refresh
-    // here. refreshVtxos() runs _delegateIfNeeded() -> settleDelegate, the same
-    // re-delegate the background handler performs.
+    final type = msg.data['type'];
     final svc = _svc;
     if (svc == null) {
-      debugPrint('[push] foreground vtxo_received but no live service yet');
+      debugPrint('[push] foreground $type but no live service yet');
       return;
     }
-    try {
-      await svc.refreshVtxos();
-      debugPrint('[push] foreground re-delegate via refreshVtxos ok');
-    } catch (e) {
-      debugPrint('[push] foreground refreshVtxos failed: $e');
+    if (type == 'vtxo_received') {
+      // App is open: nothing wakes a background isolate, so drive the refresh
+      // here. refreshVtxos() runs _delegateIfNeeded() -> settleDelegate, the
+      // same re-delegate the background handler performs.
+      try {
+        await svc.refreshVtxos();
+        debugPrint('[push] foreground re-delegate via refreshVtxos ok');
+      } catch (e) {
+        debugPrint('[push] foreground refreshVtxos failed: $e');
+      }
+    } else if (type == 'boarding_deposit') {
+      // App is open: reflect the pending deposit so the user can board from UI.
+      try {
+        await svc.refreshBoardingBalance();
+        debugPrint('[push] foreground boarding balance refreshed');
+      } catch (e) {
+        debugPrint('[push] foreground refreshBoardingBalance failed: $e');
+      }
+    } else if (type == 'contract_share') {
+      // App is open: a contract share landed in our inbox — pick it up + assemble.
+      try {
+        final n = await svc.pickUpContractShares();
+        debugPrint('[push] foreground picked up $n contract share(s)');
+      } catch (e) {
+        debugPrint('[push] foreground pickUpContractShares failed: $e');
+      }
+    }
+  }
+
+  /// User tapped a notification (app backgrounded or cold-started). Handles the
+  /// visible/tappable notifications: "boarding_deposit" and "contract_share".
+  static Future<void> _handleOpenedApp(RemoteMessage msg) async {
+    final type = msg.data['type'];
+    final svc = _svc;
+    if (type == 'boarding_deposit') {
+      if (svc == null) {
+        // App cold-started from the tap; act once the service is ready.
+        _pendingBoarding = true;
+        return;
+      }
+      try {
+        await svc.boardFunds();
+        debugPrint('[push] tap-to-board: boardFunds ok');
+      } catch (e) {
+        debugPrint('[push] tap-to-board boardFunds failed: $e');
+      }
+    } else if (type == 'contract_share') {
+      if (svc == null) {
+        _pendingContractShare = true;
+        return;
+      }
+      try {
+        final n = await svc.pickUpContractShares();
+        debugPrint('[push] tap-to-accept: picked up $n contract share(s)');
+      } catch (e) {
+        debugPrint('[push] tap-to-accept pickUpContractShares failed: $e');
+      }
     }
   }
 

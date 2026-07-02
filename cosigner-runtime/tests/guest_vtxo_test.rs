@@ -111,7 +111,11 @@ async fn guest_owns_history() {
         .await
         .unwrap();
 
-    match guest.command(GuestCommand::ListArkTransactions).await.unwrap() {
+    match guest
+        .command(GuestCommand::ListArkTransactions)
+        .await
+        .unwrap()
+    {
         GuestResponse::ArkTransactions { entries } => {
             assert_eq!(entries.len(), 2);
             assert_eq!(entries[0].tx_type, "receive");

@@ -7,7 +7,7 @@ import 'test_setup.dart';
 class Flows {
   static Future<void> completeOnboarding(
     WidgetTester tester, {
-    required String password,
+    String pin = '123456',
   }) async {
     await pumpUntilFound(
       tester,
@@ -16,13 +16,9 @@ class Flows {
     );
     await WelcomePage.tapCreate(tester);
     await tester.pumpAndSettle();
-    await SignerSelectionPage.pickSoftware(tester);
-    await SignerSelectionPage.tapContinue(tester);
+    await PinPage.enter(tester, pin);
     await tester.pumpAndSettle();
-    await PasswordPage.enter(tester, password);
-    await tester.pumpAndSettle();
-    await GoogleSignInPage.signIn(tester);
-    await tester.pumpAndSettle();
+    // Onboarding goes straight to the server step after the PIN.
     await ServerConnectPage.pickRegtest(tester);
     // Don't pumpAndSettle here — the DKG screen has a CircularProgressIndicator
     // that never "settles" until DKG completes, so pumpAndSettle would block

@@ -5,7 +5,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:hive/hive.dart';
 import 'package:path_provider/path_provider.dart';
 
-import 'package:app/services/backup_store.dart';
 import 'package:app/services/mpc_service.dart';
 import 'package:flutter/widgets.dart';
 import 'package:provider/provider.dart';
@@ -50,10 +49,7 @@ Future<void> resetAppState() async {
   }
 }
 
-Future<void> bootApp(
-  WidgetTester tester, {
-  required BackupStore backupStore,
-}) async {
+Future<void> bootApp(WidgetTester tester) async {
   GoogleFonts.config.allowRuntimeFetching = false;
   // Suppress RenderFlex overflow warnings in tests. They show as yellow/black
   // stripes in production but fail integration_test runs because the binding
@@ -66,7 +62,7 @@ Future<void> bootApp(
     }
     priorOnError?.call(details);
   };
-  await tester.pumpWidget(buildTestApp(backupStore: backupStore));
+  await tester.pumpWidget(buildTestApp());
   await tester.pumpAndSettle();
 }
 

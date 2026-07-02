@@ -6,28 +6,16 @@ use std::sync::Arc;
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::auth::message::{
-    OP_CHECK_BOARDING_BALANCE, OP_GET_ARK_ADDRESS, OP_GET_ARK_INFO, OP_GET_BOARDING_ADDRESS,
-    OP_LIST_ARK_TXS, OP_LIST_VTXOS,
-};
+use crate::cosigner::actor::CosignerActor;
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::handle::CosignerHandle;
 use crate::cosigner::handlers::parsers;
-use crate::cosigner::registry::CosignerRegistry;
+use crate::cosigner::registry::{run_blocking, CosignerRegistry};
 use crate::cosigner::state::CosignerState;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
 
-use super::helpers::{auth_check, get_user_xonly_pubkey};
-
-fn require_asp(
-    shared: &SharedServices,
-) -> Result<std::sync::Arc<tokio::sync::Mutex<ark::client::AspClient>>, Status> {
-    shared
-        .asp_client
-        .clone()
-        .ok_or_else(|| Status::unavailable("ASP not configured (set ASP_URL env var)"))
-}
+use super::helpers::get_user_xonly_pubkey;
 
 /// Fetch ASP info (sync wrapper). Caches on the ASP client itself.
 fn fetch_asp_info(
@@ -46,36 +34,37 @@ fn fetch_asp_info(
     })
 }
 
-#[tracing::instrument(skip_all, name = "actor::get_ark_info", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn get_ark_info(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    req: GetArkInfoRequest,
-) -> Result<GetArkInfoResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    tracing::info!("[{user_id_hex}] GetArkInfo");
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_GET_ARK_INFO,
-    )?;
-    let asp = require_asp(shared)?;
-    let info = fetch_asp_info(&asp)?;
-    Ok(GetArkInfoResponse {
-        signer_pubkey: info.signer_pubkey,
-        forfeit_pubkey: info.forfeit_pubkey,
-        network: info.network,
-        session_duration: info.session_duration,
-        unilateral_exit_delay: info.unilateral_exit_delay,
-        boarding_exit_delay: info.boarding_exit_delay,
-        vtxo_min_amount: info.vtxo_min_amount,
-        dust: info.dust,
-        checkpoint_tapscript: info.checkpoint_tapscript,
-        forfeit_address: info.forfeit_address,
-        auto_settle_safety_margin_secs: shared.auto_settle_safety_margin_secs,
-    })
+impl CosignerActor {
+    pub async fn get_ark_info(
+        &mut self,
+        req: GetArkInfoRequest,
+    ) -> Result<GetArkInfoResponse, Status> {
+        let shared = self.shared.clone();
+        let span = tracing::info_span!("actor::get_ark_info", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |_state| {
+            let _enter = span.enter();
+            let shared = shared.as_ref();
+            let user_id_hex = parsers::user_id_hex(&req.user_id);
+            tracing::info!("[{user_id_hex}] GetArkInfo");
+            // Auth (OP_GET_ARK_INFO) ran at the REST boundary.
+            let asp = shared.asp_client.clone();
+            let info = fetch_asp_info(&asp)?;
+            Ok(GetArkInfoResponse {
+                signer_pubkey: info.signer_pubkey,
+                forfeit_pubkey: info.forfeit_pubkey,
+                network: info.network,
+                session_duration: info.session_duration,
+                unilateral_exit_delay: info.unilateral_exit_delay,
+                boarding_exit_delay: info.boarding_exit_delay,
+                vtxo_min_amount: info.vtxo_min_amount,
+                dust: info.dust,
+                checkpoint_tapscript: info.checkpoint_tapscript,
+                forfeit_address: info.forfeit_address,
+                auto_settle_safety_margin_secs: shared.auto_settle_safety_margin_secs,
+            })
+        })
+        .await
+    }
 }
 
 fn register_user_scripts(
@@ -121,10 +110,7 @@ fn register_user_scripts(
     }
     state.owned_scripts.extend(scripts.iter().cloned());
 
-    let asp_arc = match shared.asp_client.as_ref() {
-        Some(a) => a.clone(),
-        None => return,
-    };
+    let asp_arc = shared.asp_client.clone();
     let rt = Handle::current();
     let subscription_id = match rt.block_on({
         let asp_arc = asp_arc.clone();
@@ -241,220 +227,173 @@ fn indexer_to_vtxo(v: ark::client::proto::IndexerVtxo) -> ark::client::proto::Vt
     }
 }
 
-#[tracing::instrument(skip_all, name = "actor::get_ark_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn get_ark_address(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    registry: &Arc<CosignerRegistry>,
-    req: GetArkAddressRequest,
-) -> Result<GetArkAddressResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    tracing::info!("[{user_id_hex}] GetArkAddress");
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_GET_ARK_ADDRESS,
-    )?;
-    let asp = require_asp(shared)?;
-    let info = fetch_asp_info(&asp)?;
+impl CosignerActor {
+    pub async fn get_ark_address(
+        &mut self,
+        registry: &Arc<CosignerRegistry>,
+        req: GetArkAddressRequest,
+    ) -> Result<GetArkAddressResponse, Status> {
+        let shared = self.shared.clone();
+        let registry = registry.clone();
+        let span = tracing::info_span!("actor::get_ark_address", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |state| {
+            let _enter = span.enter();
+            let shared = shared.as_ref();
+            let registry = &registry;
+            let user_id_hex = parsers::user_id_hex(&req.user_id);
+            tracing::info!("[{user_id_hex}] GetArkAddress");
+            // Auth (OP_GET_ARK_ADDRESS) ran at the REST boundary.
+            let asp = shared.asp_client.clone();
+            let info = fetch_asp_info(&asp)?;
 
-    let owner_pk_hex = get_user_xonly_pubkey(
-        state,
-        shared.persistence.as_ref(),
-        &user_id_hex,
-    )?;
+            let owner_pk_hex =
+                get_user_xonly_pubkey(state, shared.persistence.as_ref(), &user_id_hex)?;
 
-    let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
-    let exit_delay = info.unilateral_exit_delay as u32;
-    let ark_addr =
-        ark::client::ark_address(&owner_pk_hex, &info.signer_pubkey, exit_delay, network)
-            .map_err(|e| Status::internal(format!("ark_address: {e}")))?;
+            let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
+            let exit_delay = info.unilateral_exit_delay as u32;
+            let ark_addr =
+                ark::client::ark_address(&owner_pk_hex, &info.signer_pubkey, exit_delay, network)
+                    .map_err(|e| Status::internal(format!("ark_address: {e}")))?;
 
-    register_user_scripts(shared, registry, state, &user_id_hex, &owner_pk_hex, &info);
+            register_user_scripts(shared, registry, state, &user_id_hex, &owner_pk_hex, &info);
 
-    Ok(GetArkAddressResponse {
-        ark_address: ark_addr,
-    })
-}
-
-#[tracing::instrument(skip_all, name = "actor::get_boarding_address", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn get_boarding_address(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    registry: &Arc<CosignerRegistry>,
-    req: GetBoardingAddressRequest,
-) -> Result<GetBoardingAddressResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    tracing::info!("[{user_id_hex}] GetBoardingAddress");
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_GET_BOARDING_ADDRESS,
-    )?;
-    let asp = require_asp(shared)?;
-    let info = fetch_asp_info(&asp)?;
-    let owner_pk_hex = get_user_xonly_pubkey(
-        state,
-        shared.persistence.as_ref(),
-        &user_id_hex,
-    )?;
-    let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
-    let exit_delay = info.boarding_exit_delay as u32;
-    let boarding_addr =
-        ark::client::boarding_address(&owner_pk_hex, &info.signer_pubkey, exit_delay, network)
-            .map_err(|e| Status::internal(format!("boarding_address: {e}")))?;
-    register_user_scripts(shared, registry, state, &user_id_hex, &owner_pk_hex, &info);
-    Ok(GetBoardingAddressResponse {
-        boarding_address: boarding_addr,
-    })
-}
-
-#[tracing::instrument(skip_all, name = "actor::check_boarding_balance", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn check_boarding_balance(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    req: CheckBoardingBalanceRequest,
-) -> Result<CheckBoardingBalanceResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_CHECK_BOARDING_BALANCE,
-    )?;
-    let asp = require_asp(shared)?;
-    let info = fetch_asp_info(&asp)?;
-
-    let owner_pk_hex = get_user_xonly_pubkey(
-        state,
-        shared.persistence.as_ref(),
-        &user_id_hex,
-    )?;
-    let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
-    let exit_delay = info.boarding_exit_delay as u32;
-    let boarding_addr =
-        ark::client::boarding_address(&owner_pk_hex, &info.signer_pubkey, exit_delay, network)
-            .map_err(|e| Status::internal(format!("boarding_address: {e}")))?;
-
-    let addr: bitcoin::Address<bitcoin::address::NetworkUnchecked> = boarding_addr
-        .parse()
-        .map_err(|e| Status::internal(format!("parse addr: {e}")))?;
-    let addr = addr
-        .require_network(network)
-        .map_err(|e| Status::internal(format!("network mismatch: {e}")))?;
-    let script_hex = hex::encode(addr.script_pubkey().as_bytes());
-    let script_hash = crate::bitcoin::tx_parser::derive_script_hash(&script_hex)
-        .map_err(|e| Status::internal(format!("script_hash: {e}")))?;
-
-    let bh = shared.bitcoin_history.clone();
-    let utxos = Handle::current()
-        .block_on(async move {
-            let guard = bh.lock().await;
-            guard.list_unspent_by_script_hash(&script_hash).await
+            Ok(GetArkAddressResponse {
+                ark_address: ark_addr,
+            })
         })
-        .map_err(|e| Status::internal(format!("list_unspent: {e}")))?;
-
-    let balance: u64 = utxos.iter().map(|u| u.amount_sats as u64).sum();
-    let utxo_count = utxos.len() as u32;
-    tracing::info!("[{user_id_hex}] CheckBoardingBalance: {utxo_count} UTXOs, balance={balance}");
-    Ok(CheckBoardingBalanceResponse {
-        balance,
-        utxo_count,
-    })
-}
-
-#[tracing::instrument(skip_all, name = "actor::list_vtxos", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn list_vtxos(
-    state: &mut CosignerState,
-    shared: &SharedServices,
-    req: ListVtxosRequest,
-) -> Result<ListVtxosResponse, Status> {
-    let user_id_hex = parsers::user_id_hex(&req.user_id);
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_LIST_VTXOS,
-    )?;
-
-    let asp = require_asp(shared)?;
-    let info = fetch_asp_info(&asp)?;
-    let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
-
-    let owner_pk_hex = get_user_xonly_pubkey(
-        state,
-        shared.persistence.as_ref(),
-        &user_id_hex,
-    )?;
-
-    let mut vtxos = Vec::new();
-    let mut total_balance: u64 = 0;
-    for entry in state.vtxos.iter() {
-        let script = ark::client::vtxo_script_pubkey_hex(
-            &owner_pk_hex,
-            &info.signer_pubkey,
-            entry.exit_delay,
-            network,
-        )
-        .unwrap_or_default();
-        total_balance += entry.amount;
-        vtxos.push(VtxoInfo {
-            txid: entry.txid.clone(),
-            vout: entry.vout,
-            amount: entry.amount,
-            created_at: entry.created_at,
-            expires_at: entry.expires_at,
-            status: "confirmed".to_string(),
-            is_preconfirmed: false,
-            exit_delay: entry.exit_delay,
-            script,
-        });
+        .await
     }
-    // Plan A Phase 2: a delegate is "active" if the guest holds a pending one (its `fire at`
-    // threshold is set — restored from the secret-free marker on spawn) OR the legacy host session
-    // is loaded. The guest path is the live one; the host `delegate_session` is the dead legacy.
-    let has_active_delegate =
-        state.guest_delegate_threshold.is_some() || state.delegate_session.is_some();
-    tracing::info!(
-        "[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}, has_active_delegate={has_active_delegate}",
-        vtxos.len()
-    );
-    Ok(ListVtxosResponse {
-        vtxos,
-        total_balance,
-        has_active_delegate,
-    })
 }
 
-#[tracing::instrument(skip_all, name = "actor::list_ark_transactions", fields(user_id = %parsers::user_id_hex(&req.user_id)), err)]
-pub fn list_ark_transactions(
-    state: &mut CosignerState,
-    _shared: &SharedServices,
-    req: ListArkTransactionsRequest,
-) -> Result<ListArkTransactionsResponse, Status> {
-    let _user_id_hex = parsers::user_id_hex(&req.user_id);
-    auth_check(
-        state,
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        OP_LIST_ARK_TXS,
-    )?;
-    let transactions = state
-        .ark_tx_history
-        .iter()
-        .map(|e| ArkTransactionSummary {
-            tx_type: e.tx_type.clone(),
-            amount_sats: e.amount_sats,
-            txid: e.txid.clone(),
-            timestamp: e.timestamp,
+impl CosignerActor {
+    pub async fn get_boarding_address(
+        &mut self,
+        registry: &Arc<CosignerRegistry>,
+        req: GetBoardingAddressRequest,
+    ) -> Result<GetBoardingAddressResponse, Status> {
+        let shared = self.shared.clone();
+        let registry = registry.clone();
+        let span = tracing::info_span!("actor::get_boarding_address", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |state| {
+            let _enter = span.enter();
+            let shared = shared.as_ref();
+            let registry = &registry;
+            let user_id_hex = parsers::user_id_hex(&req.user_id);
+            tracing::info!("[{user_id_hex}] GetBoardingAddress");
+            // Auth (OP_GET_BOARDING_ADDRESS) ran at the REST boundary.
+            let asp = shared.asp_client.clone();
+            let info = fetch_asp_info(&asp)?;
+            let owner_pk_hex =
+                get_user_xonly_pubkey(state, shared.persistence.as_ref(), &user_id_hex)?;
+            let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
+            let exit_delay = info.boarding_exit_delay as u32;
+            let boarding_addr = ark::client::boarding_address(
+                &owner_pk_hex,
+                &info.signer_pubkey,
+                exit_delay,
+                network,
+            )
+            .map_err(|e| Status::internal(format!("boarding_address: {e}")))?;
+            register_user_scripts(shared, registry, state, &user_id_hex, &owner_pk_hex, &info);
+            // Record the boarding address so the watcher can poll it for deposits and
+            // nudge the device to board.
+            super::helpers::save_user_boarding_address(
+                shared.persistence.as_ref(),
+                &user_id_hex,
+                &boarding_addr,
+            );
+            Ok(GetBoardingAddressResponse {
+                boarding_address: boarding_addr,
+            })
         })
-        .collect();
-    Ok(ListArkTransactionsResponse { transactions })
+        .await
+    }
+}
+
+impl CosignerActor {
+    pub async fn list_vtxos(
+        &mut self,
+        req: ListVtxosRequest,
+    ) -> Result<ListVtxosResponse, Status> {
+        let shared = self.shared.clone();
+        let span =
+            tracing::info_span!("actor::list_vtxos", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |state| {
+            let _enter = span.enter();
+            let shared = shared.as_ref();
+            let user_id_hex = parsers::user_id_hex(&req.user_id);
+            // Auth (OP_LIST_VTXOS) ran at the REST boundary.
+            let asp = shared.asp_client.clone();
+            let info = fetch_asp_info(&asp)?;
+            let network = ark::client::parse_network(&info.network).map_err(Status::internal)?;
+
+            let owner_pk_hex =
+                get_user_xonly_pubkey(state, shared.persistence.as_ref(), &user_id_hex)?;
+
+            let mut vtxos = Vec::new();
+            let mut total_balance: u64 = 0;
+            for entry in state.vtxos.iter() {
+                let script = ark::client::vtxo_script_pubkey_hex(
+                    &owner_pk_hex,
+                    &info.signer_pubkey,
+                    entry.exit_delay,
+                    network,
+                )
+                .unwrap_or_default();
+                total_balance += entry.amount;
+                vtxos.push(VtxoInfo {
+                    txid: entry.txid.clone(),
+                    vout: entry.vout,
+                    amount: entry.amount,
+                    created_at: entry.created_at,
+                    expires_at: entry.expires_at,
+                    status: "confirmed".to_string(),
+                    is_preconfirmed: false,
+                    exit_delay: entry.exit_delay,
+                    script,
+                });
+            }
+            // Plan A Phase 2: a delegate is "active" if the guest holds a pending one (its `fire at`
+            // threshold is set — restored from the secret-free marker on spawn) OR the legacy host session
+            // is loaded. The guest path is the live one; the host `delegate_session` is the dead legacy.
+            let has_active_delegate =
+                state.guest_delegate_threshold.is_some() || state.delegate_session.is_some();
+            tracing::info!(
+                "[{user_id_hex}] ListVtxos: returning {} vtxos, balance={total_balance}, has_active_delegate={has_active_delegate}",
+                vtxos.len()
+            );
+            Ok(ListVtxosResponse {
+                vtxos,
+                total_balance,
+                has_active_delegate,
+            })
+        })
+        .await
+    }
+}
+
+impl CosignerActor {
+    pub async fn list_ark_transactions(
+        &mut self,
+        req: ListArkTransactionsRequest,
+    ) -> Result<ListArkTransactionsResponse, Status> {
+        let span = tracing::info_span!("actor::list_ark_transactions", user_id = %parsers::user_id_hex(&req.user_id));
+        run_blocking(self.state.clone(), move |state| {
+            let _enter = span.enter();
+            let _user_id_hex = parsers::user_id_hex(&req.user_id);
+            // Auth (OP_LIST_ARK_TXS) ran at the REST boundary.
+            let transactions = state
+                .ark_tx_history
+                .iter()
+                .map(|e| ArkTransactionSummary {
+                    tx_type: e.tx_type.clone(),
+                    amount_sats: e.amount_sats,
+                    txid: e.txid.clone(),
+                    timestamp: e.timestamp,
+                })
+                .collect();
+            Ok(ListArkTransactionsResponse { transactions })
+        })
+        .await
+    }
 }

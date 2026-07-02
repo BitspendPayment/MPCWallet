@@ -98,9 +98,8 @@ void main() {
     expect(sig, isNotNull, reason: '2-of-2 FROST signature should verify');
     print('   2-of-2 DKG + sign round-trip OK');
 
-    // NOTE: the former Part C (contract eVTXO key creation) moved to the new
-    // single-shot ContractCreate model (refresh V onto an always-online {service,
-    // cosigner} pairing) and is covered by evtxo_contract_e2e_test /
-    // evtxo_arkd_e2e_test, which drive the dummy contract-service.
+    // NOTE: contract eVTXO key creation moved to the PEER model (refresh V onto a
+    // {receiver, cosigner} pairing) + Phase-2 template composition, covered by
+    // evtxo_arkd_e2e_test.
   }, timeout: Timeout(Duration(minutes: 2)));
 }

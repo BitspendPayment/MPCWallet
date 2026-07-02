@@ -57,7 +57,9 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut r1_packages: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
     for _ in 0..max {
         let secret = random::mod_n_random(&mut rng);
-        let coefficients: Vec<_> = (0..min - 1).map(|_| random::mod_n_random(&mut rng)).collect();
+        let coefficients: Vec<_> = (0..min - 1)
+            .map(|_| random::mod_n_random(&mut rng))
+            .collect();
         let (secret_pkg, pub_pkg) =
             dkg::dkg_part1(max, min, &secret, &coefficients, &mut rng).expect("dkg_part1");
         r1_packages.insert(secret_pkg.identifier.clone(), pub_pkg);
@@ -134,7 +136,10 @@ async fn seed_policy_installs_and_seals_without_plaintext() {
 
     // The guest sealed its state ⇒ a sealed_state blob exists for the group key.
     let blob = shared.persistence.get("sealed_state", &group_key).unwrap();
-    assert!(blob.is_some(), "expected a sealed_state blob after SeedPolicy");
+    assert!(
+        blob.is_some(),
+        "expected a sealed_state blob after SeedPolicy"
+    );
 
     // …and no plaintext policy was written/needed — the guest owns the keys.
     let plaintext = shared.persistence.get("policies", &group_key).unwrap();

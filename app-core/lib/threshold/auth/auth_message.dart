@@ -31,6 +31,9 @@ class AuthMessage {
   static const String opListArkTxs = 'LIST_ARK_TXS';
   static const String opCheckBoardingBalance = 'CHECK_BOARDING_BALANCE';
   static const String opRegisterDeviceToken = 'REGISTER_DEVICE_TOKEN';
+  static const String opEvtxoPending = 'EVTXO_PENDING';
+  static const String opEvtxoAck = 'EVTXO_ACK';
+  static const String opEventsSubscribe = 'EVENTS_SUBSCRIBE';
 
   final String operation;
   final int timestampMs;

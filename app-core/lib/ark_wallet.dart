@@ -249,6 +249,7 @@ class MpcArkWallet {
     UnsignedArkTransaction unsigned, {
     required threshold.KeyPackage evtxoKeyPkg,
     required threshold.PublicKeyPackage evtxoPkp,
+    String? routeGroupKeyHex,
   }) async {
     try {
       final sigHexes = <String>[];
@@ -261,6 +262,10 @@ class MpcArkWallet {
           evtxoPkp,
           unsigned.gateTxBytes,
           applyTweak: false,
+          routeGroupKeyHex: routeGroupKeyHex,
+          // The receiver routes to the pairing actor, which needs ark_tx (leg 2) to take the
+          // two-leg path; the author routes to its V actor, which ignores it. Pass it always.
+          arkTx: unsigned.arkTxBytes,
         );
         final rBytes = threshold.elemSerializeCompressed(sig.R);
         final xOnly = rBytes.sublist(1);

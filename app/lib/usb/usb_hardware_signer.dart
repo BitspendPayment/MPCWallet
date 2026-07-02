@@ -37,6 +37,23 @@ class UsbHardwareSigner implements HardwareSignerInterface {
     }
   }
 
+  // eVTXO reshare is a software/cosigner concern; the USB hardware signer does
+  // not participate in it. (Pre-existing interface gap — see HardwareSignerInterface.)
+  @override
+  Future<DkgInitResult> evtxoDealInit(int maxSigners, int minSigners) async {
+    throw UnsupportedError(
+        'eVTXO reshare is not supported on the USB hardware signer');
+  }
+
+  @override
+  Future<Map<Identifier, Round2Package>> evtxoDealRound2(
+    Map<Identifier, Round1Package> othersRound1, {
+    List<Identifier> receiverIdentifiers = const [],
+  }) async {
+    throw UnsupportedError(
+        'eVTXO reshare is not supported on the USB hardware signer');
+  }
+
   @override
   Future<DkgInitResult> dkgInit(int maxSigners, int minSigners) async {
     final resp = await _transport.sendCommand({

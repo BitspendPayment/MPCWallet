@@ -4,7 +4,6 @@ import 'dart:typed_data';
 import 'package:convert/convert.dart';
 import 'package:synchronized/synchronized.dart';
 
-import 'package:app_core/backup/backup_codec.dart';
 import 'package:app_core/hardware_signer.dart';
 import 'package:app_core/threshold/core/dkg.dart';
 import 'package:app_core/threshold/core/identifier.dart';
@@ -12,40 +11,22 @@ import 'package:app_core/threshold/core/utils.dart';
 import 'package:app_core/threshold/frost/commitment.dart' as frost_comm;
 import 'package:app_core/threshold/frost/signing.dart' as frost_sign;
 
-/// Pure-Dart FROST signer that holds the recovery share in RAM only.
+/// Pure-Dart FROST signer that holds the owner share in RAM only.
 ///
-/// Lifetime is tied to a single operation — DKG, restore, update-policy, or
-/// delete-policy. Persistence is explicitly the caller's job: export an
-/// encrypted backup with [exportEncryptedBackup] after the operation
-/// completes, upload it to Drive, then drop the signer reference.
-/// Rehydrate with [SoftwareSigner.fromEncryptedBackup] for the next op.
-///
-/// No Hive box, no `connect()` file I/O. This matches the hardware signer's
-/// "only plugged in when needed" model, so the recovery share isn't sitting
-/// on the device at rest alongside the spending share.
+/// Lifetime is tied to a single operation — DKG or a signing round. No Hive
+/// box, no `connect()` file I/O.
 ///
 /// SECURITY: while the signer is in memory, the secret lives in the Dart
 /// heap. Dispose via [wipe] when done and drop the reference so GC can
 /// collect it.
 class SoftwareSigner implements HardwareSignerInterface {
-  static const String _kSecretKey = 'secretKeyHex';
-  static const String _kMinSigners = 'minSigners';
-  static const String _kMaxSigners = 'maxSigners';
-  static const String _kIdentifier = 'identifierHex';
-  static const String _kVerifyingKey = 'verifyingKeyHex';
-  static const String _kKeyPackage = 'keyPackage';
-  static const String _kPublicKeyPackage = 'publicKeyPackage';
-
   final Lock _lock = Lock();
 
-  // Persistent state — captured in the backup blob.
+  // Persistent DKG-derived state.
   SecretKey? _secretKey;
-  int? _minSigners;
-  int? _maxSigners;
   Identifier? _identifier;
   List<int>? _verifyingKeyBytes;
   KeyPackage? _keyPackage;
-  PublicKeyPackage? _publicKeyPackage;
 
   // Ephemeral state — never persisted.
   Round1SecretPackage? _r1Secret;
@@ -54,73 +35,6 @@ class SoftwareSigner implements HardwareSignerInterface {
 
   SoftwareSigner();
 
-  /// Hydrate a signer from a decrypted backup blob. Throws
-  /// [BadPasswordException] on wrong password and [FormatException] if the
-  /// blob is structurally invalid.
-  static Future<SoftwareSigner> fromEncryptedBackup({
-    required Uint8List blob,
-    required String password,
-  }) async {
-    final payload = await decryptBackup(blob, password);
-    final signer = SoftwareSigner();
-
-    final secretHex = payload[_kSecretKey] as String?;
-    if (secretHex == null) {
-      throw const FormatException('backup missing secretKeyHex');
-    }
-    signer._secretKey = SecretKey(BigInt.parse(secretHex, radix: 16));
-    signer._minSigners = payload[_kMinSigners] as int?;
-    signer._maxSigners = payload[_kMaxSigners] as int?;
-    if (signer._minSigners == null || signer._maxSigners == null) {
-      throw const FormatException('backup missing minSigners/maxSigners');
-    }
-    final idHex = payload[_kIdentifier] as String?;
-    if (idHex != null) {
-      signer._identifier =
-          Identifier.deserialize(Uint8List.fromList(hex.decode(idHex)));
-    }
-    final vkHex = payload[_kVerifyingKey] as String?;
-    if (vkHex != null) {
-      signer._verifyingKeyBytes = hex.decode(vkHex);
-    }
-    final kp = payload[_kKeyPackage];
-    if (kp is Map) {
-      signer._keyPackage = KeyPackage.fromJson(Map<String, dynamic>.from(kp));
-    }
-    final pkp = payload[_kPublicKeyPackage];
-    if (pkp is Map) {
-      signer._publicKeyPackage =
-          PublicKeyPackage.fromJson(Map<String, dynamic>.from(pkp));
-    }
-    return signer;
-  }
-
-  /// Encrypt the full signer state with [password]. The returned blob is
-  /// suitable for upload to Drive. Throws if DKG hasn't run yet (no secret).
-  Future<Uint8List> exportEncryptedBackup(String password) async {
-    return _lock.synchronized(() async {
-      final sk = _secretKey;
-      if (sk == null || _minSigners == null || _maxSigners == null) {
-        throw StateError('no signer state to back up — run DKG first');
-      }
-      return encryptBackup({
-        _kSecretKey: _bigIntToHex64(sk.scalar),
-        _kMinSigners: _minSigners,
-        _kMaxSigners: _maxSigners,
-        if (_identifier != null)
-          _kIdentifier: hex.encode(_identifier!.serialize()),
-        if (_verifyingKeyBytes != null)
-          _kVerifyingKey: hex.encode(_verifyingKeyBytes!),
-        if (_keyPackage != null) _kKeyPackage: _keyPackage!.toJson(),
-        if (_publicKeyPackage != null)
-          _kPublicKeyPackage: _publicKeyPackage!.toJson(),
-      }, password);
-    });
-  }
-
-  /// Whether [exportEncryptedBackup] can be called (DKG has produced state).
-  bool get hasBackupableState => _secretKey != null;
-
   @override
   Future<void> connect() async {
     // In-memory signer has nothing to connect to.
@@ -128,8 +42,7 @@ class SoftwareSigner implements HardwareSignerInterface {
 
   @override
   Future<void> disconnect() async {
-    // Clear transient DKG/signing state; persistent fields survive so the
-    // caller can still call exportEncryptedBackup afterwards.
+    // Clear transient DKG/signing state; persistent fields survive.
     _r1Secret = null;
     _r2Secret = null;
     _pendingNonce = null;
@@ -150,13 +63,10 @@ class SoftwareSigner implements HardwareSignerInterface {
       final identifier = Identifier.derive(vkBytes);
 
       _secretKey = secret;
-      _minSigners = minSigners;
-      _maxSigners = maxSigners;
       _identifier = identifier;
       _verifyingKeyBytes = vkBytes;
       _r1Secret = r1Secret;
       _keyPackage = null;
-      _publicKeyPackage = null;
 
       return DkgInitResult(
         round1Package: r1Pkg,
@@ -173,7 +83,7 @@ class SoftwareSigner implements HardwareSignerInterface {
       final secret = _secretKey;
       if (secret == null) {
         throw StateError(
-          'no DKG secret — load from backup before calling restoreInit',
+          'no DKG secret — run DKG before calling restoreInit',
         );
       }
       final coefficients =
@@ -195,15 +105,12 @@ class SoftwareSigner implements HardwareSignerInterface {
         }
       }
 
-      _minSigners = minSigners;
-      _maxSigners = maxSigners;
       _identifier = identifier;
       _verifyingKeyBytes = vkBytes;
       _r1Secret = r1Secret;
-      // A fresh re-DKG is about to run, so the old KeyPackage / PKP aren't
-      // valid anymore — caller will overwrite via dkgRound3.
+      // A fresh re-DKG is about to run, so the old KeyPackage isn't valid
+      // anymore — caller will overwrite via dkgRound3.
       _keyPackage = null;
-      _publicKeyPackage = null;
 
       return DkgInitResult(
         round1Package: r1Pkg,
@@ -292,7 +199,7 @@ class SoftwareSigner implements HardwareSignerInterface {
       if (r2Secret == null) {
         throw StateError('no round 2 secret package — call dkgRound2 first');
       }
-      final (kp, pkp) = dkgPart3(
+      final (kp, _) = dkgPart3(
         r1Secret,
         r2Secret,
         round1Pkgs,
@@ -301,7 +208,6 @@ class SoftwareSigner implements HardwareSignerInterface {
       );
 
       _keyPackage = kp;
-      _publicKeyPackage = pkp;
       _identifier = kp.identifier;
       // DKG state can be released now.
       _r1Secret = null;
@@ -319,7 +225,7 @@ class SoftwareSigner implements HardwareSignerInterface {
     return _lock.synchronized(() async {
       final kp = _keyPackage;
       if (kp == null) {
-        throw StateError('no key package — load from backup or run DKG first');
+        throw StateError('no key package — run DKG first');
       }
       final nonce = frost_comm.newNonce(kp.secretShare);
       _pendingNonce = nonce;
@@ -337,7 +243,7 @@ class SoftwareSigner implements HardwareSignerInterface {
     return _lock.synchronized(() async {
       final kp = _keyPackage;
       if (kp == null) {
-        throw StateError('no key package — load from backup or run DKG first');
+        throw StateError('no key package — run DKG first');
       }
       final nonce = _pendingNonce;
       if (nonce == null) {
@@ -368,29 +274,18 @@ class SoftwareSigner implements HardwareSignerInterface {
   }
 
   /// Drop all in-memory state. After this, the signer cannot be used unless
-  /// rehydrated from a backup. Call before dropping the reference.
+  /// used again. Call before dropping the reference.
   Future<void> wipe() async {
     await _lock.synchronized(() async {
       _secretKey = null;
-      _minSigners = null;
-      _maxSigners = null;
       _identifier = null;
       _verifyingKeyBytes = null;
       _keyPackage = null;
-      _publicKeyPackage = null;
       _r1Secret = null;
       _r2Secret = null;
       _pendingNonce = null;
     });
   }
-}
-
-String _bigIntToHex64(BigInt v) {
-  var h = v.toRadixString(16);
-  while (h.length < 64) {
-    h = '0$h';
-  }
-  return h;
 }
 
 bool _listEquals(List<int> a, List<int> b) {

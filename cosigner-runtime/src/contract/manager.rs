@@ -1,20 +1,23 @@
-//! Contract creation: a single key-preserving REFRESH of the wallet's key `V` onto the
-//! always-online `{service, cosigner}` pairing. NO reshare and NO new key — contracts reuse
-//! `V` and are bound by the cosigner GATE at spend time. The single call registers the
-//! contract + refreshes, then delivers the cosigner's half `b@service` to the service over
-//! HTTP. The wallet sends its own `a@service` scalar directly to the service (only the point
-//! `a@service·G` reaches the cosigner).
+//! Contract creation (PEER model): a single key-preserving REFRESH of the wallet's key `V`
+//! onto a `{receiver, cosigner}` pairing. NO reshare and NO new key — contracts reuse `V` and
+//! are bound by the cosigner GATE at spend time. The single call registers the contract +
+//! refreshes, then drops BOTH ECIES halves of the receiver's share into the receiver's pickup
+//! inbox: the wallet's `a@receiver` (supplied encrypted in the request) and the cosigner's
+//! `b@receiver` (the refresh `receiver_half`, encrypted here to the receiver's verifying key).
+//! No external service, no URL.
 //!
 //! Stateless — there are no multi-round sessions to track or evict anymore.
 
 use std::sync::Arc;
 
+use rand::rngs::OsRng;
 use tonic::Status;
 
 use crate::cosigner::command::CosignerCommand;
+use crate::cosigner::handlers::contract::{write_pending_share, PendingShareRecord};
 use crate::cosigner::registry::CosignerRegistry;
 use crate::shared::SharedServices;
-use crate::wallet_proto::{ContractContext, ContractCreateRequest, ContractCreateResponse};
+use crate::wallet_proto::{ContractCreateRequest, ContractCreateResponse};
 
 use super::handler;
 
@@ -28,59 +31,71 @@ impl ContractManager {
         Arc::new(Self { shared, registry })
     }
 
-    /// Create a contract: REFRESH `V` onto the `{service, cosigner}` pairing INSIDE the wallet's
-    /// guest (the host never reads `V`), register the eVTXO under the gate, then deliver the
-    /// cosigner's `b@service` half + context to the always-online service. The wallet supplied its
-    /// refresh slices (`a@cosigner` + `a@service·G`) in the request.
+    /// Shared services (persistence + contract host) — used by the directory browse/publish
+    /// handlers, which need read/write access without going through an actor.
+    pub fn shared(&self) -> &Arc<SharedServices> {
+        &self.shared
+    }
+
+    /// Create a contract WITH a receiver: REFRESH `V` onto the `{receiver, cosigner}` pairing
+    /// INSIDE the wallet's guest (the host never reads `V`), register the eVTXO under the gate,
+    /// seed the cosigner counter-share into the pairing actor, then drop BOTH ECIES halves of the
+    /// receiver's share into the receiver's inbox. The wallet supplied its refresh slices
+    /// (`a@cosigner` + `a@receiver·G`) and the ECIES of its own half `a@receiver` in the request.
     pub async fn create_contract(
         self: &Arc<Self>,
         user_id: &str,
         req: ContractCreateRequest,
     ) -> Result<ContractCreateResponse, Status> {
+        if req.receiver_vk.len() != 33 {
+            return Err(Status::invalid_argument("receiver_vk must be 33 bytes"));
+        }
+        let receiver_vk_hex = hex::encode(&req.receiver_vk);
+        let ecies_a_at_receiver_hex = hex::encode(&req.ecies_a_at_receiver);
+
         // Run the key-preserving refresh of V in the guest; the host gets only public material +
-        // the receiver's half + an opaque pairing key package.
-        let service_id = threshold::identifier::Identifier::derive(&req.service_vk)
-            .map_err(|e| Status::internal(format!("derive service id: {e:?}")))?;
-        let service_id_hex = hex::encode(service_id.serialize());
+        // the receiver's half (b@receiver) + an opaque pairing key package.
+        let receiver_id = threshold::identifier::Identifier::derive(&req.receiver_vk)
+            .map_err(|e| Status::internal(format!("derive receiver id: {e:?}")))?;
+        let receiver_id_hex = hex::encode(receiver_id.serialize());
         let refresh = self
             .registry
             .dispatch(user_id, |reply| CosignerCommand::ContractRefresh {
-                receiver_id_hex: service_id_hex.clone(),
-                receiver_partial_point: req.a_at_service_point.clone(),
+                receiver_id_hex: receiver_id_hex.clone(),
+                receiver_partial_point: req.a_at_receiver_point.clone(),
                 wallet_id_hex: hex::encode(&req.identifier),
                 a_at_cosigner: req.a_at_cosigner.clone(),
                 min_signers: 2,
                 reply,
             })
             .await?;
-        // Captured before `handler::contract_create` consumes `refresh` — used to EAGER-seed the
-        // pairing actor into its own guest below (so its key lives only in the sealed snapshot, no
-        // plaintext-install fallback).
+        // Captured before `handler::contract_create` consumes `req` — the pairing actor seed +
+        // the receiver's inbox record need these.
         let pairing_kp_json = refresh.my_key_package_json.clone();
         let pairing_pkp_json = refresh.pairing_public_key_package_json.clone();
-        // Conditioning params captured from the request (Plan A 1C: seeded INTO the guest so the
-        // guest rebuilds + binds the cooperative-leaf sighash itself; the host stores nothing).
+        let receiver_half = refresh.receiver_half.clone(); // b@receiver scalar (32B)
         let to32 = |v: &[u8], what: &str| {
-            <[u8; 32]>::try_from(v).map_err(|_| Status::invalid_argument(format!("{what} must be 32 bytes")))
+            <[u8; 32]>::try_from(v)
+                .map_err(|_| Status::invalid_argument(format!("{what} must be 32 bytes")))
         };
-        let contract_id = to32(&req.contract_id, "contract_id")?;
         let server_pk = to32(&req.server_pk, "server_pk")?;
         let owner_pk = to32(&req.owner_pk, "owner_pk")?;
         let exit_delay = req.exit_delay;
-        let service_vk_hex = hex::encode(&req.service_vk);
 
-        let resp = handler::contract_create(&self.shared, req, refresh)?;
+        let resp = handler::contract_create(&self.shared, req)?;
         let spk_hex = hex::encode(&resp.contract_script_pubkey);
+        // The BOUND contract id (the composed sha256 in template mode) — used for the gate policy,
+        // the pairing conditioning, and the receiver's inbox record.
+        let contract_id = to32(&resp.contract_id, "contract_id")?;
 
         // Plan A: add the gate's ContractPolicy to the WALLET actor's sealed state (no `policies`
-        // tree). The actor updates its `contracts` projection + re-seals; `detect_contract_spend`
-        // then sees it via the host `policy_state` loaded back from the actor.
+        // tree). The receiver's vk goes on the authorized-signer allowlist so it can co-sign.
         let contract_policy = crate::cosigner::state::ContractPolicy {
             contract_id,
             wallet_vk: user_id.to_string(),
             exit_delay,
             owner_pk,
-            authorized_service_vks: vec![service_vk_hex],
+            authorized_service_vks: vec![receiver_vk_hex.clone()],
         };
         let contract_policy_json = serde_json::to_string(&contract_policy)
             .map_err(|e| Status::internal(format!("serialize contract policy: {e}")))?;
@@ -99,72 +114,72 @@ impl ContractManager {
             exit_delay,
         };
 
-        // Eager-seed the {service, cosigner} pairing actor (keyed by the eVTXO spk) into its OWN
+        // Eager-seed the {receiver, cosigner} pairing actor (keyed by the eVTXO spk) into its OWN
         // guest + seal it, INCLUDING the conditioning params — so the guest is authoritative about
         // what it co-signs across cold spawns, with nothing about the pairing persisted host-side.
         self.registry
             .dispatch(&spk_hex, |reply| CosignerCommand::SeedPolicy {
                 key_package_json: pairing_kp_json,
-                public_key_package_json: pairing_pkp_json,
-                user_signing_identifier_hex: Some(service_id_hex),
+                public_key_package_json: pairing_pkp_json.clone(),
+                user_signing_identifier_hex: Some(receiver_id_hex),
                 server_dkg_secret_hex: None,
                 contract_pairing: Some(pairing),
                 reply,
             })
             .await?;
 
-        if let Some(context) = resp.context.clone() {
-            // Correlation key for the service = the registered scriptPubKey (both the wallet
-            // and the cosigner know it once ContractCreate returns).
-            let corr_hex = hex::encode(&resp.contract_script_pubkey);
-            self.deliver_to_service(&corr_hex, &resp.b_at_service, context)
-                .await?;
-        }
-        Ok(resp)
-    }
+        // ECIES the cosigner's half b@receiver to the receiver; hold both halves (the wallet's
+        // a@receiver from the request + the cosigner's b@receiver) in the receiver's pickup inbox.
+        let mut recipient_pk = [0u8; 33];
+        recipient_pk.copy_from_slice(&hex::decode(&receiver_vk_hex).unwrap_or_default());
+        let half: [u8; 32] = receiver_half
+            .as_slice()
+            .try_into()
+            .map_err(|_| Status::internal("receiver_half must be 32 bytes"))?;
+        let ecies_cosigner = threshold::ecies::encrypt(&half, &recipient_pk, &mut OsRng)
+            .map_err(|e| Status::internal(format!("ecies encrypt b@receiver: {e:?}")))?;
 
-    /// POST the cosigner's `b@service` half + context to the always-online service.
-    async fn deliver_to_service(
-        &self,
-        group_id_hex: &str,
-        b_at_service: &[u8],
-        context: ContractContext,
-    ) -> Result<(), Status> {
-        let base = self
-            .shared
-            .service_url
-            .as_ref()
-            .ok_or_else(|| Status::unavailable("contract-signer service not configured"))?;
-        let url = format!("{}/assemble-contract-share", base.trim_end_matches('/'));
-        // Hex JSON (shared schema with the wallet's delivery + the contract service);
-        // prost's Vec<u8>-as-int-arrays default is avoided so the wire form is greppable.
-        let body = serde_json::json!({
-            "contract_group_id": group_id_hex,
-            "half_scalar": hex::encode(b_at_service),
-            "role": "cosigner",
-            "context": {
-                "contract_script_pubkey": hex::encode(&context.contract_script_pubkey),
-                "contract_id": hex::encode(&context.contract_id),
-                "exit_delay": context.exit_delay,
-                "owner_pk": hex::encode(&context.owner_pk),
-                "server_pk": hex::encode(&context.server_pk),
-                "public_key_package_json": context.public_key_package_json,
-                "service_vk": hex::encode(&context.service_vk),
-                "cosigner_group_key": hex::encode(&context.cosigner_group_key),
+        let contract_id_hex = hex::encode(contract_id);
+        write_pending_share(
+            self.shared.persistence.as_ref(),
+            &receiver_vk_hex,
+            PendingShareRecord {
+                spk_hex: spk_hex.clone(),
+                contract_id_hex: contract_id_hex.clone(),
+                ecies_author_hex: ecies_a_at_receiver_hex,
+                ecies_cosigner_hex: hex::encode(ecies_cosigner),
+                pkp_json: pairing_pkp_json,
+                exit_delay,
+                server_pk_xonly_hex: hex::encode(server_pk),
+                owner_pk_xonly_hex: hex::encode(owner_pk),
             },
-        });
-        let resp = reqwest::Client::new()
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .map_err(|e| Status::unavailable(format!("service call failed: {e}")))?;
-        if !resp.status().is_success() {
-            return Err(Status::internal(format!(
-                "service rejected share: HTTP {}",
-                resp.status()
-            )));
+        )?;
+
+        // Phase 3: notify the receiver that a contract share is waiting — one event, two channels:
+        // (a) the live SSE stream (a BACKEND user holding /u/{vk}/events open), (b) an FCM push (a
+        // mobile app). Both are best-effort nudges; the inbox is the durable record.
+        self.shared.events.publish(
+            &receiver_vk_hex,
+            crate::events::CosignerEvent::ContractShare {
+                spk_hex: spk_hex.clone(),
+                contract_id_hex,
+            },
+        );
+        if let Some(fcm) = self.shared.fcm.clone() {
+            // Fire-and-forget: a notification must NEVER block (or fail) contract creation — the
+            // share is already durably in the inbox. Mirrors the boarding push (background task).
+            let persistence = self.shared.persistence.clone();
+            let vk = receiver_vk_hex.clone();
+            let spk = spk_hex.clone();
+            tokio::spawn(async move {
+                let tokens = crate::cosigner::handlers::helpers::load_user_device_tokens(
+                    persistence.as_ref(),
+                    &vk,
+                );
+                crate::cosigner::registry::push_contract_share(&fcm, &vk, &tokens, &spk).await;
+            });
         }
-        Ok(())
+
+        Ok(resp)
     }
 }

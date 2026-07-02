@@ -94,6 +94,26 @@ impl ContractEngine {
         Ok(())
     }
 
+    /// Validate a contract TEMPLATE (Phase 2). Unlike a finished contract, a template imports its
+    /// per-instance config interface (e.g. `oracle:gate/config`) ALONGSIDE `crypto`; that import is
+    /// satisfied by composition with a synthesized provider before the contract is ever evaluated
+    /// (and the COMPOSED result still goes through the strict `validate` above, which permits only
+    /// `crypto`). So here we only require: a valid component, and NO `wasi:*` import (defense in
+    /// depth — a wasi-importing template could never be satisfied by composition anyway).
+    pub fn validate_template(&self, wasm: &[u8]) -> Result<(), String> {
+        let component = self
+            .compile(wasm)
+            .map_err(|e| format!("not a valid wasm component: {e}"))?;
+        for (name, _item) in component.component_type().imports(&self.engine) {
+            if name.starts_with("wasi:") {
+                return Err(format!(
+                    "template imports forbidden interface `{name}` (no `wasi:*` allowed)"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate a contract against a transaction context in a NO-WASI sandbox.
     /// Any failure mode (forbidden wasi import, trap, OOM, out-of-fuel) maps to
     /// `Verdict::Deny` — fail-closed.

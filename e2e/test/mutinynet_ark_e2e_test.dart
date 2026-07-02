@@ -23,6 +23,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
+import 'package:e2e/boarding_poll.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -189,7 +190,10 @@ void main() {
     // 7. Settle (board into Ark)
     Log.step(7, 'Settle (Board into Ark)');
     Log.info('Calling settle() — waiting for ASP batch round...');
-    final commitmentTxid = await alice.settle();
+    final boardingUtxos = await pollBoardingUtxos(
+        await alice.getBoardingAddress(), 1,
+        host: 'mutinynet.com', port: 50001);
+    final commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
     Log.ok('Settled! commitment_txid=$commitmentTxid');
     expect(commitmentTxid, isNotEmpty);
 

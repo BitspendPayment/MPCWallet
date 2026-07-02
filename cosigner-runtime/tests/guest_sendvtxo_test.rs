@@ -15,7 +15,9 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use prost::Message as ProstMessage;
 use rand::rngs::OsRng;
 
-use cosigner_proto::{GuestCommand, GuestResponse, SendVtxoStep1Wire, SendVtxoStep2Wire, VtxoInputWire};
+use cosigner_proto::{
+    GuestCommand, GuestResponse, SendVtxoStep1Wire, SendVtxoStep2Wire, VtxoInputWire,
+};
 use cosigner_runtime::auth::message::{build_auth_message, OP_SEND_VTXO};
 use cosigner_runtime::cosigner::guest_instance::{self, GuestInstance};
 
@@ -34,7 +36,10 @@ fn guest_wasm_path() -> PathBuf {
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// A deterministic valid x-only pubkey (hex) from a seed byte.
@@ -61,7 +66,9 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut r1_packages: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
     for _ in 0..max {
         let secret = random::mod_n_random(&mut rng);
-        let coefficients: Vec<_> = (0..min - 1).map(|_| random::mod_n_random(&mut rng)).collect();
+        let coefficients: Vec<_> = (0..min - 1)
+            .map(|_| random::mod_n_random(&mut rng))
+            .collect();
         let (secret_pkg, pub_pkg) =
             dkg::dkg_part1(max, min, &secret, &coefficients, &mut rng).expect("dkg_part1");
         r1_packages.insert(secret_pkg.identifier.clone(), pub_pkg);
@@ -116,7 +123,9 @@ fn grpc_frame<M: ProstMessage>(m: &M) -> Vec<u8> {
 /// Mock arkd: answers GetInfo, SubmitTx (echoes checkpoints), and FinalizeTx over h2c.
 async fn run_mock_arkd(listener: tokio::net::TcpListener) {
     loop {
-        let Ok((tcp, _)) = listener.accept().await else { continue };
+        let Ok((tcp, _)) = listener.accept().await else {
+            continue;
+        };
         tokio::spawn(async move {
             let svc = hyper::service::service_fn(handle);
             let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -134,7 +143,11 @@ async fn handle(
     };
     let path = req.uri().path().to_string();
     let body = req.into_body().collect().await.unwrap().to_bytes();
-    let msg = if body.len() >= 5 { &body[5..] } else { &body[..] };
+    let msg = if body.len() >= 5 {
+        &body[5..]
+    } else {
+        &body[..]
+    };
 
     let resp = match path.as_str() {
         "/ark.v1.ArkService/GetInfo" => grpc_frame(&GetInfoResponse {
@@ -209,9 +222,13 @@ async fn guest_send_vtxo_full_flow() {
     // Recipient ark address (must use the same ASP signer key the mock returns).
     let signer_xonly = xonly_hex(2);
     let recipient_xonly = xonly_hex(3);
-    let recipient_addr =
-        ark::client::ark_address(&recipient_xonly, &signer_xonly, 144, bitcoin::Network::Regtest)
-            .unwrap();
+    let recipient_addr = ark::client::ark_address(
+        &recipient_xonly,
+        &signer_xonly,
+        144,
+        bitcoin::Network::Regtest,
+    )
+    .unwrap();
 
     // The guest owns the VTXO set — push it before the send.
     guest
@@ -231,7 +248,9 @@ async fn guest_send_vtxo_full_flow() {
     let resp1 = guest
         .command(GuestCommand::SendVtxoStep1(SendVtxoStep1Wire {
             user_id: user_id.clone(),
-            signature: auth.sign(&build_auth_message(OP_SEND_VTXO, ts1, &user_id_hex)).to_vec(),
+            signature: auth
+                .sign(&build_auth_message(OP_SEND_VTXO, ts1, &user_id_hex))
+                .to_vec(),
             timestamp_ms: ts1,
             asp_url: asp_url.clone(),
             recipient_ark_address: recipient_addr,
@@ -252,7 +271,9 @@ async fn guest_send_vtxo_full_flow() {
     let resp2 = guest
         .command(GuestCommand::SendVtxoStep2(SendVtxoStep2Wire {
             user_id: user_id.clone(),
-            signature: auth.sign(&build_auth_message(OP_SEND_VTXO, ts2, &user_id_hex)).to_vec(),
+            signature: auth
+                .sign(&build_auth_message(OP_SEND_VTXO, ts2, &user_id_hex))
+                .to_vec(),
             timestamp_ms: ts2,
             asp_url,
             signed_messages,

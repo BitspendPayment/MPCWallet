@@ -21,7 +21,7 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark e2e-evtxo e2e-evtxo-arkd e2e-evtxo-cosign e2e-evtxo-service-spend e2e-evtxo-service-arkd e2e-restore software software-ark hardware hardware-ark flash down \
+.PHONY: e2e e2e-ark e2e-evtxo-arkd e2e-restore software software-ark hardware hardware-ark flash down \
 	bob-up bob-down \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
 	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
@@ -30,7 +30,7 @@
 	contracts-build runtime-build signer-build pico-build \
 	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
-	signer-run signer-stop service-build service-run service-stop runtime-run runtime-stop \
+	signer-run signer-stop runtime-run runtime-stop \
 	arkd-up arkd-down arkd-init redis-up \
 	proto threshold-test \
 	flutter flutter-run ark-newaddress crypto-bench \
@@ -86,52 +86,20 @@ e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-
 	cd e2e && dart test test/ark_e2e_test.dart
 	-pkill -f "signer-server" || true
 
-# eVTXO contract gate E2E: same stack as e2e-ark plus the example WASM contracts.
-# The contract is handed to the cosigner at eVTXO creation (no registry). Funds
-# an eVTXO, then asserts the cosigner co-signs an allowed spend (broadcast +
-# confirmed) and refuses over-limit / bad-arg spends.
-e2e-evtxo: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build redis-up
-	@echo "Running eVTXO contract E2E test..."
-	cd e2e && dart test test/evtxo_contract_e2e_test.dart
-	-pkill -f "signer-server" || true
-	-pkill -f "contract-service" || true
-
-# Full eVTXO-through-arkd E2E: mint the contract eVTXO via a normal Ark send, then
-# spend its cooperative leaf through arkd (arkd genuinely co-signs the server leg;
-# the cosigner gates the V′ leg). Same stack as e2e-ark + the example contracts.
-e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build service-build redis-up
+# Full eVTXO-through-arkd E2E (peer contracts + Phase 2 templates): Bob publishes a typed contract
+# TEMPLATE; Alice creates a contract from it with per-instance config; the cosigner composes it and
+# Bob INDEPENDENTLY spends it through arkd (arkd co-signs the server leg; the cosigner gates +
+# co-signs the V leg, refusing over-limit / bad-arg). Same stack as e2e-ark + the example contracts.
+e2e-evtxo-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build runtime-build contracts-build redis-up
 	@echo "Running eVTXO-through-arkd E2E test..."
 	cd e2e && dart test test/evtxo_arkd_e2e_test.dart
 	-pkill -f "signer-server" || true
-	-pkill -f "contract-service" || true
-
-# Tier 2 service-driven co-sign E2E: the always-online service co-signs an eVTXO spend under V
-# with the WALLET OFFLINE, bound to its own eVTXO (refuses non-associated spends). Needs only the
-# cosigner-runtime + contract-service + ffi + the example contracts — NO arkd/bitcoind.
-e2e-evtxo-cosign: runtime-stop ffi-build runtime-build contracts-build service-build redis-up
-	@echo "Running service-driven co-sign E2E test..."
-	cd e2e && dart test test/evtxo_service_cosign_e2e_test.dart
-	-pkill -f "contract-service" || true
 
 # Plan A 1B gate: prove the cosigner restores its FROST share from the SEAL alone after a runtime
 # restart (the plaintext key is no longer persisted). Needs only the runtime + ffi.
 e2e-restore: runtime-stop ffi-build runtime-build redis-up
 	@echo "Running restore-from-seal E2E test..."
 	cd e2e && dart test test/restore_from_seal_e2e_test.dart
-
-# Tier 2 service-driven ON-CHAIN spend E2E: the service + cosigner spend a real eVTXO on regtest
-# with the WALLET OFFLINE (server leg from a self-generated ASP key — no arkd). Needs bitcoind.
-e2e-evtxo-service-spend: runtime-stop regtest-up ffi-build runtime-build contracts-build service-build redis-up
-	@echo "Running service-driven ON-CHAIN spend E2E test..."
-	cd e2e && dart test test/evtxo_service_spend_e2e_test.dart
-	-pkill -f "contract-service" || true
-
-# Tier 2 service-driven spend THROUGH ARKD E2E: the service + cosigner spend a contract eVTXO
-# off-chain via arkd with the WALLET OFFLINE (arkd co-signs the server leg). Needs the arkd stack.
-e2e-evtxo-service-arkd: runtime-stop signer-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build contracts-build service-build redis-up
-	@echo "Running service-driven through-arkd spend E2E test..."
-	cd e2e && dart test test/evtxo_service_arkd_e2e_test.dart
-	-pkill -f "contract-service" || true
 
 # 3) Start regtest for SOFTWARE signer (no USB device required) — server in foreground
 #    Identical infrastructure to `make hardware`; only difference is the banner.
@@ -391,6 +359,10 @@ contracts-build:
 	@echo "Built: contracts/examples/spending-limit/target/wasm32-wasip2/release/spending_limit.wasm"
 	cd contracts/examples/oracle-gate && cargo build --release
 	@echo "Built: contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm"
+	cd contracts/examples/oracle-gate-template && cargo build --release
+	@echo "Built: oracle-gate-template (Phase 2 template, imports oracle:gate/config)"
+	cd contracts/examples/config-provider && cargo build --release
+	@echo "Built: config-provider (Phase 2 provider stub, patchable config slot)"
 
 runtime-build:
 	@echo "Building server..."
@@ -434,22 +406,6 @@ signer-stop:
 	@echo "Stopping Hardware Signer Test Server..."
 	-sudo pkill -9 -f "signer-server" || true
 	-sudo pkill -9 signer-server || true
-	@sleep 1
-
-# Dummy always-online contract-signer service (assemble-contract-share). The
-# contract eVTXO e2e tests spawn it themselves; these targets are for manual runs.
-service-build:
-	@echo "Building contract-signer service..."
-	cd e2e/contract-service && cargo build --release
-
-service-run: service-build
-	@echo "Starting contract-signer service on port 7075..."
-	cd e2e/contract-service && cargo run --release -- --port 7075 &
-	@sleep 2
-
-service-stop:
-	@echo "Stopping contract-signer service..."
-	-pkill -9 -f "contract-service" || true
 	@sleep 1
 
 runtime-run: runtime-build
@@ -605,11 +561,12 @@ integration-test-ci: runtime-stop signer-stop regtest-up bitcoin-init adb-revers
 # availability so it skips itself if arkd isn't reachable; running through
 # this target makes sure it isn't.
 integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init \
-	signer-run ffi-android-x86_64 runtime-build
+	bob-up signer-run ffi-android-x86_64 runtime-build
 	@echo "Running Ark integration test..."
 	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001
 	-adb reverse tcp:18443 tcp:18443
+	-adb reverse tcp:7090 tcp:7090
 	export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
 		BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
 		ASP_URL=http://127.0.0.1:7070 && \
@@ -621,6 +578,18 @@ integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init
 	$(MAKE) runtime-stop
 	$(MAKE) signer-stop
 	$(MAKE) arkd-down
+	$(MAKE) bob-down
+
+
+flutter:
+	@echo "Running Ark integration test..."
+	-adb reverse tcp:7074 tcp:7074
+	-adb reverse tcp:50001 tcp:50001
+	-adb reverse tcp:18443 tcp:18443
+	-adb reverse tcp:7090 tcp:7090
+
+	cd app && flutter run 
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LEGACY ALIASES (old names still work)

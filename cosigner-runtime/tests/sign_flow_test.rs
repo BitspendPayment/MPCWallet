@@ -63,7 +63,10 @@ fn make_shared() -> (Arc<SharedServices>, TempDir) {
 }
 
 fn now_ms() -> i64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 /// Host-side 2-of-2 DKG (the guest no longer does DKG); even-Y-normalized outputs.
@@ -75,7 +78,9 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut r1_packages: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
     for _ in 0..max {
         let secret = random::mod_n_random(&mut rng);
-        let coefficients: Vec<_> = (0..min - 1).map(|_| random::mod_n_random(&mut rng)).collect();
+        let coefficients: Vec<_> = (0..min - 1)
+            .map(|_| random::mod_n_random(&mut rng))
+            .collect();
         let (secret_pkg, pub_pkg) =
             dkg::dkg_part1(max, min, &secret, &coefficients, &mut rng).expect("dkg_part1");
         r1_packages.insert(secret_pkg.identifier.clone(), pub_pkg);
@@ -158,7 +163,11 @@ async fn full_2of2_sign_via_registry() {
     };
     shared
         .persistence
-        .put("policies", &group_key, &serde_json::to_string(&policy).unwrap())
+        .put(
+            "policies",
+            &group_key,
+            &serde_json::to_string(&policy).unwrap(),
+        )
         .unwrap();
 
     let registry = CosignerRegistry::new(wasm.to_str().unwrap(), shared.clone()).unwrap();
@@ -186,7 +195,11 @@ async fn full_2of2_sign_via_registry() {
         ark_tx: vec![],
     };
     let resp1 = registry
-        .dispatch(&group_key, |reply| CosignerCommand::SignStep1 { req: req1, reply })
+        .dispatch(&group_key, |reply| CosignerCommand::SignStep1 {
+            req: req1,
+            session: None,
+            reply,
+        })
         .await
         .expect("sign_step1");
 
@@ -219,7 +232,11 @@ async fn full_2of2_sign_via_registry() {
         timestamp_ms: ts2,
     };
     let resp2 = registry
-        .dispatch(&group_key, |reply| CosignerCommand::SignStep2 { req: req2, reply })
+        .dispatch(&group_key, |reply| CosignerCommand::SignStep2 {
+            req: req2,
+            session: None,
+            reply,
+        })
         .await
         .expect("sign_step2");
 

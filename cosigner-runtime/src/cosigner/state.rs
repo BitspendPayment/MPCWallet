@@ -73,16 +73,8 @@ pub struct CosignerState {
     /// and as the group id for `auth_check_group`.
     pub cosigner_id: String,
 
-    /// Active settle (boarding) session: `(session, boarding_amount_sats, exit_delay)`.
-    pub settle_session: Option<(ark::client::batch::SettleSession, u64, u32)>,
-    /// Plan A: progress through the GUEST-driven boarding settle — `(step, amount_sats, exit_delay)`.
-    /// step 1 = awaiting intent FROST sigs, 2 = awaiting commitment FROST sigs. The session + open
-    /// stream live in the GUEST; the host only relays the two FROST rounds and records the result.
-    pub guest_boarding: Option<(u8, u64, u32)>,
     /// Active delegate-settle session — stored signed intent + scope.
     pub delegate_session: Option<DelegateRecord>,
-    /// Active send session: `(session, exit_delay)`.
-    pub send_session: Option<(ark::client::send::SendSession, u32)>,
 
     pub vtxos: Vec<VtxoEntry>,
     /// Ark transaction history (oldest first).
@@ -111,10 +103,7 @@ impl CosignerState {
     pub fn new(cosigner_id: String) -> Self {
         Self {
             cosigner_id,
-            settle_session: None,
-            guest_boarding: None,
             delegate_session: None,
-            send_session: None,
             vtxos: Vec::new(),
             ark_tx_history: Vec::new(),
             owned_scripts: Vec::new(),
@@ -136,7 +125,6 @@ impl Default for CosignerState {
 // Policy projection types (folded in from the former `policy` module). The host's PUBLIC view of a
 // cosigner's policy; the secret key lives only in the CosignerActor seal.
 // ===========================================================================
-
 
 mod arr32_hex {
     use serde::{Deserialize, Deserializer, Serializer};

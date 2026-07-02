@@ -6,11 +6,8 @@ import 'screens/onboarding/welcome_screen.dart';
 import 'screens/onboarding/server_connect_screen.dart';
 import 'screens/onboarding/dkg_progress_screen.dart';
 import 'screens/onboarding/wallet_ready_screen.dart';
-import 'screens/onboarding/signer_selection_screen.dart';
-import 'screens/onboarding/password_create_screen.dart';
-import 'screens/onboarding/google_signin_screen.dart';
-import 'screens/onboarding/restore_screen.dart';
-import 'screens/settings/backup_settings_screen.dart';
+import 'screens/onboarding/pin_create_screen.dart';
+import 'screens/services/services_screen.dart';
 import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
@@ -94,28 +91,12 @@ GoRouter _buildRouter() => GoRouter(
       builder: (context, state) => const WelcomeScreen(),
     ),
     GoRoute(
-      path: '/onboarding/signer-selection',
-      builder: (context, state) => const SignerSelectionScreen(),
-    ),
-    GoRoute(
-      path: '/onboarding/password',
-      builder: (context, state) => const PasswordCreateScreen(),
-    ),
-    GoRoute(
-      path: '/onboarding/google-signin',
-      builder: (context, state) => const GoogleSignInScreen(),
-    ),
-    GoRoute(
-      path: '/onboarding/restore',
-      builder: (context, state) => const RestoreScreen(),
+      path: '/onboarding/pin',
+      builder: (context, state) => const PinCreateScreen(),
     ),
     GoRoute(
       path: '/onboarding/server',
       builder: (context, state) => const ServerConnectionScreen(),
-    ),
-    GoRoute(
-      path: '/settings/backup',
-      builder: (context, state) => const BackupSettingsScreen(),
     ),
     GoRoute(
       path: '/onboarding/dkg',
@@ -162,6 +143,10 @@ GoRoute(
     GoRoute(
       path: '/ark/board',
       builder: (context, state) => const ArkBoardScreen(),
+    ),
+    GoRoute(
+      path: '/services',
+      builder: (context, state) => const ServicesScreen(),
     ),
   ],
 );

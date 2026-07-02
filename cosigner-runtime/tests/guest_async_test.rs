@@ -34,7 +34,10 @@ fn guest_wasm_path() -> PathBuf {
 
 fn now_ms() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as i64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64
 }
 
 async fn spawn_guest() -> Option<GuestInstance> {
@@ -46,7 +49,11 @@ async fn spawn_guest() -> Option<GuestInstance> {
     let engine = guest_instance::build_engine().unwrap();
     let component = Component::from_file(&engine, &wasm).unwrap();
     let linker = guest_instance::build_linker(&engine).unwrap();
-    Some(GuestInstance::spawn(&engine, &component, &linker, None).await.unwrap())
+    Some(
+        GuestInstance::spawn(&engine, &component, &linker, None)
+            .await
+            .unwrap(),
+    )
 }
 
 /// Host-side 2-of-2 DKG (even-Y normalized), identical to the other sign tests.
@@ -58,7 +65,9 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut r1_packages: BTreeMap<Identifier, Round1Package> = BTreeMap::new();
     for _ in 0..max {
         let secret = random::mod_n_random(&mut rng);
-        let coefficients: Vec<_> = (0..min - 1).map(|_| random::mod_n_random(&mut rng)).collect();
+        let coefficients: Vec<_> = (0..min - 1)
+            .map(|_| random::mod_n_random(&mut rng))
+            .collect();
         let (secret_pkg, pub_pkg) =
             dkg::dkg_part1(max, min, &secret, &coefficients, &mut rng).expect("dkg_part1");
         r1_packages.insert(secret_pkg.identifier.clone(), pub_pkg);
@@ -143,7 +152,10 @@ async fn full_2of2_sign_via_async_handle() {
         })
         .await
         .unwrap();
-    assert!(matches!(resp, GuestResponse::PolicyInstalled), "got {resp:?}");
+    assert!(
+        matches!(resp, GuestResponse::PolicyInstalled),
+        "got {resp:?}"
+    );
 
     // Client round 1: user nonce + commitments.
     let mut rng = OsRng;
@@ -153,7 +165,8 @@ async fn full_2of2_sign_via_async_handle() {
         .command(GuestCommand::FrostSignStep1(SignStep1Wire {
             user_id: user_id.clone(),
             hiding_commitment: point::serialize_compressed(&user_nonce.commitments.hiding).to_vec(),
-            binding_commitment: point::serialize_compressed(&user_nonce.commitments.binding).to_vec(),
+            binding_commitment: point::serialize_compressed(&user_nonce.commitments.binding)
+                .to_vec(),
             message_to_sign: message.to_vec(),
             signature: auth
                 .sign(&build_auth_message(OP_SIGN_STEP1, ts1, &user_id_hex))
@@ -264,7 +277,8 @@ async fn key_path_tweak_sign_via_guest() {
         .command(GuestCommand::FrostSignStep1(SignStep1Wire {
             user_id: user_id.clone(),
             hiding_commitment: point::serialize_compressed(&user_nonce.commitments.hiding).to_vec(),
-            binding_commitment: point::serialize_compressed(&user_nonce.commitments.binding).to_vec(),
+            binding_commitment: point::serialize_compressed(&user_nonce.commitments.binding)
+                .to_vec(),
             message_to_sign: message.to_vec(),
             signature: auth
                 .sign(&build_auth_message(OP_SIGN_STEP1, ts1, &user_id_hex))
@@ -296,7 +310,8 @@ async fn key_path_tweak_sign_via_guest() {
         );
     }
     let signing_pkg = SigningPackage::new(commitments, message.to_vec());
-    let user_share = signing::sign(&signing_pkg, &user_nonce, &kp_user_tweaked).expect("user share");
+    let user_share =
+        signing::sign(&signing_pkg, &user_nonce, &kp_user_tweaked).expect("user share");
 
     let ts2 = now_ms();
     let resp = guest

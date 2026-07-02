@@ -33,9 +33,7 @@ const EVICT_MSG: &str = "onboarding session evicted: restart from step1";
 pub struct OnboardingManager {
     sessions: DashMap<String, Arc<Mutex<OnboardingSession>>>,
     shared: Arc<SharedServices>,
-    /// Per-actor registry, used to seed freshly-created policy into the guest + seal it after
-    /// DKG. `None` in unit tests that exercise the DKG handlers without the actor stack.
-    registry: Option<Arc<crate::cosigner::registry::CosignerRegistry>>,
+    cosigner_registry: Option<Arc<crate::cosigner::registry::CosignerRegistry>>,
     ttl: Duration,
 }
 
@@ -44,8 +42,6 @@ impl OnboardingManager {
         Self::new_inner(shared, None, ttl)
     }
 
-    /// Production constructor: wires the registry so completed onboardings seed + seal the
-    /// policy into the per-actor guest (no plaintext key kept host-side long-term).
     pub fn with_registry(
         shared: Arc<SharedServices>,
         registry: Arc<crate::cosigner::registry::CosignerRegistry>,
@@ -62,7 +58,7 @@ impl OnboardingManager {
         Arc::new(Self {
             sessions: DashMap::new(),
             shared,
-            registry,
+            cosigner_registry: registry,
             ttl,
         })
     }
@@ -142,13 +138,11 @@ impl OnboardingManager {
                 onboarding_session_event = "completed",
                 "onboarding session completed"
             );
-            // MANDATORY seed (Plan A): install the freshly-minted key INTO the guest from the
-            // in-memory material + seal it. There is NO plaintext fallback — `policies` holds only
-            // the public projection — so if this fails the wallet has no usable cosigner key and
-            // onboarding MUST fail (the user re-onboards; no funds exist yet).
-            if let Some(registry) = self.registry.clone() {
-                let mat = seed_material
-                    .ok_or_else(|| Status::internal("onboarding finalized without seed material"))?;
+
+            if let Some(registry) = self.cosigner_registry.clone() {
+                let mat = seed_material.ok_or_else(|| {
+                    Status::internal("onboarding finalized without seed material")
+                })?;
                 self.seed_guest_mandatory(&registry, &mat).await?;
             }
         }

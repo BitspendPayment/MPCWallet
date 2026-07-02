@@ -26,7 +26,7 @@ pub struct Frame {
 pub enum Payload {
     // ---- host -> guest ----
     /// Drive a command in the guest.
-    Command(GuestCommand),
+    Command(ActorCommand),
     /// Answer a prior [`GuestIoRequest`] (same `corr_id`).
     IoResult(IoResult),
     /// Hand the guest its sealed state blob to restore (sent first on spawn/reseat).
@@ -34,7 +34,7 @@ pub enum Payload {
 
     // ---- guest -> host ----
     /// Terminal result of a [`GuestCommand`].
-    Response(GuestResponse),
+    Response(ActorResponse),
     /// Ask the host to perform I/O (network/seal); host replies with [`Payload::IoResult`].
     IoRequest(GuestIoRequest),
     /// A sealed state blob the host must persist (opaque to the host).
@@ -43,7 +43,7 @@ pub enum Payload {
 
 /// Host -> guest commands. Grows per migration phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GuestCommand {
+pub enum ActorCommand {
     /// No-op liveness/round-trip check (Phase 1 skeleton).
     Ping,
     /// Install (or replace) a group's signing policy in the guest. Crypto material is
@@ -121,7 +121,7 @@ pub enum GuestCommand {
     /// Drive a delegate/auto-settle batch entirely in the guest: register the pre-authorized
     /// intent, open the ASP event stream, and run the MuSig2 tree-signing + forfeit loop to
     /// completion. Requires a `ReadyToSettle` delegate session already installed in the guest.
-    SettleDelegate { asp_url: String },
+    SettleDelegate,
     /// Return the Ark cosigner (MuSig2) PUBLIC key derived from the in-guest secret — the host needs
     /// it to build the boarding intent's `own_cosigner_pks` (phase 1) without reading the secret.
     GetArkCosignerPubkey,
@@ -144,33 +144,19 @@ pub enum GuestCommand {
         batch_expiry: u32,
         forfeit_pk_hex: String,
     },
-    /// Boarding settle, fully GUEST-driven (Plan A): the guest owns the ASP event stream + the
-    /// MuSig2 tree-signing; the host only scans the boarding UTXO (public chain) and relays the two
-    /// FROST rounds. Step 1: build the boarding session from the (public) scan + ASP info, return
-    /// the intent-proof sighashes to FROST-sign.
-    BoardingSettleStep1 {
-        owner_pk_hex: String,
-        signer_pubkey: String,
-        forfeit_pubkey: String,
-        boarding_address: String,
-        boarding_txid: String,
-        boarding_vout: u32,
-        boarding_amount_sats: u64,
-        exit_delay: u32,
-        network: String,
-    },
-    /// Step 2: insert the intent FROST sigs, RegisterIntent + open the event stream, drive the
-    /// batch (tree-signing in-guest) until BatchFinalization, then return the commitment-tx
-    /// sighashes to FROST-sign. The open stream + session are held in the guest across to step 3.
-    BoardingSettleStep2 {
-        asp_url: String,
-        intent_signatures: Vec<Vec<u8>>,
-    },
-    /// Step 3: insert the commitment FROST sigs, submit the signed commitment, and drive to
-    /// BatchFinalized — returning the new VTXO.
-    BoardingSettleStep3 {
-        asp_url: String,
-        commitment_signatures: Vec<Vec<u8>>,
+    /// Boarding settle — interactive + multi-request, with the ACTOR owning the phase via its
+    /// in-flight session (no host-side phase marker). The MuSig2 tree-signing + ASP event stream
+    /// stay in the actor; the host only relays the request and persists the resulting VTXO.
+    /// - no `signed_messages` ⇒ START: the actor derives owner-pk (from its policy) + ASP info +
+    ///   the boarding address itself, builds the session from the wallet-scanned `boarding_utxo`,
+    ///   and returns the intent-proof sighashes to FROST-sign.
+    /// - with sigs, intent round pending ⇒ insert intent sigs, drive to BatchFinalization, return
+    ///   the commitment sighashes (the stream is held across the pause).
+    /// - with sigs, commitment round pending ⇒ insert commitment sigs, finalize, return the VTXO.
+    BoardingSettle {
+        /// The wallet-scanned boarding UTXO `(txid, vout, amount_sats)` — required to START.
+        boarding_utxo: Option<(String, u32, u64)>,
+        signed_messages: Vec<Vec<u8>>,
     },
     /// Phase 4: serialize the guest's durable state (policy + Ark cosigner secret + VTXOs +
     /// history) into an opaque sealed blob the host stores but cannot read. In-flight sessions
@@ -211,11 +197,11 @@ pub struct SendVtxoStep1Wire {
     pub user_id: Vec<u8>,
     pub signature: Vec<u8>,
     pub timestamp_ms: i64,
-    /// ASP gRPC endpoint (the host injects its configured ASP_URL; the guest calls it).
-    pub asp_url: String,
     pub recipient_ark_address: String,
     pub amount: u64,
-    // VTXOs now come from the guest's own store (set via `SetVtxos`), not the wire.
+    /// The current spendable VTXO set, supplied by the host from its persisted projection. The
+    /// actor selects from these + checks the balance itself (no separate `SetVtxos` push).
+    pub vtxos: Vec<VtxoInputWire>,
 }
 
 /// SendVtxo phase 2 — the client's FROST signatures over the phase-1 sighashes.
@@ -224,7 +210,6 @@ pub struct SendVtxoStep2Wire {
     pub user_id: Vec<u8>,
     pub signature: Vec<u8>,
     pub timestamp_ms: i64,
-    pub asp_url: String,
     pub signed_messages: Vec<Vec<u8>>,
 }
 
@@ -267,7 +252,6 @@ pub struct GenerateDelegateWire {
     pub user_id: Vec<u8>,
     pub signature: Vec<u8>,
     pub timestamp_ms: i64,
-    pub asp_url: String,
     // VTXOs come from the guest's own store (SetVtxos); the settle output is a self-refresh
     // to the owner's own ark address, which the guest computes from GetInfo. Neither is on
     // the wire. Only the host-computed renewal deadline is passed in.
@@ -335,7 +319,7 @@ pub struct CommitmentWire {
 
 /// Guest -> host terminal responses. Grows per migration phase.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum GuestResponse {
+pub enum ActorResponse {
     /// Reply to [`GuestCommand::Ping`].
     Pong,
     /// Reply to [`GuestCommand::InstallPolicy`] and [`GuestCommand::SetContracts`].
@@ -383,15 +367,17 @@ pub enum GuestResponse {
     /// Reply to [`GuestCommand::GetArkCosignerPubkey`] — the cosigner's MuSig2 pubkey (33-byte
     /// compressed, hex).
     ArkCosignerPubkey { pubkey_hex: String },
-    /// Reply to [`GuestCommand::BoardingSettleStep1`] / `Step2` — the sighashes the host must have
-    /// FROST-signed (intent proof for step 1, commitment tx for step 2).
+    /// Reply to [`GuestCommand::BoardingSettle`] mid-flight — the sighashes the host must have
+    /// FROST-signed (intent proof for the start round, commitment tx for the intent round).
     BoardingSettleSighashes { messages_to_sign: Vec<Vec<u8>> },
-    /// Reply to [`GuestCommand::BoardingSettleStep3`] — the finalized boarding settle's new VTXO.
+    /// Reply to [`GuestCommand::BoardingSettle`] on completion — the finalized boarding settle's new
+    /// VTXO. `exit_delay` is the boarding exit delay the host stores on the VTXO entry.
     BoardingSettleSubmitted {
         commitment_txid: String,
         vtxo_txid: String,
         vtxo_vout: u32,
         amount_sats: u64,
+        exit_delay: u32,
     },
     /// Reply to [`GuestCommand::BoardingGenNonces`] — the cosigner's pubkey + per-node public
     /// nonce points (`(tree_txid, encoded_nonce_pks)`) for the host to submit to the ASP.
@@ -483,7 +469,7 @@ mod tests {
     fn ping_roundtrip() {
         let frame = Frame {
             corr_id: 7,
-            payload: Payload::Command(GuestCommand::Ping),
+            payload: Payload::Command(ActorCommand::Ping),
         };
         let bytes = encode_frame(&frame);
         let (decoded, consumed) = try_decode_frame(&bytes).unwrap().unwrap();
@@ -491,7 +477,7 @@ mod tests {
         assert_eq!(decoded.corr_id, 7);
         assert!(matches!(
             decoded.payload,
-            Payload::Command(GuestCommand::Ping)
+            Payload::Command(ActorCommand::Ping)
         ));
     }
 
@@ -499,10 +485,12 @@ mod tests {
     fn partial_frame_returns_none() {
         let bytes = encode_frame(&Frame {
             corr_id: 1,
-            payload: Payload::Response(GuestResponse::Pong),
+            payload: Payload::Response(ActorResponse::Pong),
         });
         // One byte short of complete.
-        assert!(try_decode_frame(&bytes[..bytes.len() - 1]).unwrap().is_none());
+        assert!(try_decode_frame(&bytes[..bytes.len() - 1])
+            .unwrap()
+            .is_none());
         // Fewer than the 4-byte length prefix.
         assert!(try_decode_frame(&bytes[..2]).unwrap().is_none());
     }
@@ -511,7 +499,9 @@ mod tests {
     fn two_frames_back_to_back() {
         let mut buf = encode_frame(&Frame {
             corr_id: 1,
-            payload: Payload::IoRequest(GuestIoRequest::Seal { plaintext: vec![1, 2, 3] }),
+            payload: Payload::IoRequest(GuestIoRequest::Seal {
+                plaintext: vec![1, 2, 3],
+            }),
         });
         buf.extend(encode_frame(&Frame {
             corr_id: 1,

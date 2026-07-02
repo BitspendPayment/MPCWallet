@@ -9,9 +9,6 @@ pub const MAX_TIMESTAMP_DRIFT_MS: i64 = 5 * 60 * 1000; // 5 minutes
 // Operation constants (must match client-side values in auth_message.dart)
 pub const OP_SIGN_STEP1: &str = "SIGN_STEP1";
 pub const OP_SIGN_STEP2: &str = "SIGN_STEP2";
-pub const OP_FETCH_HISTORY: &str = "FETCH_HISTORY";
-pub const OP_FETCH_RECENT_TXS: &str = "FETCH_RECENT_TXS";
-pub const OP_SUBSCRIBE_HISTORY: &str = "SUBSCRIBE_HISTORY";
 pub const OP_GET_ARK_INFO: &str = "GET_ARK_INFO";
 pub const OP_GET_ARK_ADDRESS: &str = "GET_ARK_ADDRESS";
 pub const OP_GET_BOARDING_ADDRESS: &str = "GET_BOARDING_ADDRESS";
@@ -21,8 +18,10 @@ pub const OP_REDEEM_VTXO: &str = "REDEEM_VTXO";
 pub const OP_SETTLE: &str = "SETTLE";
 pub const OP_SETTLE_DELEGATE: &str = "SETTLE_DELEGATE";
 pub const OP_LIST_ARK_TXS: &str = "LIST_ARK_TXS";
-pub const OP_CHECK_BOARDING_BALANCE: &str = "CHECK_BOARDING_BALANCE";
 pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
+pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
+pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
+pub const OP_EVENTS_SUBSCRIBE: &str = "EVENTS_SUBSCRIBE";
 
 /// Build the auth message bytes that should have been signed.
 /// Returns SHA-256 hash of the canonical message (matches Dart client's AuthMessage.messageBytes).

@@ -37,10 +37,14 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/ContractCreate',
       ($0.ContractCreateRequest value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.ContractCreateResponse.fromBuffer(value));
-  static final _$assembleContractShare = $grpc.ClientMethod<$0.AssembleContractShareRequest, $0.AssembleContractShareResponse>(
-      '/mpc_wallet.MPCWallet/AssembleContractShare',
-      ($0.AssembleContractShareRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.AssembleContractShareResponse.fromBuffer(value));
+  static final _$evtxoPendingShares = $grpc.ClientMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
+      '/mpc_wallet.MPCWallet/EvtxoPendingShares',
+      ($0.EvtxoPendingSharesRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.EvtxoPendingSharesResponse.fromBuffer(value));
+  static final _$evtxoAckShare = $grpc.ClientMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
+      '/mpc_wallet.MPCWallet/EvtxoAckShare',
+      ($0.EvtxoAckShareRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.EvtxoAckShareResponse.fromBuffer(value));
   static final _$signStep1 = $grpc.ClientMethod<$0.SignStep1Request, $0.SignStep1Response>(
       '/mpc_wallet.MPCWallet/SignStep1',
       ($0.SignStep1Request value) => value.writeToBuffer(),
@@ -49,22 +53,6 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/SignStep2',
       ($0.SignStep2Request value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.SignStep2Response.fromBuffer(value));
-  static final _$broadcastTransaction = $grpc.ClientMethod<$0.BroadcastTransactionRequest, $0.BroadcastTransactionResponse>(
-      '/mpc_wallet.MPCWallet/BroadcastTransaction',
-      ($0.BroadcastTransactionRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.BroadcastTransactionResponse.fromBuffer(value));
-  static final _$fetchHistory = $grpc.ClientMethod<$0.FetchHistoryRequest, $0.FetchHistoryResponse>(
-      '/mpc_wallet.MPCWallet/FetchHistory',
-      ($0.FetchHistoryRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.FetchHistoryResponse.fromBuffer(value));
-  static final _$fetchRecentTransactions = $grpc.ClientMethod<$0.FetchRecentTransactionsRequest, $0.FetchRecentTransactionsResponse>(
-      '/mpc_wallet.MPCWallet/FetchRecentTransactions',
-      ($0.FetchRecentTransactionsRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.FetchRecentTransactionsResponse.fromBuffer(value));
-  static final _$subscribeToHistory = $grpc.ClientMethod<$0.SubscribeToHistoryRequest, $0.TransactionNotification>(
-      '/mpc_wallet.MPCWallet/SubscribeToHistory',
-      ($0.SubscribeToHistoryRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.TransactionNotification.fromBuffer(value));
   static final _$getArkInfo = $grpc.ClientMethod<$0.GetArkInfoRequest, $0.GetArkInfoResponse>(
       '/mpc_wallet.MPCWallet/GetArkInfo',
       ($0.GetArkInfoRequest value) => value.writeToBuffer(),
@@ -85,10 +73,6 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/ListArkTransactions',
       ($0.ListArkTransactionsRequest value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.ListArkTransactionsResponse.fromBuffer(value));
-  static final _$checkBoardingBalance = $grpc.ClientMethod<$0.CheckBoardingBalanceRequest, $0.CheckBoardingBalanceResponse>(
-      '/mpc_wallet.MPCWallet/CheckBoardingBalance',
-      ($0.CheckBoardingBalanceRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.CheckBoardingBalanceResponse.fromBuffer(value));
   static final _$sendVtxo = $grpc.ClientMethod<$0.SendVtxoRequest, $0.SendVtxoResponse>(
       '/mpc_wallet.MPCWallet/SendVtxo',
       ($0.SendVtxoRequest value) => value.writeToBuffer(),
@@ -140,8 +124,12 @@ class MPCWalletClient extends $grpc.Client {
     return $createUnaryCall(_$contractCreate, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.AssembleContractShareResponse> assembleContractShare($0.AssembleContractShareRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$assembleContractShare, request, options: options);
+  $grpc.ResponseFuture<$0.EvtxoPendingSharesResponse> evtxoPendingShares($0.EvtxoPendingSharesRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$evtxoPendingShares, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.EvtxoAckShareResponse> evtxoAckShare($0.EvtxoAckShareRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$evtxoAckShare, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.SignStep1Response> signStep1($0.SignStep1Request request, {$grpc.CallOptions? options}) {
@@ -150,22 +138,6 @@ class MPCWalletClient extends $grpc.Client {
 
   $grpc.ResponseFuture<$0.SignStep2Response> signStep2($0.SignStep2Request request, {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$signStep2, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.BroadcastTransactionResponse> broadcastTransaction($0.BroadcastTransactionRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$broadcastTransaction, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.FetchHistoryResponse> fetchHistory($0.FetchHistoryRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$fetchHistory, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.FetchRecentTransactionsResponse> fetchRecentTransactions($0.FetchRecentTransactionsRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$fetchRecentTransactions, request, options: options);
-  }
-
-  $grpc.ResponseStream<$0.TransactionNotification> subscribeToHistory($0.SubscribeToHistoryRequest request, {$grpc.CallOptions? options}) {
-    return $createStreamingCall(_$subscribeToHistory, $async.Stream.fromIterable([request]), options: options);
   }
 
   $grpc.ResponseFuture<$0.GetArkInfoResponse> getArkInfo($0.GetArkInfoRequest request, {$grpc.CallOptions? options}) {
@@ -186,10 +158,6 @@ class MPCWalletClient extends $grpc.Client {
 
   $grpc.ResponseFuture<$0.ListArkTransactionsResponse> listArkTransactions($0.ListArkTransactionsRequest request, {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$listArkTransactions, request, options: options);
-  }
-
-  $grpc.ResponseFuture<$0.CheckBoardingBalanceResponse> checkBoardingBalance($0.CheckBoardingBalanceRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$checkBoardingBalance, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.SendVtxoResponse> sendVtxo($0.SendVtxoRequest request, {$grpc.CallOptions? options}) {
@@ -254,13 +222,20 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.ContractCreateRequest.fromBuffer(value),
         ($0.ContractCreateResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.AssembleContractShareRequest, $0.AssembleContractShareResponse>(
-        'AssembleContractShare',
-        assembleContractShare_Pre,
+    $addMethod($grpc.ServiceMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
+        'EvtxoPendingShares',
+        evtxoPendingShares_Pre,
         false,
         false,
-        ($core.List<$core.int> value) => $0.AssembleContractShareRequest.fromBuffer(value),
-        ($0.AssembleContractShareResponse value) => value.writeToBuffer()));
+        ($core.List<$core.int> value) => $0.EvtxoPendingSharesRequest.fromBuffer(value),
+        ($0.EvtxoPendingSharesResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
+        'EvtxoAckShare',
+        evtxoAckShare_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.EvtxoAckShareRequest.fromBuffer(value),
+        ($0.EvtxoAckShareResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.SignStep1Request, $0.SignStep1Response>(
         'SignStep1',
         signStep1_Pre,
@@ -275,34 +250,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.SignStep2Request.fromBuffer(value),
         ($0.SignStep2Response value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.BroadcastTransactionRequest, $0.BroadcastTransactionResponse>(
-        'BroadcastTransaction',
-        broadcastTransaction_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) => $0.BroadcastTransactionRequest.fromBuffer(value),
-        ($0.BroadcastTransactionResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.FetchHistoryRequest, $0.FetchHistoryResponse>(
-        'FetchHistory',
-        fetchHistory_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) => $0.FetchHistoryRequest.fromBuffer(value),
-        ($0.FetchHistoryResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.FetchRecentTransactionsRequest, $0.FetchRecentTransactionsResponse>(
-        'FetchRecentTransactions',
-        fetchRecentTransactions_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) => $0.FetchRecentTransactionsRequest.fromBuffer(value),
-        ($0.FetchRecentTransactionsResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.SubscribeToHistoryRequest, $0.TransactionNotification>(
-        'SubscribeToHistory',
-        subscribeToHistory_Pre,
-        false,
-        true,
-        ($core.List<$core.int> value) => $0.SubscribeToHistoryRequest.fromBuffer(value),
-        ($0.TransactionNotification value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.GetArkInfoRequest, $0.GetArkInfoResponse>(
         'GetArkInfo',
         getArkInfo_Pre,
@@ -338,13 +285,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.ListArkTransactionsRequest.fromBuffer(value),
         ($0.ListArkTransactionsResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.CheckBoardingBalanceRequest, $0.CheckBoardingBalanceResponse>(
-        'CheckBoardingBalance',
-        checkBoardingBalance_Pre,
-        false,
-        false,
-        ($core.List<$core.int> value) => $0.CheckBoardingBalanceRequest.fromBuffer(value),
-        ($0.CheckBoardingBalanceResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.SendVtxoRequest, $0.SendVtxoResponse>(
         'SendVtxo',
         sendVtxo_Pre,
@@ -412,8 +352,12 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return contractCreate(call, await request);
   }
 
-  $async.Future<$0.AssembleContractShareResponse> assembleContractShare_Pre($grpc.ServiceCall call, $async.Future<$0.AssembleContractShareRequest> request) async {
-    return assembleContractShare(call, await request);
+  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoPendingSharesRequest> request) async {
+    return evtxoPendingShares(call, await request);
+  }
+
+  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoAckShareRequest> request) async {
+    return evtxoAckShare(call, await request);
   }
 
   $async.Future<$0.SignStep1Response> signStep1_Pre($grpc.ServiceCall call, $async.Future<$0.SignStep1Request> request) async {
@@ -422,22 +366,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
 
   $async.Future<$0.SignStep2Response> signStep2_Pre($grpc.ServiceCall call, $async.Future<$0.SignStep2Request> request) async {
     return signStep2(call, await request);
-  }
-
-  $async.Future<$0.BroadcastTransactionResponse> broadcastTransaction_Pre($grpc.ServiceCall call, $async.Future<$0.BroadcastTransactionRequest> request) async {
-    return broadcastTransaction(call, await request);
-  }
-
-  $async.Future<$0.FetchHistoryResponse> fetchHistory_Pre($grpc.ServiceCall call, $async.Future<$0.FetchHistoryRequest> request) async {
-    return fetchHistory(call, await request);
-  }
-
-  $async.Future<$0.FetchRecentTransactionsResponse> fetchRecentTransactions_Pre($grpc.ServiceCall call, $async.Future<$0.FetchRecentTransactionsRequest> request) async {
-    return fetchRecentTransactions(call, await request);
-  }
-
-  $async.Stream<$0.TransactionNotification> subscribeToHistory_Pre($grpc.ServiceCall call, $async.Future<$0.SubscribeToHistoryRequest> request) async* {
-    yield* subscribeToHistory(call, await request);
   }
 
   $async.Future<$0.GetArkInfoResponse> getArkInfo_Pre($grpc.ServiceCall call, $async.Future<$0.GetArkInfoRequest> request) async {
@@ -458,10 +386,6 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
 
   $async.Future<$0.ListArkTransactionsResponse> listArkTransactions_Pre($grpc.ServiceCall call, $async.Future<$0.ListArkTransactionsRequest> request) async {
     return listArkTransactions(call, await request);
-  }
-
-  $async.Future<$0.CheckBoardingBalanceResponse> checkBoardingBalance_Pre($grpc.ServiceCall call, $async.Future<$0.CheckBoardingBalanceRequest> request) async {
-    return checkBoardingBalance(call, await request);
   }
 
   $async.Future<$0.SendVtxoResponse> sendVtxo_Pre($grpc.ServiceCall call, $async.Future<$0.SendVtxoRequest> request) async {
@@ -496,19 +420,15 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
   $async.Future<$0.DKGStep2Response> dKGStep2($grpc.ServiceCall call, $0.DKGStep2Request request);
   $async.Future<$0.DKGStep3Response> dKGStep3($grpc.ServiceCall call, $0.DKGStep3Request request);
   $async.Future<$0.ContractCreateResponse> contractCreate($grpc.ServiceCall call, $0.ContractCreateRequest request);
-  $async.Future<$0.AssembleContractShareResponse> assembleContractShare($grpc.ServiceCall call, $0.AssembleContractShareRequest request);
+  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares($grpc.ServiceCall call, $0.EvtxoPendingSharesRequest request);
+  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare($grpc.ServiceCall call, $0.EvtxoAckShareRequest request);
   $async.Future<$0.SignStep1Response> signStep1($grpc.ServiceCall call, $0.SignStep1Request request);
   $async.Future<$0.SignStep2Response> signStep2($grpc.ServiceCall call, $0.SignStep2Request request);
-  $async.Future<$0.BroadcastTransactionResponse> broadcastTransaction($grpc.ServiceCall call, $0.BroadcastTransactionRequest request);
-  $async.Future<$0.FetchHistoryResponse> fetchHistory($grpc.ServiceCall call, $0.FetchHistoryRequest request);
-  $async.Future<$0.FetchRecentTransactionsResponse> fetchRecentTransactions($grpc.ServiceCall call, $0.FetchRecentTransactionsRequest request);
-  $async.Stream<$0.TransactionNotification> subscribeToHistory($grpc.ServiceCall call, $0.SubscribeToHistoryRequest request);
   $async.Future<$0.GetArkInfoResponse> getArkInfo($grpc.ServiceCall call, $0.GetArkInfoRequest request);
   $async.Future<$0.GetArkAddressResponse> getArkAddress($grpc.ServiceCall call, $0.GetArkAddressRequest request);
   $async.Future<$0.GetBoardingAddressResponse> getBoardingAddress($grpc.ServiceCall call, $0.GetBoardingAddressRequest request);
   $async.Future<$0.ListVtxosResponse> listVtxos($grpc.ServiceCall call, $0.ListVtxosRequest request);
   $async.Future<$0.ListArkTransactionsResponse> listArkTransactions($grpc.ServiceCall call, $0.ListArkTransactionsRequest request);
-  $async.Future<$0.CheckBoardingBalanceResponse> checkBoardingBalance($grpc.ServiceCall call, $0.CheckBoardingBalanceRequest request);
   $async.Future<$0.SendVtxoResponse> sendVtxo($grpc.ServiceCall call, $0.SendVtxoRequest request);
   $async.Future<$0.RedeemVtxoResponse> redeemVtxo($grpc.ServiceCall call, $0.RedeemVtxoRequest request);
   $async.Future<$0.SettleResponse> settle($grpc.ServiceCall call, $0.SettleRequest request);

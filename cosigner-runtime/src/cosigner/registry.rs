@@ -22,19 +22,21 @@ use tonic::Status;
 
 use crate::shared::SharedServices;
 
-use super::command::CosignerCommand;
 use super::actor::CosignerActor;
+use super::command::CosignerCommand;
 use super::handle::{CosignerHandle, OwnedHandle};
 use super::handlers;
 use super::state::{CosignerState, DeviceToken};
+use crate::cosigner::wire::{
+    ActorCommand, ActorResponse, ApplyDelegateSigsWire, ArkTxEntryWire, ContractPairingWire,
+    GenerateDelegateWire, SendVtxoStep1Wire, SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
+    VtxoInputWire,
+};
 use crate::wallet_proto::{
     send_vtxo_response, settle_delegate_response, settle_response, sign_step1_response,
-    SendVtxoRequest, SendVtxoResponse, SettleDelegateRequest, SettleDelegateResponse, SettleRequest,
-    SettleResponse, SignStep1Request, SignStep1Response, SignStep2Request, SignStep2Response,
-};
-use crate::cosigner::wire::{
-    ApplyDelegateSigsWire, ArkTxEntryWire, ContractPairingWire, GenerateDelegateWire, GuestCommand,
-    GuestResponse, SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
+    SendVtxoRequest, SendVtxoResponse, SettleDelegateRequest, SettleDelegateResponse,
+    SettleRequest, SettleResponse, SignStep1Request, SignStep1Response, SignStep2Request,
+    SignStep2Response,
 };
 
 /// Convert the host `ContractPairing` projection to the wire form carried into the actor's
@@ -126,16 +128,14 @@ impl CosignerRegistry {
         // marker, so a stored delegate survives a runtime restart. The delegate itself lives in the
         // actor's sealed snapshot (restored on first actor spawn) — the host keeps no key. (This
         // replaces the legacy host-delegate rehydration that read `dkg-secret` from the SecretStore.)
-        let delegate_loaded = match super::handlers::helpers::load_guest_delegate_threshold(
-            persistence,
-            group_key,
-        ) {
-            Some(threshold) => {
-                fresh_state.guest_delegate_threshold = Some(threshold);
-                true
-            }
-            None => false,
-        };
+        let delegate_loaded =
+            match super::handlers::helpers::load_guest_delegate_threshold(persistence, group_key) {
+                Some(threshold) => {
+                    fresh_state.guest_delegate_threshold = Some(threshold);
+                    true
+                }
+                None => false,
+            };
 
         if !fresh_state.vtxos.is_empty()
             || !fresh_state.ark_tx_history.is_empty()
@@ -283,7 +283,7 @@ impl CosignerRegistry {
 /// caller's oneshot reply fires with an error instead of hanging. The actor
 /// task itself stays alive — its outer `catch_unwind` in `run_cosigner` reseats
 /// the wedged WASM instance and drains in-flight rendezvous replies.
-async fn run_blocking<F, T>(state: Arc<Mutex<CosignerState>>, f: F) -> Result<T, Status>
+pub(crate) async fn run_blocking<F, T>(state: Arc<Mutex<CosignerState>>, f: F) -> Result<T, Status>
 where
     F: FnOnce(&mut CosignerState) -> Result<T, Status> + Send + 'static,
     T: Send + 'static,
@@ -303,38 +303,6 @@ where
             "actor handler task error: {join_err:?}"
         ))),
     }
-}
-
-/// Standard dispatch: handler returns `Result<Resp, Status>`; macro fires the
-/// reply oneshot. Captures the current span and re-enters it inside
-/// `spawn_blocking` so the handler's instrumented span stays in the trace tree.
-macro_rules! dispatch {
-    ($state:ident, $shared:ident, $req:ident, $reply:ident, $handler:path) => {{
-        let s = $shared.clone();
-        let span = tracing::Span::current();
-        let res = run_blocking($state.clone(), move |state| {
-            let _enter = span.enter();
-            $handler(state, &s, $req)
-        })
-        .await;
-        let _ = $reply.send(res);
-    }};
-}
-
-/// Like `dispatch!` but also passes a registry handle. Only used by the two
-/// ark address handlers that need to update `script_idx` for VTXO routing.
-macro_rules! dispatch_with_registry {
-    ($state:ident, $shared:ident, $registry:ident, $req:ident, $reply:ident, $handler:path) => {{
-        let s = $shared.clone();
-        let r = $registry.clone();
-        let span = tracing::Span::current();
-        let res = run_blocking($state.clone(), move |state| {
-            let _enter = span.enter();
-            $handler(state, &s, &r, $req)
-        })
-        .await;
-        let _ = $reply.send(res);
-    }};
 }
 
 pub async fn run_cosigner(
@@ -402,19 +370,13 @@ pub async fn run_cosigner(
                 continue;
             }
             CosignerCommand::SignStep2 { req, reply } => {
-                route_sign_step2(
-                    req,
-                    reply,
-                    &mut actor,
-                    &mut actor_policy_installed,
-                )
-                .await;
+                route_sign_step2(req, reply, &mut actor, &mut actor_policy_installed).await;
                 continue;
             }
             // SendVtxo: the session + signing live in the actor (keys never leave it); the
             // host only translates its VTXO projection in/out. Falls back to the legacy
             // host handler when the ASP URL isn't configured for the actor.
-            CosignerCommand::SendVtxo { req, reply } if shared.asp_url.is_some() => {
+            CosignerCommand::SendVtxo { req, reply } => {
                 route_send_vtxo(
                     req,
                     reply,
@@ -429,7 +391,7 @@ pub async fn run_cosigner(
             }
             // Delegate-settle: the cosigner secret + session live in the actor; the host
             // only relays. Falls back to the legacy host handler without ASP config.
-            CosignerCommand::SettleDelegate { req, reply } if shared.asp_url.is_some() => {
+            CosignerCommand::SettleDelegate { req, reply } => {
                 route_settle_delegate(
                     req,
                     reply,
@@ -445,7 +407,7 @@ pub async fn run_cosigner(
             // Boarding settle: the host drives the batch + stream + FROST rounds, but the MuSig2
             // tree-signing secret stays in the actor (Plan A Phase 2). Falls back to the legacy
             // host handler (plaintext dkg-secret) only when the ASP URL isn't configured.
-            CosignerCommand::Settle { req, reply } if shared.asp_url.is_some() => {
+            CosignerCommand::Settle { req, reply } => {
                 route_settle_boarding(
                     req,
                     reply,
@@ -460,9 +422,7 @@ pub async fn run_cosigner(
             }
             // Auto-settle tick: if this actor has a actor-routed delegate pending, drive it in
             // the actor. Otherwise fall through to the legacy host tick.
-            CosignerCommand::TickAutoSettle
-                if shared.asp_url.is_some() && state.lock().guest_delegate_threshold.is_some() =>
-            {
+            CosignerCommand::TickAutoSettle if state.lock().guest_delegate_threshold.is_some() => {
                 route_tick_auto_settle(
                     &state,
                     &shared,
@@ -523,8 +483,14 @@ pub async fn run_cosigner(
         // Plan A: the native actor is the source of `policy_state` (no `policies` sled tree) — ensure
         // it's loaded (cheap, in-process) so the sync handlers below see the projection. Best-effort:
         // policy-free commands (GetArkInfo, etc.) and pre-onboarding actors proceed on error.
-        let _ =
-            ensure_actor(&state, &shared, &registry, &mut actor, &mut actor_policy_installed).await;
+        let _ = ensure_actor(
+            &state,
+            &shared,
+            &registry,
+            &mut actor,
+            &mut actor_policy_installed,
+        )
+        .await;
 
         // Gap 2: wrap each command dispatch in `catch_unwind`. After Gap 1's
         // fix, handler panics already reach us as `Err(Status::internal(...))`
@@ -539,12 +505,12 @@ pub async fn run_cosigner(
         // `AssertUnwindSafe` is sound here: `parking_lot::Mutex` doesn't poison on panic, and
         // `CosignerState` holds only plain data (no wasm Store), so a caught panic leaves it
         // consistent and the recv loop simply continues with the next command.
-        let dispatch_outcome = AssertUnwindSafe(dispatch_one(
-            cmd,
-            state.clone(),
-            shared.clone(),
-            registry.clone(),
-        ))
+        let dispatch_outcome = AssertUnwindSafe(
+            actor
+                .as_mut()
+                .expect("ensure_actor created the actor above")
+                .dispatch(cmd, registry.clone()),
+        )
         .catch_unwind()
         .await;
 
@@ -571,12 +537,11 @@ async fn persist_actor_snapshot(
     shared: &SharedServices,
     group_key: &str,
 ) {
-    match actor.command(GuestCommand::Snapshot).await {
-        Ok(GuestResponse::Snapshot { blob }) => {
-            if let Err(e) =
-                shared
-                    .persistence
-                    .put(SEALED_STATE_TREE, group_key, &hex::encode(blob))
+    match actor.command(ActorCommand::Snapshot).await {
+        Ok(ActorResponse::Snapshot { blob }) => {
+            if let Err(e) = shared
+                .persistence
+                .put(SEALED_STATE_TREE, group_key, &hex::encode(blob))
             {
                 tracing::warn!("persist sealed_state/{group_key} failed: {e}");
             }
@@ -603,8 +568,8 @@ async fn restore_actor_snapshot(
         tracing::warn!("sealed_state/{group_key}: corrupt hex; ignoring");
         return false;
     };
-    match actor.command(GuestCommand::RestoreSnapshot { blob }).await {
-        Ok(GuestResponse::Restored) => {
+    match actor.command(ActorCommand::RestoreSnapshot { blob }).await {
+        Ok(ActorResponse::Restored) => {
             tracing::info!("restored actor snapshot for {group_key}");
             true
         }
@@ -636,16 +601,14 @@ async fn route_contract_refresh(
     actor: &mut Option<CosignerActor>,
     actor_policy_installed: &mut bool,
 ) {
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         let _ = reply.send(Err(e));
         return;
     }
     let result = actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::ContractRefresh {
+        .command(ActorCommand::ContractRefresh {
             receiver_id_hex,
             receiver_partial_point,
             wallet_id_hex,
@@ -654,7 +617,7 @@ async fn route_contract_refresh(
         })
         .await;
     match result {
-        Ok(GuestResponse::ContractRefreshed {
+        Ok(ActorResponse::ContractRefreshed {
             pairing_public_key_package_json,
             receiver_half,
             my_key_package_json,
@@ -665,12 +628,14 @@ async fn route_contract_refresh(
                 my_key_package_json,
             }));
         }
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::Error(msg)) => {
             let _ = reply.send(Err(Status::internal(msg)));
             reseat_actor(actor, actor_policy_installed);
         }
         Ok(other) => {
-            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {other:?}"))));
+            let _ = reply.send(Err(Status::internal(format!(
+                "contract_refresh: {other:?}"
+            ))));
             reseat_actor(actor, actor_policy_installed);
         }
         Err(e) => {
@@ -721,21 +686,14 @@ async fn route_sign_step1(
         }
     };
 
-    // Plan A 1C: the service-co-sign conditioning (rebuild + bind the eVTXO cooperative-leaf
-    // sighash; verify the arkd two-leg) now lives INSIDE the actor (`conditioning::*`), which holds
-    // `contract_pairing` in its sealed policy. The host just forwards the spend (`full_transaction`
-    // + `ark_tx`); the actor is authoritative about what it signs.
-
     // Lazily create the native cosigner core, then install the policy once.
     if actor.is_none() {
-        *actor = Some(CosignerActor::new(shared.clone()));
+        *actor = Some(CosignerActor::new(shared.clone(), state.clone()));
         *actor_policy_installed = false;
     }
     if !*actor_policy_installed {
         let gk = group_key.clone();
-        // Restore-FIRST: a sealed snapshot carries the keys AND durable state (VTXOs/history/
-        // delegate/contract-pairing), so when it restores we skip `InstallPolicy` entirely — no
-        // plaintext key is read on this path.
+
         if restore_actor_snapshot(actor.as_mut().unwrap(), shared, &gk).await {
             *actor_policy_installed = true;
         } else if let Some((
@@ -751,7 +709,7 @@ async fn route_sign_step1(
             let result = actor
                 .as_mut()
                 .unwrap()
-                .command(GuestCommand::InstallPolicy {
+                .command(ActorCommand::InstallPolicy {
                     group_key,
                     key_package_json,
                     public_key_package_json,
@@ -762,7 +720,7 @@ async fn route_sign_step1(
                 })
                 .await;
             match result {
-                Ok(GuestResponse::PolicyInstalled) => *actor_policy_installed = true,
+                Ok(ActorResponse::PolicyInstalled) => *actor_policy_installed = true,
                 Ok(other) => {
                     let _ = reply.send(Err(Status::internal(format!("InstallPolicy: {other:?}"))));
                     reseat_actor(actor, actor_policy_installed);
@@ -776,8 +734,7 @@ async fn route_sign_step1(
             }
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &gk).await;
         } else {
-            // No sealed snapshot and no host policy material — the actor was never seeded. Per
-            // Plan A 1B/1C restore is the only path to the keys; there is no plaintext fallback.
+            // No sealed snapshot and no host policy material.
             reseat_actor(actor, actor_policy_installed);
             let _ = reply.send(Err(Status::failed_precondition(
                 "actor has no sealed snapshot and no policy material (not seeded)",
@@ -800,10 +757,10 @@ async fn route_sign_step1(
     let result = actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::FrostSignStep1(wire))
+        .command(ActorCommand::FrostSignStep1(wire))
         .await;
     match result {
-        Ok(GuestResponse::SignStep1 {
+        Ok(ActorResponse::SignStep1 {
             commitments,
             message_to_sign,
         }) => {
@@ -820,7 +777,7 @@ async fn route_sign_step1(
             response.message_to_sign = message_to_sign;
             let _ = reply.send(Ok(response));
         }
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::Error(msg)) => {
             let _ = reply.send(Err(Status::internal(msg)));
             reseat_actor(actor, actor_policy_installed);
         }
@@ -860,13 +817,13 @@ async fn route_sign_step2(
     let result = actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::FrostSignStep2(wire))
+        .command(ActorCommand::FrostSignStep2(wire))
         .await;
     match result {
-        Ok(GuestResponse::SignStep2 { r_point, z_scalar }) => {
+        Ok(ActorResponse::SignStep2 { r_point, z_scalar }) => {
             let _ = reply.send(Ok(SignStep2Response { r_point, z_scalar }));
         }
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::Error(msg)) => {
             let _ = reply.send(Err(Status::internal(msg)));
             reseat_actor(actor, actor_policy_installed);
         }
@@ -918,9 +875,7 @@ async fn route_seed_policy(
             contract_pairing,
         });
     }
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         let _ = reply.send(Err(e));
         return;
     }
@@ -948,14 +903,16 @@ async fn route_add_contract(
         return;
     }
     let group_key = state.lock().cosigner_id.clone();
-    let contract_policy: crate::cosigner::state::ContractPolicy = match serde_json::from_str(&contract_policy_json)
-    {
-        Ok(p) => p,
-        Err(e) => {
-            let _ = reply.send(Err(Status::invalid_argument(format!("bad contract policy: {e}"))));
-            return;
-        }
-    };
+    let contract_policy: crate::cosigner::state::ContractPolicy =
+        match serde_json::from_str(&contract_policy_json) {
+            Ok(p) => p,
+            Err(e) => {
+                let _ = reply.send(Err(Status::invalid_argument(format!(
+                    "bad contract policy: {e}"
+                ))));
+                return;
+            }
+        };
     let contracts_json = {
         let mut st = state.lock();
         match st.policy_state.as_mut() {
@@ -972,10 +929,10 @@ async fn route_add_contract(
     match actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::SetContracts { contracts_json })
+        .command(ActorCommand::SetContracts { contracts_json })
         .await
     {
-        Ok(GuestResponse::PolicyInstalled) => {}
+        Ok(ActorResponse::PolicyInstalled) => {}
         Ok(other) => {
             let _ = reply.send(Err(Status::internal(format!("SetContracts: {other:?}"))));
             return;
@@ -1000,7 +957,7 @@ async fn ensure_actor(
 ) -> Result<(), Status> {
     let group_key = state.lock().cosigner_id.clone();
     if actor.is_none() {
-        *actor = Some(CosignerActor::new(shared.clone()));
+        *actor = Some(CosignerActor::new(shared.clone(), state.clone()));
         *actor_policy_installed = false;
     }
     if !*actor_policy_installed {
@@ -1032,7 +989,7 @@ async fn ensure_actor(
             let result = actor
                 .as_mut()
                 .unwrap()
-                .command(GuestCommand::InstallPolicy {
+                .command(ActorCommand::InstallPolicy {
                     group_key: gk,
                     key_package_json: kpj,
                     public_key_package_json: pkpj,
@@ -1043,7 +1000,7 @@ async fn ensure_actor(
                 })
                 .await;
             match result {
-                Ok(GuestResponse::PolicyInstalled) => *actor_policy_installed = true,
+                Ok(ActorResponse::PolicyInstalled) => *actor_policy_installed = true,
                 Ok(other) => {
                     reseat_actor(actor, actor_policy_installed);
                     return Err(Status::internal(format!("InstallPolicy: {other:?}")));
@@ -1066,8 +1023,8 @@ async fn load_policy_state_from_actor(
     state: &Arc<Mutex<CosignerState>>,
     actor: &mut CosignerActor,
 ) -> Result<(), Status> {
-    match actor.command(GuestCommand::GetPublicPolicy).await {
-        Ok(GuestResponse::PublicPolicy {
+    match actor.command(ActorCommand::GetPublicPolicy).await {
+        Ok(ActorResponse::PublicPolicy {
             group_key,
             public_key_package_json,
             user_signing_identifier_hex,
@@ -1114,55 +1071,40 @@ async fn route_send_vtxo(
     actor: &mut Option<CosignerActor>,
     actor_policy_installed: &mut bool,
 ) {
-    let Some(asp_url) = shared.asp_url.clone() else {
-        let _ = reply.send(Err(Status::unavailable("ASP not configured (set ASP_URL)")));
-        return;
-    };
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         let _ = reply.send(Err(e));
         return;
     }
 
     if req.signed_messages.is_empty() {
-        // Phase 1: push the VTXO set into the actor, then build → sighashes.
-        let built = {
+        // Carry the current VTXO set in the wire; the actor selects + balance-checks it itself.
+        let wire = {
             let st = state.lock();
-            handlers::ark_send::build_send_step1_wire(&st, asp_url, &req)
-        };
-        let (wire, vtxos) = match built {
-            Ok(w) => w,
-            Err(e) => {
-                let _ = reply.send(Err(e));
-                return;
+            SendVtxoStep1Wire {
+                user_id: req.user_id.clone(),
+                signature: req.signature.clone(),
+                timestamp_ms: req.timestamp_ms,
+                recipient_ark_address: req.recipient_ark_address.clone(),
+                amount: req.amount,
+                vtxos: st
+                    .vtxos
+                    .iter()
+                    .map(|e| VtxoInputWire {
+                        txid: e.txid.clone(),
+                        vout: e.vout,
+                        amount_sats: e.amount,
+                        exit_delay: e.exit_delay,
+                    })
+                    .collect(),
             }
         };
-        match actor
-            .as_mut()
-            .unwrap()
-            .command(GuestCommand::SetVtxos { vtxos })
-            .await
-        {
-            Ok(GuestResponse::VtxosSet) => {}
-            Ok(other) => {
-                let _ = reply.send(Err(Status::internal(format!("SetVtxos: {other:?}"))));
-                reseat_actor(actor, actor_policy_installed);
-                return;
-            }
-            Err(e) => {
-                let _ = reply.send(Err(Status::internal(format!("actor SetVtxos: {e}"))));
-                reseat_actor(actor, actor_policy_installed);
-                return;
-            }
-        }
         let result = actor
             .as_mut()
             .unwrap()
-            .command(GuestCommand::SendVtxoStep1(wire))
+            .command(ActorCommand::SendVtxoStep1(wire))
             .await;
         match result {
-            Ok(GuestResponse::SendVtxoSighashes { messages_to_sign }) => {
+            Ok(ActorResponse::SendVtxoSighashes { messages_to_sign }) => {
                 let _ = reply.send(Ok(SendVtxoResponse {
                     status: send_vtxo_response::Status::SigningRequired as i32,
                     messages_to_sign,
@@ -1171,7 +1113,7 @@ async fn route_send_vtxo(
                     error_message: String::new(),
                 }));
             }
-            Ok(GuestResponse::Error(msg)) => {
+            Ok(ActorResponse::Error(msg)) => {
                 let _ = reply.send(Err(Status::internal(msg)));
                 reseat_actor(actor, actor_policy_installed);
             }
@@ -1185,21 +1127,19 @@ async fn route_send_vtxo(
             }
         }
     } else {
-        // Phase 2: sign + submit in the actor, then apply to the host projection.
         let wire = SendVtxoStep2Wire {
             user_id: req.user_id.clone(),
             signature: req.signature.clone(),
             timestamp_ms: req.timestamp_ms,
-            asp_url,
             signed_messages: req.signed_messages.clone(),
         };
         let result = actor
             .as_mut()
             .unwrap()
-            .command(GuestCommand::SendVtxoStep2(wire))
+            .command(ActorCommand::SendVtxoStep2(wire))
             .await;
         match result {
-            Ok(GuestResponse::SendVtxoSubmitted { ark_txid, change }) => {
+            Ok(ActorResponse::SendVtxoSubmitted { ark_txid, change }) => {
                 // Mirror the send into the actor's owned history (it owns the data for the
                 // sealed snapshot); the host projection is still updated for live queries.
                 let entry = ArkTxEntryWire {
@@ -1215,14 +1155,14 @@ async fn route_send_vtxo(
                 let _ = actor
                     .as_mut()
                     .unwrap()
-                    .command(GuestCommand::AppendHistory { entry })
+                    .command(ActorCommand::AppendHistory { entry })
                     .await;
                 // Phase 4: the send mutated actor VTXOs + history — persist the snapshot.
                 let group_key = state.lock().cosigner_id.clone();
                 persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
                 let _ = reply.send(Ok(resp));
             }
-            Ok(GuestResponse::Error(msg)) => {
+            Ok(ActorResponse::Error(msg)) => {
                 let _ = reply.send(Err(Status::internal(msg)));
                 reseat_actor(actor, actor_policy_installed);
             }
@@ -1252,13 +1192,7 @@ async fn route_settle_delegate(
     actor: &mut Option<CosignerActor>,
     actor_policy_installed: &mut bool,
 ) {
-    let Some(asp_url) = shared.asp_url.clone() else {
-        let _ = reply.send(Err(Status::unavailable("ASP not configured (set ASP_URL)")));
-        return;
-    };
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         let _ = reply.send(Err(e));
         return;
     }
@@ -1280,10 +1214,10 @@ async fn route_settle_delegate(
         match actor
             .as_mut()
             .unwrap()
-            .command(GuestCommand::SetVtxos { vtxos })
+            .command(ActorCommand::SetVtxos { vtxos })
             .await
         {
-            Ok(GuestResponse::VtxosSet) => {}
+            Ok(ActorResponse::VtxosSet) => {}
             other => {
                 let _ = reply.send(Err(Status::internal(format!("SetVtxos: {other:?}"))));
                 reseat_actor(actor, actor_policy_installed);
@@ -1294,16 +1228,15 @@ async fn route_settle_delegate(
             user_id: req.user_id,
             signature: req.signature,
             timestamp_ms: req.timestamp_ms,
-            asp_url,
             intent_valid_at,
         };
         match actor
             .as_mut()
             .unwrap()
-            .command(GuestCommand::GenerateDelegate(wire))
+            .command(ActorCommand::GenerateDelegate(wire))
             .await
         {
-            Ok(GuestResponse::DelegateSighashes { messages_to_sign }) => {
+            Ok(ActorResponse::DelegateSighashes { messages_to_sign }) => {
                 let _ = reply.send(Ok(SettleDelegateResponse {
                     status: settle_delegate_response::Status::SigningRequired as i32,
                     messages_to_sign,
@@ -1312,12 +1245,14 @@ async fn route_settle_delegate(
                     error_message: String::new(),
                 }));
             }
-            Ok(GuestResponse::Error(msg)) => {
+            Ok(ActorResponse::Error(msg)) => {
                 let _ = reply.send(Err(Status::internal(msg)));
                 reseat_actor(actor, actor_policy_installed);
             }
             other => {
-                let _ = reply.send(Err(Status::internal(format!("GenerateDelegate: {other:?}"))));
+                let _ = reply.send(Err(Status::internal(format!(
+                    "GenerateDelegate: {other:?}"
+                ))));
                 reseat_actor(actor, actor_policy_installed);
             }
         }
@@ -1334,17 +1269,19 @@ async fn route_settle_delegate(
     match actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::ApplyDelegateSigs(apply))
+        .command(ActorCommand::ApplyDelegateSigs(apply))
         .await
     {
-        Ok(GuestResponse::DelegateReady) => {}
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::DelegateReady) => {}
+        Ok(ActorResponse::Error(msg)) => {
             let _ = reply.send(Err(Status::internal(msg)));
             reseat_actor(actor, actor_policy_installed);
             return;
         }
         other => {
-            let _ = reply.send(Err(Status::internal(format!("ApplyDelegateSigs: {other:?}"))));
+            let _ = reply.send(Err(Status::internal(format!(
+                "ApplyDelegateSigs: {other:?}"
+            ))));
             reseat_actor(actor, actor_policy_installed);
             return;
         }
@@ -1387,10 +1324,12 @@ async fn route_settle_delegate(
     match actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::SettleDelegate { asp_url })
+        .command(ActorCommand::SettleDelegate)
         .await
     {
-        Ok(GuestResponse::SettleSubmitted { commitment_txid, .. }) => {
+        Ok(ActorResponse::SettleSubmitted {
+            commitment_txid, ..
+        }) => {
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
             let _ = reply.send(Ok(SettleDelegateResponse {
                 status: settle_delegate_response::Status::Settled as i32,
@@ -1400,12 +1339,14 @@ async fn route_settle_delegate(
                 error_message: String::new(),
             }));
         }
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::Error(msg)) => {
             let _ = reply.send(Err(Status::internal(msg)));
             reseat_actor(actor, actor_policy_installed);
         }
         other => {
-            let _ = reply.send(Err(Status::internal(format!("SettleDelegate drive: {other:?}"))));
+            let _ = reply.send(Err(Status::internal(format!(
+                "SettleDelegate drive: {other:?}"
+            ))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
@@ -1426,170 +1367,33 @@ async fn route_settle_boarding(
     actor: &mut Option<CosignerActor>,
     actor_policy_installed: &mut bool,
 ) {
+    // Per-user auth (OP_SETTLE) ran at the REST boundary; the actor no longer re-checks it here.
     let user_id_hex = handlers::parsers::user_id_hex(&req.user_id);
-    {
-        let mut st = state.lock();
-        if let Err(e) = handlers::helpers::auth_check(
-            &mut st,
-            &req.user_id,
-            &req.signature,
-            req.timestamp_ms,
-            crate::auth::message::OP_SETTLE,
-        ) {
-            let _ = reply.send(Err(e));
-            return;
-        }
-    }
-    let Some(asp_url) = shared.asp_url.clone() else {
-        let _ = reply.send(Err(Status::unavailable("ASP not configured")));
-        return;
-    };
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         let _ = reply.send(Err(e));
         return;
     }
     let group_key = state.lock().cosigner_id.clone();
 
-    let has_signatures = !req.signed_messages.is_empty();
-    let progress = {
-        let mut st = state.lock();
-        let p = st.guest_boarding;
-        if p.is_some() && !has_signatures {
-            st.guest_boarding = None; // poll-without-sigs ⇒ abandon, restart at Phase 1
-            None
-        } else {
-            p
-        }
-    };
+    let boarding_utxo = req
+        .boarding_utxos
+        .first()
+        .map(|u| (u.txid.clone(), u.vout, u.amount_sats));
 
-    macro_rules! settle_err {
-        ($e:expr) => {{
-            state.lock().guest_boarding = None;
-            let _ = reply.send(Err($e));
-            reseat_actor(actor, actor_policy_installed);
-            return;
-        }};
-    }
+    // The ACTOR owns the boarding-settle phase via its in-flight session: no sigs ⇒ start (the
+    // actor derives owner-pk + ASP info + the boarding address itself), with sigs ⇒ advance. The
+    // host only relays the request and persists the finalized VTXO.
+    let resp = actor
+        .as_mut()
+        .unwrap()
+        .command(ActorCommand::BoardingSettle {
+            boarding_utxo,
+            signed_messages: req.signed_messages,
+        })
+        .await;
 
-    match (progress.map(|(s, _, _)| s), has_signatures) {
-        // ---- Phase 1: scan the boarding UTXO + BoardingSettleStep1 (actor builds the session) ----
-        (None, false) => {
-            let owner_pk_hex = {
-                let mut st = state.lock();
-                match handlers::helpers::get_user_xonly_pubkey(
-                    &mut st,
-                    shared.persistence.as_ref(),
-                    &user_id_hex,
-                ) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                        return;
-                    }
-                }
-            };
-            let info = {
-                let asp = match handlers::ark_send::require_asp(shared) {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let _ = reply.send(Err(e));
-                        return;
-                    }
-                };
-                let mut g = asp.lock().await;
-                match g.info.clone() {
-                    Some(i) => i,
-                    None => match g.get_info().await {
-                        Ok(i) => i,
-                        Err(e) => {
-                            let _ = reply.send(Err(Status::internal(format!("ASP get_info: {e}"))));
-                            return;
-                        }
-                    },
-                }
-            };
-            let network = match ark::client::parse_network(&info.network) {
-                Ok(n) => n,
-                Err(e) => {
-                    let _ = reply.send(Err(Status::internal(e)));
-                    return;
-                }
-            };
-            let exit_delay = info.boarding_exit_delay as u32;
-            let boarding_addr = match ark::client::boarding_address(
-                &owner_pk_hex,
-                &info.signer_pubkey,
-                exit_delay,
-                network,
-            ) {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = reply.send(Err(Status::internal(format!("boarding_address: {e}"))));
-                    return;
-                }
-            };
-            let addr: bitcoin::Address<bitcoin::address::NetworkUnchecked> =
-                match boarding_addr.parse() {
-                    Ok(a) => a,
-                    Err(e) => {
-                        let _ = reply.send(Err(Status::internal(format!("parse addr: {e}"))));
-                        return;
-                    }
-                };
-            let addr = match addr.require_network(network) {
-                Ok(a) => a,
-                Err(e) => {
-                    let _ = reply.send(Err(Status::internal(format!("network mismatch: {e}"))));
-                    return;
-                }
-            };
-            let script_hex = hex::encode(addr.script_pubkey().as_bytes());
-            let script_hash = match crate::bitcoin::tx_parser::derive_script_hash(&script_hex) {
-                Ok(h) => h,
-                Err(e) => {
-                    let _ = reply.send(Err(Status::internal(format!("script_hash: {e}"))));
-                    return;
-                }
-            };
-            let utxos = {
-                let guard = shared.bitcoin_history.lock().await;
-                match guard.list_unspent_by_script_hash(&script_hash).await {
-                    Ok(u) => u,
-                    Err(e) => {
-                        let _ = reply.send(Err(Status::internal(format!("list_unspent: {e}"))));
-                        return;
-                    }
-                }
-            };
-            if utxos.is_empty() {
-                let _ = reply.send(Err(Status::failed_precondition("no UTXOs at boarding address")));
-                return;
-            }
-            let utxo = &utxos[0];
-            let boarding_amount = utxo.amount_sats as u64;
-            let messages_to_sign = match actor
-                .as_mut()
-                .unwrap()
-                .command(GuestCommand::BoardingSettleStep1 {
-                    owner_pk_hex,
-                    signer_pubkey: info.signer_pubkey.clone(),
-                    forfeit_pubkey: info.forfeit_pubkey.clone(),
-                    boarding_address: boarding_addr,
-                    boarding_txid: utxo.tx_hash.clone(),
-                    boarding_vout: utxo.vout,
-                    boarding_amount_sats: boarding_amount,
-                    exit_delay,
-                    network: info.network.clone(),
-                })
-                .await
-            {
-                Ok(GuestResponse::BoardingSettleSighashes { messages_to_sign }) => messages_to_sign,
-                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
-                other => settle_err!(Status::internal(format!("BoardingSettleStep1: {other:?}"))),
-            };
-            state.lock().guest_boarding = Some((1, boarding_amount, exit_delay));
+    match resp {
+        Ok(ActorResponse::BoardingSettleSighashes { messages_to_sign }) => {
             let _ = reply.send(Ok(SettleResponse {
                 status: settle_response::Status::SigningRequired as i32,
                 messages_to_sign,
@@ -1598,58 +1402,17 @@ async fn route_settle_boarding(
                 error_message: String::new(),
             }));
         }
-
-        // ---- Phase 2: intent FROST sigs → BoardingSettleStep2 → commitment sighashes ----
-        (Some(1), true) => {
-            let (amount, exit_delay) = progress.map(|(_, a, e)| (a, e)).unwrap();
-            let messages_to_sign = match actor
-                .as_mut()
-                .unwrap()
-                .command(GuestCommand::BoardingSettleStep2 {
-                    asp_url: asp_url.clone(),
-                    intent_signatures: req.signed_messages,
-                })
-                .await
-            {
-                Ok(GuestResponse::BoardingSettleSighashes { messages_to_sign }) => messages_to_sign,
-                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
-                other => settle_err!(Status::internal(format!("BoardingSettleStep2: {other:?}"))),
-            };
-            state.lock().guest_boarding = Some((2, amount, exit_delay));
-            let _ = reply.send(Ok(SettleResponse {
-                status: settle_response::Status::SigningRequired as i32,
-                messages_to_sign,
-                script_path_spend: true,
-                commitment_txid: String::new(),
-                error_message: String::new(),
-            }));
-        }
-
-        // ---- Phase 3: commitment FROST sigs → BoardingSettleStep3 → the new VTXO ----
-        (Some(2), true) => {
-            let exit_delay = progress.map(|(_, _, e)| e).unwrap();
-            let (commitment_txid, vtxo_txid, vtxo_vout, amount_sats) = match actor
-                .as_mut()
-                .unwrap()
-                .command(GuestCommand::BoardingSettleStep3 {
-                    asp_url,
-                    commitment_signatures: req.signed_messages,
-                })
-                .await
-            {
-                Ok(GuestResponse::BoardingSettleSubmitted {
-                    commitment_txid,
-                    vtxo_txid,
-                    vtxo_vout,
-                    amount_sats,
-                }) => (commitment_txid, vtxo_txid, vtxo_vout, amount_sats),
-                Ok(GuestResponse::Error(m)) => settle_err!(Status::internal(m)),
-                other => settle_err!(Status::internal(format!("BoardingSettleStep3: {other:?}"))),
-            };
+        Ok(ActorResponse::BoardingSettleSubmitted {
+            commitment_txid,
+            vtxo_txid,
+            vtxo_vout,
+            amount_sats,
+            exit_delay,
+        }) => {
             {
                 let mut st = state.lock();
-                st.guest_boarding = None;
-                st.vtxos.retain(|e| !(e.txid == vtxo_txid && e.vout == vtxo_vout));
+                st.vtxos
+                    .retain(|e| !(e.txid == vtxo_txid && e.vout == vtxo_vout));
                 st.vtxos.push(crate::cosigner::state::VtxoEntry {
                     txid: vtxo_txid.clone(),
                     vout: vtxo_vout,
@@ -1684,12 +1447,17 @@ async fn route_settle_boarding(
                 error_message: String::new(),
             }));
         }
-
-        (None, true) => {
-            let _ = reply.send(Err(Status::failed_precondition("no active boarding settle")));
+        Ok(ActorResponse::Error(m)) => {
+            reseat_actor(actor, actor_policy_installed);
+            let _ = reply.send(Err(Status::internal(m)));
         }
-        _ => {
-            let _ = reply.send(Err(Status::internal("unexpected boarding settle state")));
+        Ok(other) => {
+            reseat_actor(actor, actor_policy_installed);
+            let _ = reply.send(Err(Status::internal(format!("BoardingSettle: {other:?}"))));
+        }
+        Err(e) => {
+            reseat_actor(actor, actor_policy_installed);
+            let _ = reply.send(Err(Status::internal(format!("BoardingSettle: {e}"))));
         }
     }
 }
@@ -1712,10 +1480,7 @@ async fn route_tick_auto_settle(
         return;
     }
     tracing::info!("auto-settle (actor): threshold reached, driving stored delegate");
-    let Some(asp_url) = shared.asp_url.clone() else { return };
-    if let Err(e) =
-        ensure_actor(state, shared, registry, actor, actor_policy_installed).await
-    {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
         tracing::warn!("auto-settle (actor): ensure actor failed: {e}");
         return;
     }
@@ -1723,10 +1488,13 @@ async fn route_tick_auto_settle(
     match actor
         .as_mut()
         .unwrap()
-        .command(GuestCommand::SettleDelegate { asp_url })
+        .command(ActorCommand::SettleDelegate)
         .await
     {
-        Ok(GuestResponse::SettleSubmitted { commitment_txid, vtxo_outpoint }) => {
+        Ok(ActorResponse::SettleSubmitted {
+            commitment_txid,
+            vtxo_outpoint,
+        }) => {
             {
                 let mut st = state.lock();
                 st.guest_delegate_threshold = None;
@@ -1761,7 +1529,7 @@ async fn route_tick_auto_settle(
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
             tracing::info!("auto-settle (actor): commitment_txid={commitment_txid}");
         }
-        Ok(GuestResponse::Error(msg)) => {
+        Ok(ActorResponse::Error(msg)) => {
             tracing::warn!("auto-settle (actor): {msg}");
             reseat_actor(actor, actor_policy_installed);
         }
@@ -1772,278 +1540,14 @@ async fn route_tick_auto_settle(
     }
 }
 
-/// Per-command dispatch helper. Extracted so the outer `catch_unwind` in
-/// `run_cosigner` can wrap a single async unit cleanly. `Shutdown` is handled
-/// directly in `run_cosigner` (it breaks the loop) and never reaches here.
-async fn dispatch_one(
-    cmd: CosignerCommand,
-    state: Arc<Mutex<CosignerState>>,
-    shared: Arc<SharedServices>,
-    registry: Arc<CosignerRegistry>,
-) {
-    match cmd {
-        CosignerCommand::Shutdown => {
-            // Already filtered out by run_cosigner; reaching this arm would be a
-            // bug. Logging it makes it visible without panicking.
-            tracing::error!(
-                "dispatch_one received Shutdown; expected to be filtered by run_cosigner"
-            );
-        }
-        // Handled in the actor-routed match (it `continue`s); never reaches the legacy path.
-        CosignerCommand::ContractRefresh { reply, .. } => {
-            let _ = reply.send(Err(Status::internal(
-                "ContractRefresh must be actor-routed, not dispatched to the legacy handler",
-            )));
-        }
-
-        // -------- Signing --------
-        // Both steps are intercepted in run_cosigner and routed to the actor (the only sign
-        // path); reaching these arms would be a bug.
-        CosignerCommand::SignStep1 { reply, .. } => {
-            let _ = reply.send(Err(Status::internal(
-                "SignStep1 reached dispatch_one; should be routed to the actor",
-            )));
-        }
-        CosignerCommand::SignStep2 { reply, .. } => {
-            let _ = reply.send(Err(Status::internal(
-                "SignStep2 reached dispatch_one; should be routed to the actor",
-            )));
-        }
-        // Intercepted in run_cosigner (spawns actor + installs + seals); reaching here is a bug.
-        CosignerCommand::SeedPolicy { reply, .. } => {
-            let _ = reply.send(Err(Status::internal(
-                "SeedPolicy reached dispatch_one; should be intercepted in run_cosigner",
-            )));
-        }
-        CosignerCommand::AddContract { reply, .. } => {
-            let _ = reply.send(Err(Status::internal(
-                "AddContract reached dispatch_one; should be intercepted in run_cosigner",
-            )));
-        }
-
-        // -------- Transactions --------
-        CosignerCommand::BroadcastTransaction { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::tx::broadcast_transaction
-            );
-        }
-        CosignerCommand::FetchHistory { req, reply } => {
-            dispatch!(state, shared, req, reply, handlers::tx::fetch_history);
-        }
-        CosignerCommand::FetchRecentTransactions { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::tx::fetch_recent_transactions
-            );
-        }
-
-        // -------- Ark (lookups) --------
-        CosignerCommand::GetArkInfo { req, reply } => {
-            dispatch!(state, shared, req, reply, handlers::ark::get_ark_info);
-        }
-        CosignerCommand::GetArkAddress { req, reply } => {
-            dispatch_with_registry!(
-                state,
-                shared,
-                registry,
-                req,
-                reply,
-                handlers::ark::get_ark_address
-            );
-        }
-        CosignerCommand::GetBoardingAddress { req, reply } => {
-            dispatch_with_registry!(
-                state,
-                shared,
-                registry,
-                req,
-                reply,
-                handlers::ark::get_boarding_address
-            );
-        }
-        CosignerCommand::CheckBoardingBalance { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark::check_boarding_balance
-            );
-        }
-        CosignerCommand::ListVtxos { req, reply } => {
-            dispatch!(state, shared, req, reply, handlers::ark::list_vtxos);
-        }
-        CosignerCommand::ListArkTransactions { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark::list_ark_transactions
-            );
-        }
-        // Plan A Phase 2: SendVtxo / RedeemVtxo / Settle / SettleDelegate are actor-routed (the keys
-        // never leave the actor) and require the ASP URL. The legacy host paths that signed with a
-        // plaintext dkg-secret are gone; without ASP_URL there is no fallback.
-        CosignerCommand::SendVtxo { req: _, reply } => {
-            let _ = reply.send(Err(Status::unavailable("send requires ASP_URL (actor-routed)")));
-        }
-        CosignerCommand::RedeemVtxo { req: _, reply } => {
-            let _ = reply.send(Err(Status::unimplemented("RedeemVtxo not implemented")));
-        }
-        CosignerCommand::Settle { req: _, reply } => {
-            let _ = reply.send(Err(Status::unavailable(
-                "boarding settle requires ASP_URL (actor-routed)",
-            )));
-        }
-        CosignerCommand::SettleDelegate { req: _, reply } => {
-            let _ = reply.send(Err(Status::unavailable(
-                "delegate settle requires ASP_URL (actor-routed)",
-            )));
-        }
-        CosignerCommand::SubmitArkSend { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::ark_send::submit_ark_send
-            );
-        }
-        // -------- Push registration --------
-        CosignerCommand::RegisterDeviceToken { req, reply } => {
-            dispatch!(
-                state,
-                shared,
-                req,
-                reply,
-                handlers::device_token::register_device_token
-            );
-        }
-
-        // -------- Auto-settle tick --------
-        CosignerCommand::TickAutoSettle => {
-            let s = shared.clone();
-            let span = tracing::info_span!("actor::tick_auto_settle");
-            let res = run_blocking(state.clone(), move |state| {
-                let _enter = span.enter();
-                handlers::auto_settle::tick_auto_settle(state, &s)
-            })
-            .await;
-            if let Err(e) = res {
-                tracing::warn!("tick_auto_settle: {e}");
-            }
-        }
-
-        // -------- Stream fan-in (no reply) --------
-        CosignerCommand::VtxoStreamUpdate {
-            user_id_hex,
-            spent,
-            spendable,
-            info,
-        } => {
-            let s = shared.clone();
-            let span = tracing::info_span!("actor::vtxo_stream_update", user_id = %user_id_hex);
-            let user_id_for_push = user_id_hex.clone();
-            let state_lock = state.clone();
-            let blocking_outcome = tokio::task::spawn_blocking(move || {
-                let _enter = span.enter();
-                let mut state = state_lock.lock();
-                let added = match handlers::vtxo_stream::apply_stream_update(
-                    &mut state,
-                    &s,
-                    &user_id_hex,
-                    spent,
-                    spendable,
-                    info,
-                ) {
-                    Ok(added) => added,
-                    Err(e) => {
-                        tracing::warn!("[{user_id_hex}] VTXO stream apply failed: {e}");
-                        Vec::new()
-                    }
-                };
-                let tokens = state.device_tokens.clone();
-                (added, tokens)
-            })
-            .await;
-            let (newly_added, device_tokens) = match blocking_outcome {
-                Ok(x) => x,
-                Err(join_err) if join_err.is_panic() => {
-                    tracing::error!("[{user_id_for_push}] VtxoStreamUpdate panicked: {join_err:?}");
-                    (Vec::new(), Vec::new())
-                }
-                Err(join_err) => {
-                    tracing::error!(
-                        "[{user_id_for_push}] VtxoStreamUpdate task error: {join_err:?}"
-                    );
-                    (Vec::new(), Vec::new())
-                }
-            };
-            if !newly_added.is_empty() {
-                push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
-            }
-        }
-        CosignerCommand::IndexerUpdate {
-            user_id_hex,
-            new_vtxos,
-            spent_vtxos,
-            info,
-        } => {
-            let s = shared.clone();
-            let span = tracing::info_span!("actor::indexer_update", user_id = %user_id_hex);
-            let user_id_for_push = user_id_hex.clone();
-            let state_lock = state.clone();
-            let blocking_outcome = tokio::task::spawn_blocking(move || {
-                let _enter = span.enter();
-                let mut state = state_lock.lock();
-                let added = match handlers::vtxo_stream::apply_stream_update(
-                    &mut state,
-                    &s,
-                    &user_id_hex,
-                    spent_vtxos,
-                    new_vtxos,
-                    info,
-                ) {
-                    Ok(added) => added,
-                    Err(e) => {
-                        tracing::warn!("[{user_id_hex}] Indexer apply failed: {e}");
-                        Vec::new()
-                    }
-                };
-                let tokens = state.device_tokens.clone();
-                (added, tokens)
-            })
-            .await;
-            let (newly_added, device_tokens) = match blocking_outcome {
-                Ok(x) => x,
-                Err(join_err) if join_err.is_panic() => {
-                    tracing::error!("[{user_id_for_push}] IndexerUpdate panicked: {join_err:?}");
-                    (Vec::new(), Vec::new())
-                }
-                Err(join_err) => {
-                    tracing::error!("[{user_id_for_push}] IndexerUpdate task error: {join_err:?}");
-                    (Vec::new(), Vec::new())
-                }
-            };
-            if !newly_added.is_empty() {
-                push_vtxo_received(shared.as_ref(), &user_id_for_push, &device_tokens).await;
-            }
-        }
-    }
-}
-
 /// Send a "vtxo_received" data-only push to every registered device for this
 /// user. Best-effort: failures are logged and ignored — the stream handler
 /// has already persisted state, the open-app fallback closes any gap.
-async fn push_vtxo_received(shared: &SharedServices, user_id_hex: &str, tokens: &[DeviceToken]) {
+pub(crate) async fn push_vtxo_received(
+    shared: &SharedServices,
+    user_id_hex: &str,
+    tokens: &[DeviceToken],
+) {
     let Some(fcm) = shared.fcm.as_ref() else {
         return;
     };
@@ -2056,6 +1560,122 @@ async fn push_vtxo_received(shared: &SharedServices, user_id_hex: &str, tokens: 
     for token in tokens {
         if let Err(e) = fcm.send_data(&token.fcm_token, &data).await {
             tracing::warn!("[{user_id_hex}] FCM push to {} failed: {e}", token.platform);
+        }
+    }
+}
+
+/// One pass of the boarding watcher: for every user with a recorded boarding
+/// address, read its on-chain UTXOs from esplora and push a "tap to board"
+/// notification for any newly-seen CONFIRMED deposit. The cosigner only OBSERVES
+/// — the wallet still scans + signs the settle. Best-effort; dedup persists.
+pub async fn boarding_watch_sweep(
+    esplora: &crate::esplora::EsploraClient,
+    persistence: &std::sync::Arc<dyn crate::resp_store::KvStore>,
+    fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
+) {
+    let watches = match persistence.get_all("boarding_watches") {
+        Ok(w) => w,
+        Err(e) => {
+            tracing::warn!("boarding watch: get_all boarding_watches failed: {e}");
+            return;
+        }
+    };
+    for (user_id_hex, boarding_addr) in watches {
+        let utxos = match esplora.list_utxos(&boarding_addr).await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::debug!("boarding watch [{user_id_hex}]: esplora: {e}");
+                continue;
+            }
+        };
+        // Self-cleaning seen-set: keep only outpoints still present on-chain
+        // (settled ones drop out), then notify for new confirmed deposits.
+        let present: std::collections::HashSet<String> = utxos
+            .iter()
+            .map(|u| format!("{}:{}", u.txid, u.vout))
+            .collect();
+        let mut seen =
+            handlers::helpers::load_user_boarding_seen(persistence.as_ref(), &user_id_hex);
+        seen.retain(|k| present.contains(k));
+
+        let mut tokens: Option<Vec<DeviceToken>> = None;
+        let mut changed = false;
+        for u in utxos.iter().filter(|u| u.confirmed) {
+            let key = format!("{}:{}", u.txid, u.vout);
+            if seen.contains(&key) {
+                continue;
+            }
+            let toks = tokens.get_or_insert_with(|| {
+                handlers::helpers::load_user_device_tokens(persistence.as_ref(), &user_id_hex)
+            });
+            push_boarding_deposit(fcm, &user_id_hex, toks, u).await;
+            seen.push(key);
+            changed = true;
+        }
+        if changed || seen.len() != present.len() {
+            handlers::helpers::save_user_boarding_seen(persistence.as_ref(), &user_id_hex, &seen);
+        }
+    }
+}
+
+/// Phase 3: notify a (mobile) receiver that a contract share is waiting in its inbox. Mirrors
+/// `push_boarding_deposit`; the app reacts by picking up + assembling the share.
+pub async fn push_contract_share(
+    fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
+    user_id_hex: &str,
+    tokens: &[DeviceToken],
+    spk_hex: &str,
+) {
+    if tokens.is_empty() {
+        return;
+    }
+    let mut data = std::collections::HashMap::new();
+    data.insert("type".to_string(), "contract_share".to_string());
+    data.insert("user_id".to_string(), user_id_hex.to_string());
+    data.insert("evtxo_script_pubkey".to_string(), spk_hex.to_string());
+    for token in tokens {
+        if let Err(e) = fcm
+            .send_notification(&token.fcm_token, "Contract waiting", "Tap to accept", &data)
+            .await
+        {
+            tracing::warn!(
+                "[{user_id_hex}] contract-share push to {} failed: {e}",
+                token.platform
+            );
+        }
+    }
+}
+
+/// User-visible "tap to board" notification for a detected boarding deposit.
+async fn push_boarding_deposit(
+    fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
+    user_id_hex: &str,
+    tokens: &[DeviceToken],
+    utxo: &crate::esplora::EsploraUtxo,
+) {
+    if tokens.is_empty() {
+        return;
+    }
+    let mut data = std::collections::HashMap::new();
+    data.insert("type".to_string(), "boarding_deposit".to_string());
+    data.insert("user_id".to_string(), user_id_hex.to_string());
+    data.insert("txid".to_string(), utxo.txid.clone());
+    data.insert("vout".to_string(), utxo.vout.to_string());
+    data.insert("amount_sats".to_string(), utxo.value.to_string());
+    for token in tokens {
+        if let Err(e) = fcm
+            .send_notification(
+                &token.fcm_token,
+                "Deposit received",
+                "Tap to add to your balance",
+                &data,
+            )
+            .await
+        {
+            tracing::warn!(
+                "[{user_id_hex}] boarding push to {} failed: {e}",
+                token.platform
+            );
         }
     }
 }

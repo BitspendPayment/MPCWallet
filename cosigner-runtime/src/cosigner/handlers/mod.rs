@@ -9,9 +9,9 @@
 pub mod ark;
 pub mod ark_send;
 pub mod auto_settle;
+pub mod contract;
 pub mod contract_gate;
 pub mod device_token;
 pub mod helpers;
 pub mod parsers;
-pub mod tx;
 pub mod vtxo_stream;

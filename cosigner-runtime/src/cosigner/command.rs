@@ -29,6 +29,8 @@ pub enum CosignerCommand {
         reply: Reply<ContractRefreshOutput>,
     },
     // --- Signing ---
+    // Per-user authentication runs at the REST boundary (`rest_api.rs`), not here — the actor no
+    // longer re-checks the request signature/session for these per-user commands.
     SignStep1 {
         req: SignStep1Request,
         reply: Reply<SignStep1Response>,
@@ -36,20 +38,6 @@ pub enum CosignerCommand {
     SignStep2 {
         req: SignStep2Request,
         reply: Reply<SignStep2Response>,
-    },
-
-    // --- Transactions ---
-    BroadcastTransaction {
-        req: BroadcastTransactionRequest,
-        reply: Reply<BroadcastTransactionResponse>,
-    },
-    FetchHistory {
-        req: FetchHistoryRequest,
-        reply: Reply<FetchHistoryResponse>,
-    },
-    FetchRecentTransactions {
-        req: FetchRecentTransactionsRequest,
-        reply: Reply<FetchRecentTransactionsResponse>,
     },
 
     // --- Ark ---
@@ -64,10 +52,6 @@ pub enum CosignerCommand {
     GetBoardingAddress {
         req: GetBoardingAddressRequest,
         reply: Reply<GetBoardingAddressResponse>,
-    },
-    CheckBoardingBalance {
-        req: CheckBoardingBalanceRequest,
-        reply: Reply<CheckBoardingBalanceResponse>,
     },
     ListVtxos {
         req: ListVtxosRequest,
@@ -102,6 +86,16 @@ pub enum CosignerCommand {
     RegisterDeviceToken {
         req: RegisterDeviceTokenRequest,
         reply: Reply<RegisterDeviceTokenResponse>,
+    },
+
+    // --- Peer-contract share inbox (receiver's own actor) ---
+    EvtxoPendingShares {
+        req: EvtxoPendingSharesRequest,
+        reply: Reply<EvtxoPendingSharesResponse>,
+    },
+    EvtxoAckShare {
+        req: EvtxoAckShareRequest,
+        reply: Reply<EvtxoAckShareResponse>,
     },
 
     // --- Policy seeding (onboarding / contract create) ---
