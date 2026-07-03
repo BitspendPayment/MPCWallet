@@ -72,8 +72,14 @@ class MpcClient {
   /// Kept separate from [_seedSource] so persist/load/sign agree even before a seed source is wired.
   bool _shareBlinded = false;
 
-  /// Wire the blinding seed source (PIN now, passkey PRF later). Set before DKG to create a gated
-  /// wallet, and before signing to unlock ARK ops. Null ⇒ legacy un-gated behavior.
+  /// Whether the persisted share is blinded — i.e. a passkey/PIN was provisioned
+  /// and a seed source must be wired before any ARK sign. Used on cold-start
+  /// restore to decide whether to re-attach the passkey seed/token sources.
+  bool get isShareGated => _shareBlinded;
+
+  /// Wire the blinding seed source (passkey PRF in production; a fixed seed in tests). Set before
+  /// DKG to create a gated wallet, and before signing to unlock ARK ops. Never wired ⇒ legacy
+  /// un-gated behavior.
   void setSeedSource(SeedSource source) => _seedSource = source;
 
   /// The wallet's DKG dealer secret — the polynomial constant term that
@@ -877,6 +883,29 @@ class MpcClient {
       _authHelper =
           ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
     }
+  }
+
+  /// Gate an already-DKG'd (raw) share retroactively: blind it to δ under [seed], persist δ, and drop
+  /// the raw share + Schnorr auth helper. Used when the seed only exists after DKG — a passkey's PRF
+  /// needs the post-DKG user id to register/assert. No-op if already gated.
+  Future<void> gateShare(Uint8List seed) async {
+    if (_shareBlinded) return;
+    final kp = _normalPolicy?.keyPackage;
+    if (kp == null) throw StateError('no wallet share to gate');
+    final delta = threshold.bytesToBigInt(
+        blindShare(threshold.SecretKey(kp.secretShare), kp.identifier, seed));
+    _normalPolicy = SpendingPolicy(
+        id: "normal_policy_id",
+        keyPackage: threshold.KeyPackage(kp.identifier, delta, kp.verifyingShare,
+            kp.verifyingKey, kp.minSigners),
+        publicKeyPackage: _normalPolicy!.publicKeyPackage);
+    _shareBlinded = true;
+    _signingSecret = null;
+    _authHelper = null;
+    await _saveState();
+    // Hive appends; without compaction the pre-gating state (raw share +
+    // signingSecret) would remain readable in the box file.
+    await _store.compact();
   }
 
   // --- SIGNING ---

@@ -725,11 +725,11 @@ impl CosignerActor {
             Ok(n) => n,
             Err(e) => return ActorResponse::Error(e),
         };
-        let exit_delay = info.boarding_exit_delay as u32;
+        let boarding_exit_delay = info.boarding_exit_delay as u32;
         let boarding_address = match ark::client::boarding_address(
             &owner_pk_hex,
             &info.signer_pubkey,
-            exit_delay,
+            boarding_exit_delay,
             network,
         ) {
             Ok(a) => a,
@@ -747,7 +747,7 @@ impl CosignerActor {
             &txid,
             vout,
             amount,
-            exit_delay,
+            boarding_exit_delay,
             &info.network,
         ) {
             Ok(r) => r,
@@ -767,7 +767,7 @@ impl CosignerActor {
         boarding_txid: &str,
         boarding_vout: u32,
         boarding_amount_sats: u64,
-        exit_delay: u32,
+        boarding_exit_delay: u32,
         network: &str,
     ) -> Result<ActorResponse, String> {
         let secret = self
@@ -784,7 +784,7 @@ impl CosignerActor {
             boarding_txid,
             boarding_vout,
             boarding_amount_sats,
-            exit_delay,
+            boarding_exit_delay,
             network,
             &cosigner_pk_hex,
         )
@@ -793,7 +793,7 @@ impl CosignerActor {
             session,
             signer,
             amount_sats: boarding_amount_sats,
-            exit_delay,
+            exit_delay: boarding_exit_delay,
             stream: None,
         });
         Ok(ActorResponse::BoardingSettleSighashes {
@@ -836,13 +836,9 @@ impl CosignerActor {
                 vout: v.vout,
                 amount_sats: v.amount_sats,
                 is_swept: false,
+                exit_delay: v.exit_delay,
             })
             .collect();
-
-        let input_exit_delay = vtxos[0].exit_delay;
-        if vtxos.iter().any(|v| v.exit_delay != input_exit_delay) {
-            return ActorResponse::Error("cannot settle VTXOs with mixed exit_delays".into());
-        }
 
         let network = match ark::client::parse_network(&info.network) {
             Ok(n) => n,
@@ -872,7 +868,6 @@ impl CosignerActor {
             &outputs,
             &info.forfeit_address,
             info.dust as u64,
-            input_exit_delay,
             &info.network,
             req.intent_valid_at,
         ) {

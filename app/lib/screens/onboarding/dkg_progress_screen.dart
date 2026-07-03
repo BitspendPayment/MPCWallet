@@ -34,8 +34,6 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
     final signerKind = signerKindStr == 'hardware'
         ? SignerKind.hardware
         : SignerKind.software;
-    final pin = extras['pin'] as String?;
-
     // Wait for Init
     if (!mpcService.isInitialized) {
       await _addLog('Client init failed or slow. Retrying...');
@@ -59,14 +57,14 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
       await Future.delayed(const Duration(milliseconds: 500)); // UI pacing
       await _addLog('Generating secrets and exchanging packages...');
 
-      await mpcService.doDkg(pin: pin);
+      await mpcService.doDkg();
 
       await _addLog('DKG Finalized successfully.');
       setState(() => _currentStep = 2);
       await Future.delayed(const Duration(seconds: 1));
 
       if (mounted) {
-        context.push('/onboarding/ready');
+        context.push('/onboarding/passkey');
       }
     } catch (e) {
       await _addLog('Error: $e');

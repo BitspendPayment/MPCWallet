@@ -1,0 +1,14 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.get_login_creds"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.example.ap",
+      "sha256_cert_fingerprints": [
+        "BB:5A:4D:7A:97:8E:6C:95:29:4A:44:AA:1F:DE:B8:1E:F1:51:A9:B8:42:FD:E8:D0:3F:71:87:03:7F:A5:AD:E2"
+      ]
+    }
+  }
+]

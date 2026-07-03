@@ -99,7 +99,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if session_authority.enabled() {
         tracing::info!("Session-token auth enabled (WEBAUTH_TOKEN_SECRET configured)");
     } else {
-        tracing::info!("Session-token auth disabled (no WEBAUTH_TOKEN_SECRET); Schnorr auth only");
+        // Not merely informational: a passkey-GATED wallet authenticates by
+        // session token alone (its Schnorr signature is empty), so without a
+        // token secret every request from a gated wallet is rejected.
+        tracing::warn!(
+            "Session-token auth DISABLED (no WEBAUTH_TOKEN_SECRET); Schnorr-only — \
+             passkey-gated wallets cannot authenticate against this deployment"
+        );
     }
 
     let mut shared = shared::SharedServices::new(
@@ -126,9 +132,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // WebAuthn ceremony server: the cosigner is its own Relying Party (register/assert + session
     // token mint). Disabled (None) if the RP config is invalid, rather than aborting startup.
     match webauthn_server::WebauthnServer::new(
-        &cfg.webauth_rp_id,
-        &cfg.webauth_rp_origin,
-        &cfg.webauth_rp_name,
+        webauthn_server::RpConfig {
+            rp_id: &cfg.webauth_rp_id,
+            rp_origin: &cfg.webauth_rp_origin,
+            android_origin: &cfg.webauth_android_origin,
+            rp_name: &cfg.webauth_rp_name,
+        },
         shared.persistence.clone(),
         shared.session_authority.clone(),
     ) {

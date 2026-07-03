@@ -671,6 +671,7 @@ dependencies = [
  "wasmtime",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "webauthn-rs-proto",
  "zeroize",
 ]
 

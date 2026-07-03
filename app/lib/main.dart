@@ -5,8 +5,8 @@ import 'screens/home_screen.dart';
 import 'screens/onboarding/welcome_screen.dart';
 import 'screens/onboarding/server_connect_screen.dart';
 import 'screens/onboarding/dkg_progress_screen.dart';
+import 'screens/onboarding/passkey_setup_screen.dart';
 import 'screens/onboarding/wallet_ready_screen.dart';
-import 'screens/onboarding/pin_create_screen.dart';
 import 'screens/services/services_screen.dart';
 import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
@@ -91,16 +91,16 @@ GoRouter _buildRouter() => GoRouter(
       builder: (context, state) => const WelcomeScreen(),
     ),
     GoRoute(
-      path: '/onboarding/pin',
-      builder: (context, state) => const PinCreateScreen(),
-    ),
-    GoRoute(
       path: '/onboarding/server',
       builder: (context, state) => const ServerConnectionScreen(),
     ),
     GoRoute(
       path: '/onboarding/dkg',
       builder: (context, state) => const DkgProgressScreen(),
+    ),
+    GoRoute(
+      path: '/onboarding/passkey',
+      builder: (context, state) => const PasskeySetupScreen(),
     ),
 GoRoute(
       path: '/onboarding/ready',

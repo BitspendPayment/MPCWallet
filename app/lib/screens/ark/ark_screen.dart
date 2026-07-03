@@ -39,6 +39,8 @@ class ArkScreen extends StatelessWidget {
             ? _buildUnavailable(context)
             : Column(
                 children: [
+                  if (mpcService.needsDelegateAction)
+                    _buildDelegateBanner(context, mpcService),
                   const SizedBox(height: 24),
                   _buildArkBalanceCard(context, arkBalance, balanceUsd),
                   const SizedBox(height: 32),
@@ -94,6 +96,54 @@ class ArkScreen extends StatelessWidget {
               ),
       ),
       bottomNavigationBar: _buildBottomNav(context),
+    );
+  }
+
+  /// Shown when a received VTXO needs a fresh delegate but signing it would
+  /// pop the passkey prompt — so we ask instead of surprising the user. The
+  /// button tap IS the consent: `delegateNow()` runs settleDelegate and the
+  /// biometric sheet appears.
+  Widget _buildDelegateBanner(BuildContext context, MpcService mpcService) {
+    return Container(
+      key: const Key('arkDelegateBanner'),
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.orange.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.orange.withOpacity(0.4)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.shield_outlined, color: Colors.orangeAccent),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              'New funds need auto-settle protection',
+              style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
+            ),
+          ),
+          TextButton(
+            key: const Key('arkDelegateBtn'),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await mpcService.delegateNow();
+                messenger.showSnackBar(const SnackBar(
+                    content: Text('Auto-settle protection active')));
+              } catch (e) {
+                messenger.showSnackBar(
+                    SnackBar(content: Text('Delegate failed: $e')));
+              }
+            },
+            child: Text(
+              'Delegate',
+              style: GoogleFonts.inter(
+                  color: Colors.orangeAccent, fontWeight: FontWeight.bold),
+            ),
+          ),
+        ],
+      ),
     );
   }
 

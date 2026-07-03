@@ -1144,6 +1144,10 @@ pub struct DelegateVtxoInput {
     pub amount_sats: u64,
     /// Whether this VTXO was already swept by the ASP.
     pub is_swept: bool,
+    /// This VTXO's unilateral-exit delay (consensus sequence value). Per-input
+    /// because a wallet naturally holds a mix: a boarded VTXO keeps the
+    /// boarding delay while received/refreshed ones use the unilateral delay.
+    pub exit_delay: u32,
 }
 
 /// Output descriptor for delegate settle.
@@ -1284,7 +1288,6 @@ impl DelegateSettleSession {
         outputs: &[DelegateOutput],
         forfeit_address: &str,
         dust_sats: u64,
-        exit_delay: u32,
         network_str: &str,
         // When set, the renewal time (Unix secs) the delegate becomes valid;
         // arkd rejects settling before it, and the intent never expires
@@ -1298,8 +1301,9 @@ impl DelegateSettleSession {
         let asp_pk = parse_xonly(asp_pk_hex)?;
         let forfeit_pk = parse_xonly(forfeit_pk_hex)?;
 
-        let exit_seq = ark_core::server::parse_sequence_number(exit_delay as i64)
-            .map_err(|e| format!("invalid exit_delay: {e}"))?;
+        if vtxo_inputs.is_empty() {
+            return Err("no VTXO inputs".to_string());
+        }
 
         // Build delegate cosigner keypair from server's DKG secret.
         let cosigner_secret_bytes = hex_decode_32(delegate_cosigner_secret_hex)?;
@@ -1308,16 +1312,23 @@ impl DelegateSettleSession {
         let delegate_cosigner_kp = Keypair::from_secret_key(&secp, &cosigner_secret);
         let delegate_cosigner_pk = delegate_cosigner_kp.public_key();
 
-        // Reconstruct default VTXO for spend info.
-        let vtxo = ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, exit_seq, network)
-            .map_err(|e| format!("Vtxo::new_default: {e}"))?;
-        let forfeit_spend_info = vtxo
-            .forfeit_spend_info()
-            .map_err(|e| format!("forfeit_spend_info: {e}"))?;
-        let tapscripts = vtxo.tapscripts();
-        let vtxo_script_pubkey = vtxo.script_pubkey();
+        // Reconstruct default VTXOs for spend info — one per DISTINCT exit
+        // delay, since each input's script embeds its own delay.
+        let mut vtxo_by_delay: HashMap<u32, (Sequence, ark_core::Vtxo)> = HashMap::new();
+        for vi in vtxo_inputs {
+            if let std::collections::hash_map::Entry::Vacant(slot) =
+                vtxo_by_delay.entry(vi.exit_delay)
+            {
+                let exit_seq = ark_core::server::parse_sequence_number(vi.exit_delay as i64)
+                    .map_err(|e| format!("invalid exit_delay: {e}"))?;
+                let vtxo =
+                    ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, exit_seq, network)
+                        .map_err(|e| format!("Vtxo::new_default: {e}"))?;
+                slot.insert((exit_seq, vtxo));
+            }
+        }
 
-        // Build intent::Input for each VTXO.
+        // Build intent::Input for each VTXO with its own delay's spend info.
         let intent_inputs: Vec<ark_core::intent::Input> = vtxo_inputs
             .iter()
             .map(|vi| {
@@ -1325,16 +1336,20 @@ impl DelegateSettleSession {
                     txid: vi.txid.parse().map_err(|e| format!("invalid txid: {e}"))?,
                     vout: vi.vout,
                 };
+                let (exit_seq, vtxo) = &vtxo_by_delay[&vi.exit_delay];
+                let forfeit_spend_info = vtxo
+                    .forfeit_spend_info()
+                    .map_err(|e| format!("forfeit_spend_info: {e}"))?;
                 Ok(ark_core::intent::Input::new(
                     outpoint,
-                    exit_seq,
+                    *exit_seq,
                     None,
                     TxOut {
                         value: Amount::from_sat(vi.amount_sats),
-                        script_pubkey: vtxo_script_pubkey.clone(),
+                        script_pubkey: vtxo.script_pubkey(),
                     },
-                    tapscripts.clone(),
-                    forfeit_spend_info.clone(),
+                    vtxo.tapscripts(),
+                    forfeit_spend_info,
                     false, // is_onchain = false (existing VTXOs)
                     vi.is_swept,
                     Vec::new(), // assets — none (ark-core 0.9)
@@ -1400,7 +1415,9 @@ impl DelegateSettleSession {
             asp_pk,
             forfeit_pk,
             network,
-            exit_delay: exit_seq,
+            // Unused downstream (the PSBTs embed per-input spend info); kept
+            // for the persisted-snapshot shape. First input's delay.
+            exit_delay: vtxo_by_delay[&vtxo_inputs[0].exit_delay].0,
             delegate,
             delegate_cosigner_kp,
             sighash_meta,

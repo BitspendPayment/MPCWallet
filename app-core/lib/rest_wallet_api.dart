@@ -54,8 +54,8 @@ class RestWalletApi implements WalletApi {
       : _http = null,
         customPost = postFn;
 
-  Future<Map<String, dynamic>> _post(
-      String path, Map<String, dynamic> body) async {
+  Future<Map<String, dynamic>> _post(String path, Map<String, dynamic> body,
+      {bool retryOnTokenReject = true}) async {
     if (customPost != null) {
       return customPost!(path, body);
     }
@@ -67,6 +67,15 @@ class RestWalletApi implements WalletApi {
       body: jsonEncode(body),
     );
     if (resp.statusCode != 200) {
+      // Long-lived tokens can die server-side (secret rotation, early expiry).
+      // Drop the cache and retry ONCE with a freshly-minted token, so a stale
+      // cached token degrades to a single re-auth instead of a dead wallet.
+      if (resp.statusCode == 401 &&
+          retryOnTokenReject &&
+          resp.body.contains('session token')) {
+        sessionTokens.onRejected();
+        return _post(path, body, retryOnTokenReject: false);
+      }
       final errBody = jsonDecode(resp.body);
       throw Exception(
           errBody['error'] ?? 'HTTP ${resp.statusCode}: ${resp.body}');

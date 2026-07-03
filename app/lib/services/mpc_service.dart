@@ -17,6 +17,7 @@ import 'package:app_core/hardware_signer.dart';
 import 'package:app_core/software_signer.dart';
 
 import '../usb/usb_hardware_signer.dart';
+import '../passkey/passkey_authenticator.dart';
 
 /// Which backend signs for the owner share.
 enum SignerKind { software, hardware }
@@ -35,6 +36,15 @@ class MpcService extends ChangeNotifier {
   /// we don't keep a persistent reference — the signer is ephemeral, created
   /// only for the duration of an operation that needs the owner share.
   HardwareSignerInterface? _hardwareSigner;
+
+  /// Passkey authenticator, set once a passkey is provisioned at onboarding.
+  /// Supplies the PRF blinding seed (to reconstruct the gated share) and the
+  /// session token (auth). Null ⇒ no passkey; the wallet stays un-gated on the
+  /// legacy Schnorr auth path.
+  PasskeyAuthenticator? _passkeyAuth;
+
+  /// Whether a passkey is provisioned and wired (share PRF-gated, token auth).
+  bool get passkeyEnabled => _passkeyAuth != null;
 
   /// Which signer backend is in use. Persisted so cold starts know whether
   /// to reconnect USB (hardware) or create an ephemeral software signer.
@@ -362,10 +372,10 @@ class MpcService extends ChangeNotifier {
 
   /// Run initial DKG. For software mode a fresh in-memory signer is created
   /// for this call, DKG runs, and the signer is wiped afterwards so the share
-  /// doesn't linger in RAM. [pin] is collected at onboarding and threaded
-  /// through for a later phase that will gate the share; it is not yet used.
-  /// There is no cloud backup — the share lives only on this device.
-  Future<void> doDkg({String? pin}) async {
+  /// doesn't linger in RAM. Spending is gated afterwards via [enablePasskey]
+  /// (the passkey-setup onboarding step). There is no cloud backup — the
+  /// share lives only on this device.
+  Future<void> doDkg() async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
 
     if (_dkgComplete) {
@@ -413,6 +423,86 @@ class MpcService extends ChangeNotifier {
     }
   }
 
+  /// Provision a passkey for this wallet and gate the FROST share on its PRF
+  /// output. Driven by the passkey-setup onboarding step (after DKG — it
+  /// needs the userId). Registration + one assertion: the assertion yields
+  /// the 32-byte blinding seed (which reblinds the stored share) and a
+  /// session token; the seed/token sources are then handed to the client so
+  /// every later spend re-derives the seed from a fresh gesture.
+  ///
+  /// Throws on failure so the UI can offer retry; until it succeeds the
+  /// wallet stays on the legacy Schnorr-auth path with an un-gated share.
+  Future<void> enablePasskey() async {
+    final client = _client;
+    final userId = client?.userId;
+    if (client == null || userId == null) {
+      throw StateError('wallet not initialized — run DKG first');
+    }
+    if (client.isShareGated) {
+      _rewirePasskeyOnRestore();
+      return;
+    }
+    final auth = _newPasskeyAuth();
+    // Assert-first: if a credential already exists (e.g. a previous attempt
+    // registered but the user cancelled the seed assertion), registering again
+    // would be refused via the excludeCredentials list. Only register when the
+    // cosigner reports no credential to assert against.
+    Uint8List seed;
+    try {
+      seed = await auth.seedSource(userId).deriveSeed();
+    } on StateError catch (e) {
+      if (!e.toString().contains('/assert/begin')) rethrow;
+      await auth.register(userId);
+      seed = await auth.seedSource(userId).deriveSeed();
+    }
+    await client.gateShare(seed);
+    _wirePasskeySources(client, auth, userId);
+    notifyListeners();
+    debugPrint('Passkey enabled: share PRF-gated + token auth wired');
+  }
+
+  /// Re-attach the passkey seed + session-token sources for an already-gated
+  /// wallet on cold-start restore. Does NOT register (the credential already
+  /// exists) or re-blind (the persisted share is already `δ`). Only meaningful
+  /// when the share is gated; an un-gated wallet stays on Schnorr auth.
+  void _rewirePasskeyOnRestore() {
+    final client = _client;
+    final userId = client?.userId;
+    if (client == null || userId == null || !client.isShareGated) return;
+    final auth = _newPasskeyAuth();
+    _wirePasskeySources(client, auth, userId);
+    debugPrint('Passkey restored: seed + token sources re-attached');
+  }
+
+  void _wirePasskeySources(
+      MpcClient client, PasskeyAuthenticator auth, String userId) {
+    client.setSeedSource(auth.seedSource(userId));
+    client.setSessionTokenSource(auth.sessionTokenSource(userId));
+    _passkeyAuth = auth;
+  }
+
+  /// Build a [PasskeyAuthenticator] seeded with the persisted session token,
+  /// persisting each newly-minted one. Tokens are long-lived (~30 days), so
+  /// carrying them across app restarts means a cold start needs no biometric
+  /// prompt until the token actually expires.
+  PasskeyAuthenticator _newPasskeyAuth() {
+    final box = _identityBox;
+    final token = box?.get('passkeySessionToken') as String?;
+    final expiryMs = box?.get('passkeySessionTokenExpiry') as int?;
+    return PasskeyAuthenticator(
+      _baseUrl,
+      initialToken: token,
+      initialTokenExpiry: expiryMs != null
+          ? DateTime.fromMillisecondsSinceEpoch(expiryMs)
+          : null,
+      onTokenMinted: (t, expiry) {
+        _identityBox?.put('passkeySessionToken', t);
+        _identityBox?.put(
+            'passkeySessionTokenExpiry', expiry.millisecondsSinceEpoch);
+      },
+    );
+  }
+
   /// Restores a previously completed session without re-running DKG.
   /// Creates gRPC channel + MpcClient + MpcBitcoinWallet, then calls
   /// wallet.init() which restores keys from Hive persistence.
@@ -446,6 +536,11 @@ class MpcService extends ChangeNotifier {
     _wallet!.onSyncComplete = _onWalletSyncComplete;
 
     await _wallet!.init();
+    // A gated share needs its passkey seed + token sources re-attached before
+    // any authenticated read or ARK sign. Must run AFTER wallet.init(): that's
+    // where client.restoreState() loads userId + the shareBlinded flag this
+    // rewire keys off — earlier, isShareGated is still false and it no-ops.
+    _rewirePasskeyOnRestore();
     _balance = await _wallet!.getBalance();
     _isConnected = true;
 
@@ -520,6 +615,19 @@ class MpcService extends ChangeNotifier {
   bool _serverHasActiveDelegate = false;
   bool _delegateInFlight = false;
 
+  /// Don't retry a failed auto-delegate before this. With a passkey-gated
+  /// share, `settleDelegate` is a signing op that can pop a biometric prompt;
+  /// without a cooldown a persistent failure would re-prompt on EVERY poll
+  /// tick (~10s).
+  DateTime? _delegateRetryAfter;
+  static const Duration _delegateFailureCooldown = Duration(minutes: 5);
+
+  /// A re-delegate is needed but signing it would pop a biometric prompt, so
+  /// we wait for the user instead: the Ark tab shows a delegate button while
+  /// this is true (see [delegateNow]).
+  bool _delegateActionNeeded = false;
+  bool get needsDelegateAction => _delegateActionNeeded;
+
   /// Periodic VTXO poll. Off-chain receives don't trigger the on-chain electrs
   /// sync, so without this, received VTXOs only show up on a manual refresh.
   /// Runs while Ark is active; the OS pauses it when the app is backgrounded.
@@ -548,7 +656,7 @@ class MpcService extends ChangeNotifier {
     unawaited(_delegateIfNeeded());
   }
 
-  /// Re-delegate when either:
+  /// A re-delegate is needed when either:
   /// - A new VTXO appeared since the last refresh that wasn't created by us
   ///   (i.e. an external receive), OR
   /// - VTXOs exist but the server reports no active delegate (cosigner
@@ -557,6 +665,12 @@ class MpcService extends ChangeNotifier {
   /// Self-originated change (txid matches a recent send/board/settle) is
   /// skipped since the corresponding handler already invalidated the delegate
   /// on the server side and a fresh re-delegate covers the new change VTXO.
+  ///
+  /// Signing the delegate needs the passkey. Only sign SILENTLY when no
+  /// biometric prompt would appear (wallet un-gated, or the PRF seed is still
+  /// cached from a just-finished user op). Otherwise raise [needsDelegateAction]
+  /// so the Ark tab shows a delegate button — the cosigner's "Funds received"
+  /// notification brings the user there.
   Future<void> _delegateIfNeeded() async {
     if (_client == null || _delegateInFlight || _vtxos.isEmpty) return;
 
@@ -572,15 +686,60 @@ class MpcService extends ChangeNotifier {
         newOutpoints.where((op) => !selfTxids.contains(op.split(':').first));
 
     final needsDelegate = external.isNotEmpty || !_serverHasActiveDelegate;
-    if (!needsDelegate) return;
+    if (!needsDelegate) {
+      if (_delegateActionNeeded) {
+        _delegateActionNeeded = false;
+        notifyListeners();
+      }
+      return;
+    }
+
+    final promptless =
+        !(_client!.isShareGated) || (_passkeyAuth?.hasFreshSeed ?? false);
+    if (!promptless) {
+      if (!_delegateActionNeeded) {
+        _delegateActionNeeded = true;
+        notifyListeners();
+      }
+      return;
+    }
+
+    final retryAfter = _delegateRetryAfter;
+    if (retryAfter != null && DateTime.now().isBefore(retryAfter)) return;
 
     _delegateInFlight = true;
     try {
       await _client!.settleDelegate(storeOnly: true);
       _serverHasActiveDelegate = true;
+      _delegateActionNeeded = false;
+      _delegateRetryAfter = null;
       notifyListeners();
     } catch (e) {
-      debugPrint("[auto-settle] re-delegate failed: $e");
+      _delegateRetryAfter = DateTime.now().add(_delegateFailureCooldown);
+      debugPrint("[auto-settle] re-delegate failed (cooldown "
+          "${_delegateFailureCooldown.inMinutes}m): $e");
+    } finally {
+      _delegateInFlight = false;
+    }
+  }
+
+  /// User-triggered delegate (the Ark-tab button). Runs `settleDelegate`
+  /// directly — with a gated share this pops the passkey prompt, which is
+  /// expected here because the user just asked for it. Throws on failure so
+  /// the UI can surface it.
+  Future<void> delegateNow() async {
+    final client = _client;
+    if (client == null) throw StateError('wallet not initialized');
+    // Throw rather than silently return: the button's success feedback must
+    // never fire for an attempt that didn't run.
+    if (_delegateInFlight) throw StateError('a delegate is already in progress');
+    _delegateInFlight = true;
+    try {
+      await client.settleDelegate(storeOnly: true);
+      _serverHasActiveDelegate = true;
+      _delegateActionNeeded = false;
+      _delegateRetryAfter = null;
+      notifyListeners();
     } finally {
       _delegateInFlight = false;
     }

@@ -50,11 +50,13 @@ pub struct ServerConfig {
     /// WebAuthn Relying Party ID (the effective domain the passkey is scoped to). Env `WEBAUTH_RP_ID`,
     /// default `"localhost"`.
     pub webauth_rp_id: String,
-    /// WebAuthn RP origin URL (must be a valid absolute URL). Env `WEBAUTH_RP_ORIGIN`, default
-    /// `"http://localhost"`. NOTE: Android's real assertion origin is an `android:apk-key-hash:<b64>`
-    /// value derived from the app signing cert, not an https URL — wiring that is a later device
-    /// concern (the RP config would need the apk-key-hash origin added).
+    /// WebAuthn RP origin URL — the https origin matching `webauth_rp_id`, e.g.
+    /// `https://vtxos.com`. Env `WEBAUTH_RP_ORIGIN`, default `"http://localhost"`.
     pub webauth_rp_origin: String,
+    /// Additional allowed origin for Android Credential-Manager assertions: the app's
+    /// `android:apk-key-hash:<b64url-sha256-of-signing-cert>`. Empty ⇒ web/https-only. Env
+    /// `WEBAUTH_ANDROID_ORIGIN`.
+    pub webauth_android_origin: String,
     /// Human-readable RP name shown in the passkey UI. Env `WEBAUTH_RP_NAME`, default `"MPC Wallet"`.
     pub webauth_rp_name: String,
 }
@@ -90,6 +92,7 @@ impl ServerConfig {
             webauth_rp_id: env::var("WEBAUTH_RP_ID").unwrap_or_else(|_| "localhost".to_string()),
             webauth_rp_origin: env::var("WEBAUTH_RP_ORIGIN")
                 .unwrap_or_else(|_| "http://localhost".to_string()),
+            webauth_android_origin: env::var("WEBAUTH_ANDROID_ORIGIN").unwrap_or_default(),
             webauth_rp_name: env::var("WEBAUTH_RP_NAME").unwrap_or_else(|_| "MPC Wallet".to_string()),
         }
     }

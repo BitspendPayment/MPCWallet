@@ -42,6 +42,11 @@ pub struct VtxoInputParam {
     pub txid: String,
     pub vout: u32,
     pub amount: u64,
+    /// This VTXO's own exit delay. Per-input because a wallet holds a mix
+    /// (a boarded VTXO keeps the boarding delay; received/refreshed ones use
+    /// the unilateral delay). Absent => the top-level `exit_delay`.
+    #[serde(default)]
+    pub exit_delay: Option<u32>,
     /// Present => this input is a contract eVTXO spent via its cooperative
     /// (`ConditionMultisigClosure`) leaf, signed by V′ and gated by the cosigner.
     #[serde(default)]
@@ -148,17 +153,28 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
 
     let exit_seq = server::parse_sequence_number(params.exit_delay as i64)
         .map_err(|e| format!("invalid exit_delay: {e}"))?;
-    eprintln!("[ark-ffi] exit_delay={}, exit_seq={}, is_time={:?}",
-        params.exit_delay, exit_seq.0, exit_seq.to_relative_lock_time());
 
-    // Reconstruct VTXO for spend info
+    // Fallback reconstruction (top-level delay) — kept for the change-address
+    // default; inputs each rebuild with their OWN delay below.
     let vtxo = ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, exit_seq, network)
         .map_err(|e| format!("Vtxo::new_default: {e}"))?;
-    let (spend_script, control_block) = vtxo
-        .forfeit_spend_info()
-        .map_err(|e| format!("forfeit_spend_info: {e}"))?;
-    let tapscripts = vtxo.tapscripts();
-    let vtxo_script_pubkey = vtxo.script_pubkey();
+
+    // Reconstruct spend info per DISTINCT input delay — each VTXO's script
+    // embeds its own delay, so one template can't serve a mixed set.
+    let mut vtxo_by_delay: HashMap<u32, ark_core::Vtxo> = HashMap::new();
+    for vi in &params.vtxo_inputs {
+        if vi.evtxo.is_some() {
+            continue;
+        }
+        let delay = vi.exit_delay.unwrap_or(params.exit_delay);
+        if let std::collections::hash_map::Entry::Vacant(slot) = vtxo_by_delay.entry(delay) {
+            let seq = server::parse_sequence_number(delay as i64)
+                .map_err(|e| format!("invalid exit_delay: {e}"))?;
+            let v = ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, seq, network)
+                .map_err(|e| format!("Vtxo::new_default: {e}"))?;
+            slot.insert(v);
+        }
+    }
 
     // Build VtxoInputs. Each input is either a normal VTXO (default forfeit leaf,
     // signed by the owner key V) or a contract eVTXO spent via its cooperative
@@ -216,12 +232,17 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
                 evtxo_inputs.push((i, contract_id, args));
             }
             None => {
+                let delay = vi.exit_delay.unwrap_or(params.exit_delay);
+                let input_vtxo = &vtxo_by_delay[&delay];
+                let (spend_script, control_block) = input_vtxo
+                    .forfeit_spend_info()
+                    .map_err(|e| format!("forfeit_spend_info: {e}"))?;
                 send_inputs.push(VtxoInput::new(
-                    spend_script.clone(),
+                    spend_script,
                     None,
-                    control_block.clone(),
-                    tapscripts.clone(),
-                    vtxo_script_pubkey.clone(),
+                    control_block,
+                    input_vtxo.tapscripts(),
+                    input_vtxo.script_pubkey(),
                     Amount::from_sat(vi.amount),
                     outpoint,
                     Vec::new(), // assets — none (ark-core 0.9)

@@ -24,8 +24,12 @@ use crate::resp_store::KvStore;
 
 /// KV tree holding each user's passkey credentials (`Vec<Passkey>` JSON, keyed by group-key hex).
 const CRED_TREE: &str = "passkey_credentials";
-/// Session-token lifetime after a successful assertion.
-const TOKEN_TTL_SECS: i64 = 900;
+/// Session-token lifetime after a successful assertion. Deliberately LONG:
+/// the token only authenticates the API boundary (reads, non-signing ops) —
+/// every spend still needs a fresh passkey gesture to reconstruct the gated
+/// share, so a stolen token cannot move funds. Short TTLs here just translate
+/// into biometric prompts on background polling.
+const TOKEN_TTL_SECS: i64 = 30 * 24 * 3600;
 /// In-memory ceremonies older than this are pruned (WebAuthn challenges are short-lived).
 const CEREMONY_TTL: Duration = Duration::from_secs(300);
 
@@ -51,6 +55,19 @@ impl Ceremony {
     }
 }
 
+/// Relying-Party identity, by name — four positional `&str`s would let a swapped
+/// argument compile silently and only fail at ceremony time.
+pub struct RpConfig<'a> {
+    /// The effective domain the passkey is scoped to, e.g. `vtxos.com`.
+    pub rp_id: &'a str,
+    /// The https origin matching `rp_id`, e.g. `https://vtxos.com`.
+    pub rp_origin: &'a str,
+    /// The app's `android:apk-key-hash:<b64url>` origin; empty ⇒ web-only.
+    pub android_origin: &'a str,
+    /// Human-readable name shown in the passkey UI.
+    pub rp_name: &'a str,
+}
+
 /// The cosigner's WebAuthn Relying Party. Owns the `Webauthn` config, the in-memory ceremony map,
 /// and references to the shared persistence + session-token authority.
 pub struct WebauthnServer {
@@ -64,16 +81,23 @@ impl WebauthnServer {
     /// Build the RP from config. Returns `Err` on bad RP config (bad origin URL / mismatched
     /// rp_id), so `main.rs` can log + leave the feature disabled rather than aborting startup.
     pub fn new(
-        rp_id: &str,
-        rp_origin: &str,
-        rp_name: &str,
+        rp: RpConfig<'_>,
         persistence: Arc<dyn KvStore>,
         session_authority: Arc<SessionAuthority>,
     ) -> Result<Self, String> {
-        let origin = Url::parse(rp_origin).map_err(|e| format!("invalid WEBAUTH_RP_ORIGIN: {e}"))?;
-        let webauthn = WebauthnBuilder::new(rp_id, &origin)
+        let origin =
+            Url::parse(rp.rp_origin).map_err(|e| format!("invalid WEBAUTH_RP_ORIGIN: {e}"))?;
+        let mut builder = WebauthnBuilder::new(rp.rp_id, &origin)
             .map_err(|e| format!("WebauthnBuilder::new: {e}"))?
-            .rp_name(rp_name)
+            .rp_name(rp.rp_name);
+        // Android Credential-Manager assertions carry an `android:apk-key-hash:<b64>` origin, not the
+        // https RP origin — allow it explicitly so on-device passkeys validate.
+        if !rp.android_origin.trim().is_empty() {
+            let ao = Url::parse(rp.android_origin)
+                .map_err(|e| format!("invalid WEBAUTH_ANDROID_ORIGIN: {e}"))?;
+            builder = builder.append_allowed_origin(&ao);
+        }
+        let webauthn = builder
             .build()
             .map_err(|e| format!("WebauthnBuilder::build: {e}"))?;
         Ok(Self {
@@ -139,10 +163,16 @@ impl WebauthnServer {
         } else {
             Some(existing)
         };
-        let (ccr, state) = self
+        let (mut ccr, state) = self
             .webauthn
             .start_passkey_registration(user_uuid, uid_hex, uid_hex, exclude)
             .map_err(|e| format!("start_passkey_registration: {e}"))?;
+        // Require a DISCOVERABLE credential: Android routes rk=discouraged to the
+        // external security-key flow instead of the platform passkey provider.
+        if let Some(sel) = ccr.public_key.authenticator_selection.as_mut() {
+            sel.resident_key = Some(webauthn_rs_proto::ResidentKeyRequirement::Required);
+            sel.require_resident_key = true;
+        }
         let ceremony_id = Self::new_ceremony_id();
         self.ceremonies.insert(
             ceremony_id.clone(),
@@ -303,14 +333,28 @@ mod tests {
         let authority = Arc::new(SessionAuthority::from_secret_hex(SEED_HEX));
         // Use https + a plain domain so the soft authenticator's origin check is satisfied.
         let server = WebauthnServer::new(
-            "localhost",
-            "https://localhost",
-            "MPC Wallet Test",
+            RpConfig {
+                rp_id: "localhost",
+                rp_origin: "https://localhost",
+                android_origin: "",
+                rp_name: "MPC Wallet Test",
+            },
             persistence,
             authority.clone(),
         )
         .expect("build webauthn server");
         (server, authority)
+    }
+
+    /// The test SoftPasskey can't create discoverable credentials (`NotSupported`), so relax the
+    /// resident-key requirement the server emits for real platform authenticators. The ceremony
+    /// state doesn't require residency, so register_finish still verifies.
+    fn relax_resident_key(mut ccr: CreationChallengeResponse) -> CreationChallengeResponse {
+        if let Some(sel) = ccr.public_key.authenticator_selection.as_mut() {
+            sel.resident_key = None;
+            sel.require_resident_key = false;
+        }
+        ccr
     }
 
     #[test]
@@ -325,7 +369,7 @@ mod tests {
         // ---- Registration ----
         let (reg_ceremony, ccr) = server.register_begin(uid_hex).expect("register_begin");
         let reg_credential = authenticator
-            .do_registration(origin.clone(), ccr)
+            .do_registration(origin.clone(), relax_resident_key(ccr))
             .expect("soft authenticator do_registration");
         server
             .register_finish(&reg_ceremony, reg_credential)
@@ -370,7 +414,9 @@ mod tests {
         let origin = Url::parse("https://localhost").unwrap();
         let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
         let (reg_ceremony, ccr) = server.register_begin(uid_hex).unwrap();
-        let cred = authenticator.do_registration(origin, ccr).unwrap();
+        let cred = authenticator
+            .do_registration(origin, relax_resident_key(ccr))
+            .unwrap();
         server.register_finish(&reg_ceremony, cred).unwrap();
 
         assert_eq!(server.load_credentials(uid_hex).len(), 1);

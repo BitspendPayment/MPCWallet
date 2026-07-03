@@ -38,6 +38,11 @@ class PushService {
   /// state before the service was ready; acted on in [registerCurrentToken].
   static bool _pendingContractShare = false;
 
+  /// Set when a "vtxo_received" notification opened the app from a terminated
+  /// state before the service was ready; acted on in [registerCurrentToken]
+  /// (a refresh, which raises the Ark-tab delegate banner if needed).
+  static bool _pendingVtxoReceived = false;
+
   /// Foreground init. Called from `main()` before runApp.
   static Future<void> initialize() async {
     if (_initialized) return;
@@ -92,6 +97,16 @@ class PushService {
         debugPrint('[push] pending pickUpContractShares failed: $e');
       }
     }
+    // A funds-received notification opened the app before the service was
+    // ready; refresh so the Ark tab raises its delegate banner if needed.
+    if (_pendingVtxoReceived) {
+      _pendingVtxoReceived = false;
+      try {
+        await svc.refreshVtxos();
+      } catch (e) {
+        debugPrint('[push] pending refreshVtxos failed: $e');
+      }
+    }
     if (!_initialized) return;
     try {
       final token = await FirebaseMessaging.instance.getToken();
@@ -122,9 +137,9 @@ class PushService {
       return;
     }
     if (type == 'vtxo_received') {
-      // App is open: nothing wakes a background isolate, so drive the refresh
-      // here. refreshVtxos() runs _delegateIfNeeded() -> settleDelegate, the
-      // same re-delegate the background handler performs.
+      // App is open: refresh so _delegateIfNeeded() runs — it re-delegates
+      // silently when no biometric prompt would appear, otherwise it raises
+      // the Ark-tab delegate banner for the user to act on.
       try {
         await svc.refreshVtxos();
         debugPrint('[push] foreground re-delegate via refreshVtxos ok');
@@ -151,11 +166,25 @@ class PushService {
   }
 
   /// User tapped a notification (app backgrounded or cold-started). Handles the
-  /// visible/tappable notifications: "boarding_deposit" and "contract_share".
+  /// visible/tappable notifications: "vtxo_received" (funds arrived — refresh
+  /// so the Ark tab raises its delegate banner; the user taps Delegate there,
+  /// which is where the passkey prompt belongs), "boarding_deposit" and
+  /// "contract_share".
   static Future<void> _handleOpenedApp(RemoteMessage msg) async {
     final type = msg.data['type'];
     final svc = _svc;
-    if (type == 'boarding_deposit') {
+    if (type == 'vtxo_received') {
+      if (svc == null) {
+        _pendingVtxoReceived = true;
+        return;
+      }
+      try {
+        await svc.refreshVtxos();
+        debugPrint('[push] tap vtxo_received: refreshed (banner if needed)');
+      } catch (e) {
+        debugPrint('[push] tap vtxo_received refreshVtxos failed: $e');
+      }
+    } else if (type == 'boarding_deposit') {
       if (svc == null) {
         // App cold-started from the tap; act once the service is ready.
         _pendingBoarding = true;

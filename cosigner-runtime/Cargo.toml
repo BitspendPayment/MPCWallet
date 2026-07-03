@@ -87,6 +87,8 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 # (a DashMap), so the `danger-allow-state-serialisation` feature is NOT enabled; only the resulting
 # `Passkey` credential is persisted (serde-serializable by default).
 webauthn-rs = "0.5.5"
+# Wire types (ResidentKeyRequirement) not re-exported by the webauthn-rs prelude.
+webauthn-rs-proto = "0.5.5"
 # UUIDv5 for the deterministic per-user WebAuthn handle (same `Uuid` type webauthn-rs re-exports).
 uuid = { version = "1", features = ["v5"] }
 

@@ -59,7 +59,11 @@ android {
         applicationId = "com.example.ap"
         // You can update the following values to match your application needs.
         // For more information, see: https://docs.flutter.dev/deployment/android#reviewing-the-gradle-build-configuration.
-        minSdk = flutter.minSdkVersion
+        // Bumped from flutter.minSdkVersion (21) to 28 — the minimum for
+        // androidx.credentials (Jetpack Credential Manager), used by the passkey
+        // plugin. compileSdk/targetSdk stay at the Flutter defaults (34), which
+        // satisfy androidx.credentials 1.3's compileSdk >= 34 requirement.
+        minSdk = 28
         targetSdk = flutter.targetSdkVersion
         versionCode = flutterVersionCode.toInteger()
         versionName = flutterVersionName
@@ -91,4 +95,12 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Jetpack Credential Manager — WebAuthn passkeys (PasskeyPlugin.kt).
+    // credentials-play-services-auth provides the passkey provider on devices
+    // with Google Play services.
+    implementation "androidx.credentials:credentials:1.3.0"
+    implementation "androidx.credentials:credentials-play-services-auth:1.3.0"
 }

@@ -31,6 +31,15 @@ pub fn auth_check(
         ));
     }
 
+    // A gated wallet sends an EMPTY signature and authenticates via the session
+    // token alone — reaching here means that token was missing or invalid. Say
+    // so, instead of the misleading generic 64-byte complaint below.
+    if signature.is_empty() {
+        return Err(Status::unauthenticated(
+            "missing or invalid session token (no Schnorr signature supplied)",
+        ));
+    }
+
     let user_id_hex = hex::encode(user_id_bytes);
     timestamp_check(state, timestamp_ms, &user_id_hex, operation)?;
 
@@ -70,6 +79,13 @@ pub fn verify_auth(
         }
         return Err(Status::unauthenticated(
             "session token does not match request user",
+        ));
+    }
+
+    // See auth_check: an empty signature means "session token expected".
+    if signature.is_empty() {
+        return Err(Status::unauthenticated(
+            "missing or invalid session token (no Schnorr signature supplied)",
         ));
     }
 

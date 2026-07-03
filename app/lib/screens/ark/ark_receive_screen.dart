@@ -34,6 +34,14 @@ class _ArkReceiveScreenState extends State<ArkReceiveScreen>
     final arkAddress = mpcService.arkAddress;
     final boardingAddress = mpcService.boardingAddress;
 
+    // DEBUG: log addresses so you can fund from the host (regtest bitcoind).
+    if (boardingAddress != null) {
+      debugPrint('RECEIVE >> BOARDING (fund on-chain): $boardingAddress');
+    }
+    if (arkAddress != null) {
+      debugPrint('RECEIVE >> ARK: $arkAddress');
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(

@@ -69,20 +69,17 @@ class MpcArkWallet {
     }
 
     final changeAddr = await client.getArkAddress();
-    // Use per-VTXO exit_delay (boarding vs refreshed VTXOs have different delays).
-    // All VTXOs in a send should be the same type; use the first one's delay.
-    final exitDelay = vtxosResp.vtxos.first.exitDelay;
-    print('[MpcArkWallet] exitDelay: $exitDelay (per-VTXO, vs unilateral=${arkInfo.unilateralExitDelay})');
 
+    // Each input carries its OWN exit_delay — a boarded VTXO keeps the
+    // boarding delay while received/refreshed ones use the unilateral delay,
+    // so a wallet naturally spends a mixed set.
     final vtxoInputs = vtxosResp.vtxos
-        .map((v) {
-          print('[MpcArkWallet] VTXO from server: ${v.txid}:${v.vout} amount=${v.amount} exit_delay=${v.exitDelay}');
-          return {
+        .map((v) => {
               'txid': v.txid,
               'vout': v.vout,
               'amount': v.amount.toInt(),
-            };
-        })
+              'exit_delay': v.exitDelay.toInt(),
+            })
         .toList();
 
     final arkInfoMap = {
@@ -104,7 +101,8 @@ class MpcArkWallet {
       recipientArkAddress: destination,
       amountSats: amountSats,
       changeArkAddress: changeAddr,
-      exitDelay: exitDelay,
+      // Fallback only — every input above carries its own exit_delay.
+      exitDelay: arkInfo.unilateralExitDelay.toInt(),
       arkInfo: arkInfoMap,
     );
 

@@ -58,7 +58,9 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
         _state = _BoardState.done;
         _commitmentTxid = txid;
       });
-    } catch (e) {
+    } catch (e, st) {
+      debugPrint('BOARDING FAILED: $e');
+      debugPrint('$st');
       if (!mounted) return;
       setState(() {
         _state = _BoardState.error;
@@ -413,7 +415,8 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
   }
 
   Widget _buildErrorState(BuildContext context) {
-    return Center(
+    return SingleChildScrollView(
+      padding: const EdgeInsets.symmetric(vertical: 24),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [

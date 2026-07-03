@@ -145,6 +145,17 @@ class WalletStore {
     });
   }
 
+  /// Rewrite the box file, dropping overwritten entries. Hive is an
+  /// append-only log, so a `put` alone leaves the PREVIOUS value readable in
+  /// the file — call this after a write whose old value held secret material
+  /// (e.g. replacing the raw FROST share with its blinded form).
+  Future<void> compact() async {
+    await _lock.synchronized(() async {
+      _ensureInitialized();
+      await _box.compact();
+    });
+  }
+
   Map<String, dynamic>? _validateClientState(dynamic raw) {
     if (raw == null) return null;
 
