@@ -83,6 +83,15 @@ class _PasskeySetupScreenState extends State<PasskeySetupScreen> {
                   ),
                 ),
               ],
+              if (_busy) ...[
+                const SizedBox(height: 24),
+                Text(
+                  'Securing your wallet… one moment.\n'
+                  'Your phone may ask for your fingerprint once more to finish.',
+                  style: GoogleFonts.inter(color: Colors.white70, fontSize: 14),
+                  textAlign: TextAlign.center,
+                ),
+              ],
               const Spacer(),
               ElevatedButton(
                 key: const Key('passkeyCreateBtn'),

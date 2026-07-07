@@ -90,12 +90,17 @@ impl WebauthnServer {
         let mut builder = WebauthnBuilder::new(rp.rp_id, &origin)
             .map_err(|e| format!("WebauthnBuilder::new: {e}"))?
             .rp_name(rp.rp_name);
-        // Android Credential-Manager assertions carry an `android:apk-key-hash:<b64>` origin, not the
-        // https RP origin — allow it explicitly so on-device passkeys validate.
-        if !rp.android_origin.trim().is_empty() {
-            let ao = Url::parse(rp.android_origin)
-                .map_err(|e| format!("invalid WEBAUTH_ANDROID_ORIGIN: {e}"))?;
-            builder = builder.append_allowed_origin(&ao);
+        // Android Credential-Manager assertions carry an `android:apk-key-hash:<b64>`
+        // origin, not the https RP origin. Accept a comma-separated list so debug
+        // and release builds can validate against one server.
+        for origin in rp.android_origin.split(',') {
+            let origin = origin.trim();
+            if origin.is_empty() {
+                continue;
+            }
+            let url = Url::parse(origin)
+                .map_err(|e| format!("invalid WEBAUTH_ANDROID_ORIGIN entry '{origin}': {e}"))?;
+            builder = builder.append_allowed_origin(&url);
         }
         let webauthn = builder
             .build()

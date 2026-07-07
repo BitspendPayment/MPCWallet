@@ -11,3 +11,6 @@ GeneratedPluginRegistrant.java
 key.properties
 **/*.keystore
 **/*.jks
+# Exception: shared debug keystore is committed on purpose (debug-only, not a
+# secret) so all devs/CI share one fingerprint for passkey asset-links.
+!app/debug.keystore

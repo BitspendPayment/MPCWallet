@@ -161,7 +161,7 @@ software-ark: runtime-build ffi-build ffi-android
 		       FCM_SERVICE_ACCOUNT_JSON="$$(cat $${FCM_SA_FILE:-$$HOME/Downloads/vtxos-key.json} 2>/dev/null)" \
 		       WEBAUTH_RP_ID=vtxos.com \
 		       WEBAUTH_RP_ORIGIN=https://vtxos.com \
-		       WEBAUTH_ANDROID_ORIGIN=android:apk-key-hash:u1pNepeObJUpSkSqH964HvFRqbhC_ejQP3GHA3-lreI \
+		       WEBAUTH_ANDROID_ORIGIN=android:apk-key-hash:u1pNepeObJUpSkSqH964HvFRqbhC_ejQP3GHA3-lreI,android:apk-key-hash:Lf1QIwQnlPBYPwDFhloUkYC-0tYAKSpKCQbEiyz118s \
 		       WEBAUTH_TOKEN_SECRET=$${WEBAUTH_TOKEN_SECRET:-6d706377616c6c65742d6465762d746f6b656e2d7365637265742d3332622121}; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
 			--port 7074'

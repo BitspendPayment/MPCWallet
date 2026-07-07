@@ -54,6 +54,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_1_8
     }
 
+    kotlinOptions {
+        // Match the Java target above; Kotlin 2.x fails on a JVM-target mismatch.
+        jvmTarget = JavaVersion.VERSION_1_8.toString()
+    }
+
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.example.ap"
@@ -70,6 +75,14 @@ android {
     }
 
     signingConfigs {
+        debug {
+            // Checked-in shared debug keystore so all devs/CI share one debug
+            // fingerprint for assetlinks.json. Not a secret (debug-only).
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         release {
             if (keystoreProperties['storeFile']) {
                 keyAlias = keystoreProperties['keyAlias']

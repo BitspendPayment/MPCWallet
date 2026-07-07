@@ -453,12 +453,31 @@ class MpcService extends ChangeNotifier {
     } on StateError catch (e) {
       if (!e.toString().contains('/assert/begin')) rethrow;
       await auth.register(userId);
-      seed = await auth.seedSource(userId).deriveSeed();
+      seed = await _deriveSeedAfterRegister(auth, userId);
     }
     await client.gateShare(seed);
     _wirePasskeySources(client, auth, userId);
     notifyListeners();
     debugPrint('Passkey enabled: share PRF-gated + token auth wired');
+  }
+
+  /// Assert a just-registered passkey to derive the seed and mint the session
+  /// token, retrying with backoff while Google Password Manager indexes the new
+  /// credential (an immediate assertion shows "Sign in another way").
+  Future<Uint8List> _deriveSeedAfterRegister(
+      PasskeyAuthenticator auth, String userId) async {
+    const maxAttempts = 4;
+    Object? lastError;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      await Future.delayed(Duration(seconds: 1 + attempt)); // 2s, 3s, 4s, 5s
+      try {
+        return await auth.seedSource(userId).deriveSeed();
+      } catch (e) {
+        lastError = e;
+        debugPrint('post-register assertion attempt $attempt/$maxAttempts failed: $e');
+      }
+    }
+    throw StateError('Passkey created but follow-up sign-in failed: $lastError');
   }
 
   /// Re-attach the passkey seed + session-token sources for an already-gated
