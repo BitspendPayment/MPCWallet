@@ -1,15 +1,13 @@
 /// MPC Wallet Load Tester
 ///
-/// Uses the real MpcClient and TcpHardwareSigner, exactly as the E2E tests
-/// do, to drive concurrent DKG sessions against the live server.
+/// Uses the real MpcClient, exactly as the E2E tests do, to drive concurrent
+/// 2-of-2 DKG sessions against the live server.
 ///
 /// Usage:
 ///   dart run bin/load_tester.dart [options]
 ///
 /// Options:
 ///   --server       gRPC server address  (default: 127.0.0.1:50051)
-///   --signer-host  Signer-server host   (default: 127.0.0.1)
-///   --signer-port  Base TCP port for signer-server instances (default: 9090)
 ///   --sessions     Total number of DKG sessions to run  (default: 10)
 ///   --concurrency  Max sessions in flight simultaneously (default: 5)
 ///   --hive-dir     Directory for Hive storage             (default: /tmp/mpc_load_test_hive)
@@ -18,7 +16,6 @@ import 'dart:io';
 import 'dart:async';
 import 'package:args/args.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:grpc/grpc.dart';
 import 'package:hive/hive.dart';
 
@@ -54,14 +51,6 @@ ArgResults _parseArgs(List<String> argv) {
   final parser = ArgParser()
     ..addOption('server',
         defaultsTo: '127.0.0.1:50051', help: 'gRPC server host:port')
-    ..addOption('signer-host',
-        defaultsTo: '127.0.0.1', help: 'Signer-server host')
-    ..addOption('signer-port',
-        defaultsTo: '9090',
-        help: 'TCP port for signer-server')
-    ..addFlag('multi-signer',
-        defaultsTo: false,
-        help: 'If true, each session uses port = base + index (default: false)')
     ..addOption('sessions',
         defaultsTo: '10', help: 'Total DKG sessions to run')
     ..addOption('concurrency',
@@ -83,20 +72,10 @@ ArgResults _parseArgs(List<String> argv) {
 // Pre-flight checks
 // ---------------------------------------------------------------------------
 
-Future<void> _preflightCheck(String serverAddr, String signerHost, int signerPort) async {
+Future<void> _preflightCheck(String serverAddr) async {
   _info('Performing pre-flight connectivity checks…');
-  
-  // 1. Check Signer
-  try {
-    final s = await Socket.connect(signerHost, signerPort, timeout: const Duration(seconds: 2));
-    await s.close();
-    _ok('Signer reachable at $signerHost:$signerPort');
-  } catch (e) {
-    _err('Cannot reach Signer at $signerHost:$signerPort: $e');
-    exit(1);
-  }
 
-  // 2. Check gRPC Server
+  // Check gRPC Server
   final parts = serverAddr.split(':');
   final host = parts[0];
   final port = int.parse(parts.length > 1 ? parts[1] : '50051');
@@ -117,8 +96,6 @@ Future<void> _preflightCheck(String serverAddr, String signerHost, int signerPor
 Future<void> runSession({
   required int sessionId,
   required String serverAddress,
-  required String signerHost,
-  required int signerPort,
 }) async {
   final parts = serverAddress.split(':');
   final grpcHost = parts[0];
@@ -130,16 +107,9 @@ Future<void> runSession({
     options: const ChannelOptions(credentials: ChannelCredentials.insecure()),
   );
 
-  final signer = TcpHardwareSigner(host: signerHost, port: signerPort);
-  
-  final id = '#${sessionId.toString().padLeft(2, '0')}';
-  _info('[$id ▶]  Connecting to signer at $signerHost:$signerPort…');
-  await signer.connect();
-
   try {
     final client = MpcClient(
       channel,
-      hardwareSigner: signer,
       storageId: 'load_test_session_$sessionId',
     );
 
@@ -148,9 +118,6 @@ Future<void> runSession({
       onTimeout: () => throw TimeoutException('doDkg timed out after 3 minutes'),
     );
   } finally {
-    try {
-      await signer.disconnect().timeout(const Duration(seconds: 5));
-    } catch (_) {}
     try {
       await channel.terminate();
     } catch (_) {}
@@ -212,9 +179,6 @@ Future<void> main(List<String> argv) async {
   final args = _parseArgs(argv);
 
   final serverAddress = args['server'] as String;
-  final signerHost = args['signer-host'] as String;
-  final signerBasePort = int.parse(args['signer-port'] as String);
-  final multiSigner = args['multi-signer'] as bool;
   final sessions = int.parse(args['sessions'] as String);
   final concurrency = int.parse(args['concurrency'] as String);
   final hiveDir = args['hive-dir'] as String;
@@ -230,12 +194,10 @@ Future<void> main(List<String> argv) async {
 
   _header('MPC Wallet Dart Load Tester');
   _info('Server      : $serverAddress');
-  _info('Signer host : $signerHost  (base port $signerBasePort)');
   _info('Sessions    : $sessions  (concurrency $concurrency)');
-  _info('Multi-signer: $multiSigner');
   _sep();
 
-  await _preflightCheck(serverAddress, signerHost, signerBasePort);
+  await _preflightCheck(serverAddress);
   _sep();
 
   final sem = _Semaphore(concurrency);
@@ -243,8 +205,6 @@ Future<void> main(List<String> argv) async {
   final overallStart = DateTime.now();
 
   for (int i = 0; i < sessions; i++) {
-    final signerPort = multiSigner ? (signerBasePort + i) : signerBasePort;
-
     await sem.acquire();
 
     final sessionId = i;
@@ -256,8 +216,6 @@ Future<void> main(List<String> argv) async {
         await runSession(
           sessionId: sessionId,
           serverAddress: serverAddress,
-          signerHost: signerHost,
-          signerPort: signerPort,
         );
         final ms = DateTime.now().difference(start).inMilliseconds;
         _ok('[$id ✓]  Done in ${ms}ms');

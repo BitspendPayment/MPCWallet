@@ -13,14 +13,8 @@ import 'package:app_core/client.dart';
 import 'package:app_core/services_registry.dart';
 import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:app_core/enclave/manifest.dart' as manifest;
-import 'package:app_core/hardware_signer.dart';
-import 'package:app_core/software_signer.dart';
 
-import '../usb/usb_hardware_signer.dart';
 import '../passkey/passkey_authenticator.dart';
-
-/// Which backend signs for the owner share.
-enum SignerKind { software, hardware }
 
 class MpcService extends ChangeNotifier {
   MpcClient? _client;
@@ -32,11 +26,6 @@ class MpcService extends ChangeNotifier {
 
   String? _storageId;
 
-  /// Persistent hardware signer when [_signerKind] == hardware. For software
-  /// we don't keep a persistent reference — the signer is ephemeral, created
-  /// only for the duration of an operation that needs the owner share.
-  HardwareSignerInterface? _hardwareSigner;
-
   /// Passkey authenticator, set once a passkey is provisioned at onboarding.
   /// Supplies the PRF blinding seed (to reconstruct the gated share) and the
   /// session token (auth). Null ⇒ no passkey; the wallet stays un-gated on the
@@ -45,11 +34,6 @@ class MpcService extends ChangeNotifier {
 
   /// Whether a passkey is provisioned and wired (share PRF-gated, token auth).
   bool get passkeyEnabled => _passkeyAuth != null;
-
-  /// Which signer backend is in use. Persisted so cold starts know whether
-  /// to reconnect USB (hardware) or create an ephemeral software signer.
-  SignerKind _signerKind = SignerKind.software;
-  SignerKind get signerKind => _signerKind;
 
   MpcService();
 
@@ -95,29 +79,6 @@ class MpcService extends ChangeNotifier {
 
   void policyUpdated() {
     notifyListeners();
-  }
-
-  /// Reconnect the hardware USB signer. Only meaningful for hardware mode —
-  /// the software signer is ephemeral and attached per-operation.
-  Future<void> reconnectHardwareSigner() async {
-    if (_signerKind != SignerKind.hardware) {
-      throw StateError('reconnectHardwareSigner is only valid for hardware signer');
-    }
-    try {
-      await _hardwareSigner?.disconnect();
-    } catch (_) {}
-    _hardwareSigner = UsbHardwareSigner();
-    await _hardwareSigner!.connect();
-    _client?.hardwareSigner = _hardwareSigner!;
-  }
-
-  /// Select the signer backend. For the software signer a fresh in-memory
-  /// signer is created per-operation (DKG), so no key material sits idle.
-  Future<void> setSignerKind(SignerKind kind) async {
-    _signerKind = kind;
-    if (_identityBox != null && _identityBox!.isOpen) {
-      await _identityBox!.put('signerKind', kind.name);
-    }
   }
 
   String? get receiveAddress {
@@ -233,15 +194,10 @@ class MpcService extends ChangeNotifier {
       // No-op if the key isn't present.
       await _identityBox!.delete('network');
 
-      // Restore signer kind. Default to software (hardware signer is opt-in
-      // for users who own the device).
-      final kindStr =
-          _identityBox!.get('signerKind', defaultValue: SignerKind.software.name)
-              as String;
-      _signerKind = SignerKind.values.firstWhere(
-        (k) => k.name == kindStr,
-        orElse: () => SignerKind.software,
-      );
+      // The hardware-signer option was removed; the wallet is now always the
+      // in-process software signer (2-of-2 with the cosigner). Drop any
+      // persisted 'signerKind' key from prior versions. No-op if absent.
+      await _identityBox!.delete('signerKind');
 
       _isInitialized = true;
     } catch (e) {
@@ -254,12 +210,6 @@ class MpcService extends ChangeNotifier {
   @override
   Future<void> dispose() async {
     _vtxoPollTimer?.cancel();
-    try {
-      await _hardwareSigner?.disconnect();
-      _hardwareSigner = null;
-    } catch (e) {
-      debugPrint("MPC Service: Error disconnecting hardware signer: $e");
-    }
     try {
       await _identityBox?.close();
       _identityBox = null;
@@ -324,17 +274,6 @@ class MpcService extends ChangeNotifier {
     await _identityBox!.put('serverHost', host);
   }
 
-  /// For hardware mode: return a live USB signer. For software mode we never
-  /// return a signer directly — the software signer is created per-operation.
-  Future<HardwareSignerInterface> _createHardwareSignerOrThrow() async {
-    if (_signerKind != SignerKind.hardware) {
-      throw StateError(
-        '_createHardwareSignerOrThrow called for software signer',
-      );
-    }
-    return UsbHardwareSigner();
-  }
-
   /// Whether the current host requires attestation.
   bool get _requiresAttestation {
     return !(_host == '127.0.0.1' ||
@@ -347,7 +286,6 @@ class MpcService extends ChangeNotifier {
   /// Local hosts use plain REST. Remote hosts MUST use attested transport —
   /// if attestation fails, the error propagates (no silent fallback).
   Future<MpcClient> _createMpcClient({
-    HardwareSignerInterface? hardwareSigner,
     String? storageId,
   }) async {
     if (_requiresAttestation) {
@@ -359,22 +297,20 @@ class MpcService extends ChangeNotifier {
       return MpcClient.attested(
         _baseUrl,
         expectedPcr0: _expectedPcr0!,
-        hardwareSigner: hardwareSigner,
         storageId: storageId,
       );
     }
     return MpcClient.rest(
       _baseUrl,
-      hardwareSigner: hardwareSigner,
       storageId: storageId,
     );
   }
 
-  /// Run initial DKG. For software mode a fresh in-memory signer is created
-  /// for this call, DKG runs, and the signer is wiped afterwards so the share
-  /// doesn't linger in RAM. Spending is gated afterwards via [enablePasskey]
-  /// (the passkey-setup onboarding step). There is no cloud backup — the
-  /// share lives only on this device.
+  /// Run initial DKG. This is a pure 2-of-2 {wallet, cosigner} DKG: the wallet
+  /// generates its own dealer secret in-process (see [MpcClient.doDkg]) — no
+  /// external signer is attached. Spending is gated afterwards via
+  /// [enablePasskey] (the passkey-setup onboarding step). There is no cloud
+  /// backup — the share lives only on this device.
   Future<void> doDkg() async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
 
@@ -384,43 +320,23 @@ class MpcService extends ChangeNotifier {
 
     final storageId = _storageId ?? 'mpc_wallet_state_default';
 
-    HardwareSignerInterface signer;
-    SoftwareSigner? softwareSigner;
-    if (_signerKind == SignerKind.hardware) {
-      signer = await _createHardwareSignerOrThrow();
-      _hardwareSigner = signer;
-    } else {
-      softwareSigner = SoftwareSigner();
-      signer = softwareSigner;
-    }
-    await signer.connect();
+    _client = await _createMpcClient(storageId: storageId);
+    final serverInfo = await _fetchServerInfoWithRetry();
+    _wallet = MpcBitcoinWallet(_client!,
+        networkName: serverInfo.bitcoinNetwork, storageId: storageId);
+    _wallet!.onSyncComplete = _onWalletSyncComplete;
 
-    try {
-      _client = await _createMpcClient(
-        hardwareSigner: signer,
-        storageId: storageId,
-      );
-      final serverInfo = await _fetchServerInfoWithRetry();
-      _wallet = MpcBitcoinWallet(_client!,
-          networkName: serverInfo.bitcoinNetwork, storageId: storageId);
-      _wallet!.onSyncComplete = _onWalletSyncComplete;
+    // wallet.init() restores persisted state or, on a fresh wallet, runs the
+    // 2-of-2 DKG (MpcBitcoinWallet.initializeNewWallet -> client.doDkg()).
+    await _wallet!.init();
+    _balance = await _wallet!.getBalance();
 
-      await _wallet!.init();
-      _balance = await _wallet!.getBalance();
+    _dkgComplete = true;
+    _isConnected = true;
+    await _identityBox!.put('dkgComplete', true);
 
-      _dkgComplete = true;
-      _isConnected = true;
-      await _identityBox!.put('dkgComplete', true);
-
-      await initArk();
-      notifyListeners();
-    } finally {
-      // Drop the software signer so the share doesn't sit in RAM after DKG.
-      if (softwareSigner != null) {
-        await softwareSigner.wipe();
-        _client?.hardwareSigner = null;
-      }
-    }
+    await initArk();
+    notifyListeners();
   }
 
   /// Provision a passkey for this wallet and gate the FROST share on its PRF
@@ -525,30 +441,13 @@ class MpcService extends ChangeNotifier {
   /// Restores a previously completed session without re-running DKG.
   /// Creates gRPC channel + MpcClient + MpcBitcoinWallet, then calls
   /// wallet.init() which restores keys from Hive persistence.
-  ///
-  /// No software signer is attached here — normal sends / Ark ops don't
-  /// need it.
   Future<void> restoreSession() async {
     if (!_isInitialized) throw StateError("MPC Service not initialized");
     if (!_dkgComplete) throw StateError("DKG not completed. Cannot restore.");
 
     final storageId = _storageId ?? 'mpc_wallet_state_default';
 
-    // Hardware signer stays persistent (USB is stateful). Software signer is
-    // deliberately not connected here.
-    if (_signerKind == SignerKind.hardware && _hardwareSigner == null) {
-      _hardwareSigner = await _createHardwareSignerOrThrow();
-      try {
-        await _hardwareSigner!.connect();
-      } catch (e) {
-        debugPrint("Hardware signer not available: $e");
-      }
-    }
-
-    _client = await _createMpcClient(
-      hardwareSigner: _hardwareSigner, // null for software mode — that's fine
-      storageId: storageId,
-    );
+    _client = await _createMpcClient(storageId: storageId);
     final serverInfo = await _fetchServerInfoWithRetry();
     _wallet = MpcBitcoinWallet(_client!,
         networkName: serverInfo.bitcoinNetwork, storageId: storageId);
@@ -578,12 +477,8 @@ class MpcService extends ChangeNotifier {
     try {
       // REST client cleanup handled by MpcClient
     } catch (_) {}
-    try {
-      await _hardwareSigner?.disconnect();
-    } catch (_) {}
     _client = null;
     _wallet = null;
-    _hardwareSigner = null;
 
     try {
       await restoreSession();

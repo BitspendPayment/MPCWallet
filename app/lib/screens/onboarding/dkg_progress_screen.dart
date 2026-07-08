@@ -29,22 +29,9 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
 
   void _startDkg() async {
     final mpcService = context.read<MpcService>();
-    final extras = GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
-    final signerKindStr = extras['signerKind'] as String? ?? 'software';
-    final signerKind = signerKindStr == 'hardware'
-        ? SignerKind.hardware
-        : SignerKind.software;
     // Wait for Init
     if (!mpcService.isInitialized) {
       await _addLog('Client init failed or slow. Retrying...');
-    }
-
-    // Record which signer backend is in use.
-    try {
-      await mpcService.setSignerKind(signerKind);
-    } catch (e) {
-      await _addLog('Failed to set signer: $e');
-      return;
     }
 
     await _addLog('Connected to server.');

@@ -58,7 +58,6 @@ class WelcomeScreen extends StatelessWidget {
                   // Spending is gated by a passkey (created after DKG), not a PIN.
                   context.push('/onboarding/server', extra: {
                     'isRestore': false,
-                    'signerKind': 'software',
                   });
                 },
                 child: const Text('Create MPC Wallet'),

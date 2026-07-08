@@ -4,7 +4,6 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:app_core/client.dart';
 import 'package:app_core/bitcoin.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -161,10 +160,9 @@ void main() {
     } catch (_) {}
   });
 
-  MpcClient createClient(HardwareSignerInterface signer, {String? storageId}) {
+  MpcClient createClient({String? storageId}) {
     return MpcClient.rest(
       'http://127.0.0.1:$serverPort',
-      hardwareSigner: signer,
       storageId: storageId,
     );
   }
@@ -172,9 +170,7 @@ void main() {
   test('Full E2E Regtest Flow', () async {
     // 1. MPC Setup
     Log.step(1, 'MPC Setup');
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client1 = createClient(signer);
+    final client1 = createClient();
 
     await client1.doDkg();
     Log.ok('DKG complete.');
@@ -253,61 +249,6 @@ void main() {
 
     final res = await btc.getRawTransaction(tx1Id);
     expect(res['confirmations'], 1);
-
-    // 6. Restore wallet (simulate new phone)
-    Log.step(5, 'Restoring Wallet via re-DKG');
-    final originalAddress = address;
-    final client2 = createClient(signer, storageId: 'restore_e2e');
-    await client2.doRestore();
-    Log.ok('Restore complete.');
-
-    final wallet2 = MpcBitcoinWallet(client2, networkName: 'regtest');
-    await wallet2.init();
-    final restoredAddress = wallet2.toAddress();
-    Log.info('Restored address: $restoredAddress');
-    expect(restoredAddress, equals(originalAddress),
-        reason: "Restored wallet must have the same Bitcoin address");
-
-    // 7. Sync restored wallet
-    await Future.delayed(Duration(seconds: 2));
-    Log.step(6, 'Syncing Restored Wallet');
-    int syncRetries = 30;
-    while (syncRetries > 0) {
-      try {
-        await wallet2.sync();
-      } catch (e) {
-        Log.warn('Sync error (retrying): $e');
-        syncRetries--;
-        if (syncRetries > 0) await Future.delayed(Duration(seconds: 2));
-        continue;
-      }
-      final utxos = await wallet2.store.getUtxos();
-      if (utxos.isNotEmpty) break;
-      Log.info('Waiting for UTXO… ($syncRetries left)');
-      syncRetries--;
-      if (syncRetries > 0) await Future.delayed(Duration(seconds: 2));
-    }
-    final restoredUtxos = await wallet2.store.getUtxos();
-    expect(restoredUtxos.length, greaterThanOrEqualTo(1),
-        reason: "Restored wallet should see existing UTXOs");
-    final restoredBalance =
-        restoredUtxos.fold(BigInt.zero, (s, u) => s + u.utxo.value);
-    Log.ok('Restored balance: $restoredBalance sats');
-
-    // 8. Sign with restored wallet
-    Log.step(7, 'Signing Transaction with Restored Wallet');
-    final dest4 = await btc.getNewAddress();
-    final unsignedTx3 = await wallet2.createTransaction(
-        destination: dest4, amount: BigInt.from(10000), feeRate: 1);
-    final hexTx3 = await wallet2.signTransaction(unsignedTx3);
-    final tx3Id = await wallet2.broadcast(hexTx3);
-    Log.ok('Broadcast · txid: $tx3Id');
-    await btc.generateToAddress(1, minerAddr);
-
-    await Future.delayed(Duration(seconds: 2));
-    final res2 = await btc.getRawTransaction(tx3Id);
-    expect(res2['confirmations'], 1,
-        reason: "Post-restore transaction should be confirmed");
 
     Log.separator();
     Log.ok('All tests passed.');

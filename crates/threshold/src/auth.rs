@@ -2,7 +2,7 @@
 //!
 //! Provides [`AuthSigner`] for signing authentication messages and
 //! [`verify_schnorr_signature`] for standalone verification.
-//! This module requires the `std` feature (hwsigner does not need it).
+//! This module requires the `std` feature (no_std targets do not need it).
 
 use crate::error::Error;
 use crate::hash::{compute_challenge, tagged_hash};

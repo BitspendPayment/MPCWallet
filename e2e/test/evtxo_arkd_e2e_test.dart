@@ -32,7 +32,7 @@ import 'package:test/test.dart';
 ///      → ark_txid returned, Carol credited.
 ///    - over-limit / bad-arg: the cosigner withholds its share → throws at sign.
 ///
-/// Prereqs (mirrors `make e2e-ark`): bitcoind + arkd + signer-server(9090) +
+/// Prereqs (mirrors `make e2e-ark`): bitcoind + arkd +
 /// cosigner.wasm/cosigner-runtime/ffi/contracts built. The contract wasm is handed to
 /// the cosigner at eVTXO creation.
 

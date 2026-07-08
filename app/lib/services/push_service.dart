@@ -258,7 +258,6 @@ Future<void> _runBackgroundDelegate({Duration? timeout}) async {
   }
   final client = MpcClient.rest(
     _baseUrlFor(host),
-    hardwareSigner: null,
     storageId: storageId,
   );
   try {

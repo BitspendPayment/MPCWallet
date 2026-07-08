@@ -33,36 +33,3 @@ class SpendingPolicy {
     );
   }
 }
-
-class RecoveryPolicy {
-  final String id;
-  final threshold.KeyPackage keyPackage;
-  final threshold.PublicKeyPackage publicKeyPackage;
-
-  RecoveryPolicy({
-    required this.id,
-    required this.keyPackage,
-    required this.publicKeyPackage,
-  });
-
-  Map<String, dynamic> toJson() {
-    return {
-      'id': id,
-      'keyPackage': keyPackage.toJson(),
-      'publicKeyPackage': publicKeyPackage.toJson(),
-    };
-  }
-
-  static RecoveryPolicy fromJson(Map<String, dynamic> json) {
-    final keyPackageJson =
-        Map<String, dynamic>.from(json['keyPackage'] as Map);
-    final publicKeyPackageJson =
-        Map<String, dynamic>.from(json['publicKeyPackage'] as Map);
-    return RecoveryPolicy(
-      id: json['id'],
-      keyPackage: threshold.KeyPackage.fromJson(keyPackageJson),
-      publicKeyPackage: threshold.PublicKeyPackage.fromJson(
-          publicKeyPackageJson),
-    );
-  }
-}

@@ -342,7 +342,7 @@ void main() {
 
   // Server is the source of truth for `bitcoin_network`; the client fetches
   // it via this RPC at the moment a wallet is constructed (see
-  // `MpcService.restoreSession` / `doDkg` / `doRestore`). Verifies the wire
+  // `MpcService.restoreSession` / `doDkg`). Verifies the wire
   // shape: unauthenticated, no DKG required, returns whatever the runtime
   // was started with.
   test('GetServerInfo returns the configured bitcoin_network', () async {

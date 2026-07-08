@@ -27,7 +27,6 @@ import 'package:path/path.dart' as p;
 import 'package:convert/convert.dart';
 
 import 'package:app_core/persistence/wallet_store.dart';
-import 'package:app_core/hardware_signer.dart';
 
 class MpcClient {
   final WalletApi _stub;
@@ -37,10 +36,6 @@ class MpcClient {
   // User ID for this client instance (persisted or derived after DKG)
   List<int>? _userId;
   String? get userId => _userId == null ? null : hex.encode(_userId!);
-
-  // Recovey Id
-  List<int>? _recoveryId;
-  List<int>? get recoveryId => _recoveryId;
 
   /// The FROST group x-only public key (64 hex chars).
   /// This is the owner key for Ark VTXOs — NOT the same as userId.
@@ -100,30 +95,6 @@ class MpcClient {
 
   SpendingPolicy? _normalPolicy;
 
-  RecoveryPolicy? _recoveryPolicy;
-
-  // Recovery-identity signer (hardware or software).
-  //
-  // Nullable: normal sends + Ark ops don't touch the recovery share, so a
-  // session that isn't mid-DKG or mid-policy-op doesn't need one attached.
-  // The MpcService layer attaches a signer only for the four operations
-  // that actually need it (DKG, restore, update policy, delete policy) and
-  // detaches immediately after, keeping the recovery share out of RAM the
-  // rest of the time.
-  HardwareSignerInterface? _hardwareSigner;
-  set hardwareSigner(HardwareSignerInterface? s) => _hardwareSigner = s;
-  HardwareSignerInterface? get hardwareSigner => _hardwareSigner;
-
-  HardwareSignerInterface _requireSigner(String op) {
-    final s = _hardwareSigner;
-    if (s == null) {
-      throw StateError(
-        '$op requires a signer to be attached',
-      );
-    }
-    return s;
-  }
-
   /// Creates a client that manages two shares (identities).
   ///
   /// [channel] - gRPC channel to the MPC server
@@ -133,9 +104,6 @@ class MpcClient {
   /// [encryptionCipher] - Optional cipher for encrypted storage.
   ///                      Use HiveAesCipher for AES-256 encryption.
   ///                      When null, data is stored unencrypted.
-  /// [hardwareSigner] - Hardware signer for recovery identity.
-  ///                    The recovery identity's secret stays on the
-  ///                    hardware signer and DKG/signing is delegated.
   /// Create an MpcClient using gRPC transport (HTTP/2).
   MpcClient(
     grpc_base.ClientChannel channel, {
@@ -143,11 +111,9 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
   })  : _stub = GrpcWalletApi(channel),
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner {
+        _minSigners = minSigners {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -161,12 +127,10 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
     http.Client? httpClient,
   })  : _stub = RestWalletApi(baseUrl, httpClient: httpClient),
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner {
+        _minSigners = minSigners {
     _restBaseForEvents = baseUrl;
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
@@ -194,7 +158,6 @@ class MpcClient {
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
     int cacheTtlSecs = 60,
   }) async {
     final api = await AttestedWalletApi.create(baseUrl,
@@ -203,7 +166,6 @@ class MpcClient {
       stub: api,
       maxSigners: maxSigners,
       minSigners: minSigners,
-      hardwareSigner: hardwareSigner,
       storageId: storageId,
       encryptionCipher: encryptionCipher,
     );
@@ -215,13 +177,11 @@ class MpcClient {
     required WalletApi stub,
     required int maxSigners,
     required int minSigners,
-    HardwareSignerInterface? hardwareSigner,
     String? storageId,
     HiveCipher? encryptionCipher,
   })  : _stub = stub,
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner {
+        _minSigners = minSigners {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -313,11 +273,6 @@ class MpcClient {
           Map<String, dynamic>.from(state['spendingPolicies']));
     }
 
-    if (state['recoveryPolicy'] != null) {
-      _recoveryPolicy = RecoveryPolicy.fromJson(
-          Map<String, dynamic>.from(state['recoveryPolicy']));
-    }
-
     return true;
   }
 
@@ -339,15 +294,11 @@ class MpcClient {
       state['spendingPolicies'] = _normalPolicy!.toJson();
     }
     state['shareBlinded'] = _shareBlinded;
-    if (_recoveryPolicy != null) {
-      state['recoveryPolicy'] = _recoveryPolicy!.toJson();
-    }
     await _store.saveClientState(state);
   }
 
   // Getters for testing
   threshold.KeyPackage? get keyPackage1 => _normalPolicy?.keyPackage;
-  threshold.KeyPackage? get keyPackage2 => _recoveryPolicy?.keyPackage;
   threshold.PublicKeyPackage? get publicKey => _normalPolicy?.publicKeyPackage;
 
   // --- SERVER METADATA ---
@@ -420,134 +371,6 @@ class MpcClient {
 
     // The wallet's DKG share becomes `_normalPolicy` (blinded under the seed when gating is on).
     await _finalizeWalletShare(walletKeyPkg, pubKeyPkg);
-
-    await _saveState();
-  }
-
-  /// Restore: re-derive the wallet's signing share using the same DKG secrets
-  /// stored on the hardware signer and server. The group public key stays the
-  /// same so the Bitcoin address (and funds) are preserved.
-  Future<void> doRestore() async {
-    await _store.init();
-    final signer = _requireSigner('doRestore');
-
-    // 1. Hardware signer reuses stored DKG secret (same VK, same identifier)
-    final restoreInit = await signer.restoreInit(_maxSigners, _minSigners);
-    final hwVerifyingKey = restoreInit.verifyingKeyBytes;
-    final hwIdentifier = restoreInit.identifier;
-
-    // 2. Derive wallet identifier (deterministic — same as original DKG)
-    final walletIdInput = Uint8List.fromList(
-      [...'wallet:'.codeUnits, ...hwVerifyingKey],
-    );
-    final walletIdentifier = threshold.Identifier.derive(walletIdInput);
-
-    // Use HW VK as temporary session key during restore
-    final tempUserId = Uint8List.fromList(hwVerifyingKey);
-
-    // 3. Send Round1 packages to server.
-    final hwR1Json = jsonEncode(restoreInit.round1Package.toJson());
-
-    final reqWallet = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = walletIdentifier.serialize()
-      ..round1Package = ''; // passive receiver
-
-    final reqHw = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json;
-
-    final step1Futures = await Future.wait(
-        [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
-    final step1Resp = step1Futures[0];
-
-    // 4. Trigger Step 2 on server (server computes round2)
-    await _stub.dKGStep2(DKGStep2Request()..userId = tempUserId);
-
-    // 5. Parse dealer R1 packages (for HW signer and wallet)
-    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
-    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
-
-    step1Resp.round1Packages.forEach((k, v) {
-      if (v.isEmpty) return;
-      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
-      dealerR1ForWallet[id] = pkg;
-    });
-
-    // 6. HW signer computes shares for server + wallet
-    final sharesFromHw = await signer.dkgRound2(
-      dealerR1ForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 7. Send Round2 packages to server
-    final reqStep3Hw = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
-
-    final reqStep3Wallet = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar());
-
-    final step3Futures = await Future.wait(
-        [_stub.dKGStep3(reqStep3Wallet), _stub.dKGStep3(reqStep3Hw)]);
-
-    // 8. Wallet receives shares from dealers (HW signer + server)
-    final sharesForWallet = _parseShares(step3Futures[0].round2PackagesForMe);
-    final sharesForHw = _parseShares(step3Futures[1].round2PackagesForMe);
-
-    // 9. Wallet finalizes as passive receiver
-    final allParticipantIds = <threshold.Identifier>[
-      ...dealerR1ForWallet.keys,
-      walletIdentifier,
-    ];
-    final (walletKeyPkg, pubKeyPkg) = threshold.dkgPart3Receive(
-      walletIdentifier,
-      dealerR1ForWallet,
-      sharesForWallet,
-      _minSigners,
-      _maxSigners,
-      allParticipantIds,
-    );
-
-    // 10. HW signer finalizes (stores updated key internally)
-    final dkgResult = await signer.dkgRound3(
-      dealerR1ForHw,
-      sharesForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 11. `_finalizeWalletShare` (below) sets the wallet share + `_userId` + auth state.
-    _recoveryId = hwVerifyingKey.toList();
-
-
-    _onchainSecret ??= threshold.newSecretKey();
-
-    // 12. Store policies (blinds the share under the seed when gating is on).
-    await _finalizeWalletShare(walletKeyPkg, pubKeyPkg);
-
-    final recoveryVerifyingShare =
-        pubKeyPkg.verifyingShares[dkgResult.identifier];
-    if (recoveryVerifyingShare == null) {
-      throw StateError("Recovery identifier not found in public key package");
-    }
-
-    final recoveryKeyPkg = threshold.KeyPackage(
-      dkgResult.identifier,
-      BigInt.zero,
-      recoveryVerifyingShare,
-      pubKeyPkg.verifyingKey,
-      _minSigners,
-    );
-
-    _recoveryPolicy = RecoveryPolicy(
-        id: "recovery_policy_id",
-        keyPackage: recoveryKeyPkg,
-        publicKeyPackage: pubKeyPkg);
 
     await _saveState();
   }

@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:test/test.dart';
 import 'package:app_core/client.dart';
 import 'package:app_core/bitcoin.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/regtest_helper.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -32,19 +31,11 @@ void main() {
 
   test('Multi-User Stress Test: Concurrent DKGs and Sequential Transactions',
       () async {
-    // 1. Setup two hardware signers (both connect to the same signer-server;
-    //    each TCP connection gets its own independent SignerState).
-    Log.step(1, 'Connecting hardware signers');
-    final signerA = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    final signerB = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await Future.wait([signerA.connect(), signerB.connect()]);
-    Log.ok('Both signers connected.');
-
     const serverUrl = 'http://127.0.0.1:7074';
     final clientA =
-        MpcClient.rest(serverUrl, hardwareSigner: signerA, storageId: 'user_a_stress');
+        MpcClient.rest(serverUrl, storageId: 'user_a_stress');
     final clientB =
-        MpcClient.rest(serverUrl, hardwareSigner: signerB, storageId: 'user_b_stress');
+        MpcClient.rest(serverUrl, storageId: 'user_b_stress');
 
     Log.step(2, 'Concurrent DKG — User A & User B');
     await Future.wait([
@@ -108,7 +99,6 @@ void main() {
 
     Log.separator();
     Log.ok('Multi-User Stress Test complete.');
-    await Future.wait([signerA.disconnect(), signerB.disconnect()]);
   }, timeout: Timeout(Duration(minutes: 10)));
 }
 

@@ -112,7 +112,6 @@ The MPC Wallet has working cryptography (FROST 2-of-3, Ark integration, MutinyNe
 ### 27. No structured logging
 ### 28. No metrics (Prometheus/OpenTelemetry)
 ### 29. Log level not configurable at runtime
-### 30. Hardware signer disconnection has no retry
 
 ---
 

@@ -4,11 +4,11 @@
 ///   1. Generate funder key: cd e2e && dart run bin/gen_funder_key.dart
 ///   2. Export: MUTINYNET_FUNDER_KEY=<hex>
 ///   3. Fund the funder's tb1p... address via https://faucet.mutinynet.com
-///   4. Build: make ffi-build cosigner-build runtime-build signer-build
+///   4. Build: make ffi-build cosigner-build runtime-build
 ///   5. Run:  make e2e-mutinynet
 ///
 /// The test:
-///   - Starts signer-server + MPC server pointed at mutinynet.com Electrum
+///   - Starts the MPC server pointed at mutinynet.com Electrum
 ///   - Runs DKG to create an MPC wallet
 ///   - Funder sends 100k sats to the MPC wallet
 ///   - Waits for MutinyNet confirmation (~30s)
@@ -23,7 +23,6 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:app_core/client.dart';
 import 'package:app_core/bitcoin.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -141,9 +140,7 @@ void main() {
   test('MutinyNet: DKG + Fund + Send', () async {
     // 1. MPC Setup
     Log.step(1, 'MPC Setup (DKG)');
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: signer);
+    final client = MpcClient.rest('http://127.0.0.1:$serverPort');
     await client.doDkg();
     Log.ok('DKG complete.');
 
