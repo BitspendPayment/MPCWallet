@@ -39,10 +39,9 @@ class ArkScreen extends StatelessWidget {
             ? _buildUnavailable(context)
             : Column(
                 children: [
-                  if (mpcService.needsDelegateAction)
-                    _buildDelegateBanner(context, mpcService),
                   const SizedBox(height: 24),
-                  _buildArkBalanceCard(context, arkBalance, balanceUsd),
+                  _buildArkBalanceCard(
+                      context, mpcService, arkBalance, balanceUsd),
                   const SizedBox(height: 32),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24.0),
@@ -87,8 +86,7 @@ class ArkScreen extends StatelessWidget {
                             itemCount: arkTxs.length,
                             itemBuilder: (context, index) {
                               final tx = arkTxs[arkTxs.length - 1 - index];
-                              return _buildTransactionItem(
-                                  context, tx, mpcService);
+                              return _buildTransactionItem(context, tx);
                             },
                           ),
                   ),
@@ -96,54 +94,6 @@ class ArkScreen extends StatelessWidget {
               ),
       ),
       bottomNavigationBar: _buildBottomNav(context),
-    );
-  }
-
-  /// Shown when a received VTXO needs a fresh delegate but signing it would
-  /// pop the passkey prompt — so we ask instead of surprising the user. The
-  /// button tap IS the consent: `delegateNow()` runs settleDelegate and the
-  /// biometric sheet appears.
-  Widget _buildDelegateBanner(BuildContext context, MpcService mpcService) {
-    return Container(
-      key: const Key('arkDelegateBanner'),
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-      decoration: BoxDecoration(
-        color: Colors.orange.withOpacity(0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: Colors.orange.withOpacity(0.4)),
-      ),
-      child: Row(
-        children: [
-          const Icon(Icons.shield_outlined, color: Colors.orangeAccent),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Text(
-              'New funds need auto-settle protection',
-              style: GoogleFonts.inter(color: Colors.white, fontSize: 13),
-            ),
-          ),
-          TextButton(
-            key: const Key('arkDelegateBtn'),
-            onPressed: () async {
-              final messenger = ScaffoldMessenger.of(context);
-              try {
-                await mpcService.delegateNow();
-                messenger.showSnackBar(const SnackBar(
-                    content: Text('Auto-settle protection active')));
-              } catch (e) {
-                messenger.showSnackBar(
-                    SnackBar(content: Text('Delegate failed: $e')));
-              }
-            },
-            child: Text(
-              'Delegate',
-              style: GoogleFonts.inter(
-                  color: Colors.orangeAccent, fontWeight: FontWeight.bold),
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -176,10 +126,26 @@ class ArkScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildArkBalanceCard(
-      BuildContext context, BigInt balance, double usdValue) {
+  Widget _buildArkBalanceCard(BuildContext context, MpcService mpcService,
+      BigInt balance, double usdValue) {
     final balanceFormatter = NumberFormat("#,##0", "en_US");
     final usdFormatter = NumberFormat.currency(symbol: "\$");
+
+    // Wallet-wide auto-renew state. Auto-settle consolidates every VTXO into one
+    // renewed VTXO, so the soonest-expiring VTXO is the whole wallet's next
+    // renewal deadline (min expiresAt, skipping not-yet-backfilled 0s).
+    final hasFunds = balance > BigInt.zero;
+    final delegated = mpcService.hasActiveDelegate;
+    int? soonestExp;
+    VtxoInfo? soonest;
+    for (final v in mpcService.vtxos) {
+      final e = v.expiresAt.toInt();
+      if (e <= 0) continue;
+      if (soonestExp == null || e < soonestExp) {
+        soonestExp = e;
+        soonest = v;
+      }
+    }
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 24),
@@ -218,8 +184,7 @@ class ArkScreen extends StatelessWidget {
                 ),
               ),
               Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: Colors.blue.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(12),
@@ -253,6 +218,12 @@ class ArkScreen extends StatelessWidget {
               fontWeight: FontWeight.w500,
             ),
           ),
+          if (hasFunds) ...[
+            const SizedBox(height: 12),
+            delegated
+                ? _buildRenewalLine(context, mpcService, soonest)
+                : _buildEnableAutoRenew(context, mpcService),
+          ],
           const SizedBox(height: 24),
           Row(
             children: [
@@ -295,6 +266,106 @@ class ArkScreen extends StatelessWidget {
     );
   }
 
+  /// Wallet-wide auto-renew status line inside the balance card. When an expiry
+  /// is known it shows a countdown and taps through to the refresh/expiry sheet;
+  /// while the fresh expiry is still being backfilled it just reads "active".
+  Widget _buildRenewalLine(
+      BuildContext context, MpcService mpcService, VtxoInfo? soonest) {
+    String label;
+    VoidCallback? onTap;
+    if (soonest == null) {
+      label = 'Auto-renew active';
+    } else {
+      final s = soonest;
+      final serverMargin =
+          mpcService.arkInfo?.autoSettleSafetyMarginSecs.toInt() ?? 0;
+      final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final secsUntil = (s.expiresAt.toInt() - serverMargin) - nowSecs;
+      label = secsUntil <= 0
+          ? 'Auto-renews soon'
+          : 'Auto-renews in ${_formatTimeUntil(secsUntil)}';
+      onTap = () => _showDelegateInfo(context, s, mpcService);
+    }
+    return InkWell(
+      onTap: onTap,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.autorenew,
+              size: 14, color: Colors.tealAccent.withOpacity(0.8)),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: GoogleFonts.inter(
+              color: Colors.white54,
+              fontSize: 13,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Shown when the balance isn't auto-renewing — never delegated, or a
+  /// receive/send invalidated the delegate and it needs the user's signature.
+  /// The tap delegates now (pops the passkey), covering every un-delegated case.
+  Widget _buildEnableAutoRenew(BuildContext context, MpcService mpcService) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          "Your funds aren't auto-renewing yet",
+          style: GoogleFonts.inter(color: Colors.white38, fontSize: 12),
+        ),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: double.infinity,
+          child: OutlinedButton.icon(
+            key: const Key('arkEnableAutoRenewBtn'),
+            onPressed: () async {
+              final messenger = ScaffoldMessenger.of(context);
+              try {
+                await mpcService.delegateNow();
+                messenger.showSnackBar(const SnackBar(
+                    content: Text('Auto-settle protection active')));
+              } catch (e) {
+                messenger.showSnackBar(
+                    SnackBar(content: Text('Delegate failed: $e')));
+              }
+            },
+            icon: Icon(Icons.shield_outlined,
+                size: 18, color: Colors.tealAccent.withOpacity(0.9)),
+            label: Text(
+              'Enable auto-renew',
+              style: GoogleFonts.inter(
+                color: Colors.tealAccent.withOpacity(0.9),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              side: BorderSide(color: Colors.tealAccent.withOpacity(0.5)),
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// Coarse "time until" label for the auto-renew countdown: days, else hours,
+  /// else minutes, else "soon". Recomputed on rebuild (10s VTXO poll), so no
+  /// live timer is needed.
+  String _formatTimeUntil(int seconds) {
+    if (seconds >= 86400) return '~${seconds ~/ 86400}d';
+    if (seconds >= 3600) return '~${seconds ~/ 3600}h';
+    if (seconds >= 60) return '~${seconds ~/ 60}m';
+    return 'soon';
+  }
+
   Widget _buildActionButton(
     BuildContext context, {
     Key? widgetKey,
@@ -335,8 +406,7 @@ class ArkScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildTransactionItem(
-      BuildContext context, ArkTransactionSummary tx, MpcService mpcService) {
+  Widget _buildTransactionItem(BuildContext context, ArkTransactionSummary tx) {
     final amount = tx.amountSats.toInt();
     final isIncoming = amount >= 0;
     final absAmount = amount.abs();
@@ -365,99 +435,61 @@ class ArkScreen extends StatelessWidget {
             DateTime.fromMillisecondsSinceEpoch(tx.timestamp.toInt() * 1000))
         : '';
 
-    // A still-present VTXO sharing this txid means the received output is live
-    // and, when the server holds a delegate, queued for automatic refresh.
-    // Matched on txid only, which is ambiguous when a txid has multiple outputs
-    // to us. Keying on txid+vout needs vout plumbed through the tx summary —
-    // see https://github.com/BitspendPayment/MPCWallet/issues/39.
-    VtxoInfo? vtxo;
-    for (final v in mpcService.vtxos) {
-      if (v.txid == tx.txid) {
-        vtxo = v;
-        break;
-      }
-    }
-    final delegated =
-        isIncoming && vtxo != null && mpcService.hasActiveDelegate;
-
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: const Color(0xFF1E1E1E),
         borderRadius: BorderRadius.circular(16),
       ),
-      clipBehavior: Clip.antiAlias,
-      child: InkWell(
-        onTap: delegated
-            ? () => _showDelegateInfo(context, vtxo!, mpcService)
-            : null,
-        child: Padding(
-          padding: const EdgeInsets.all(16),
-          child: Row(
-            children: [
-              Container(
-                width: 40,
-                height: 40,
-                decoration: BoxDecoration(
-                  color: isIncoming
-                      ? Colors.green.withOpacity(0.1)
-                      : Colors.white10,
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
-                  color: isIncoming ? Colors.greenAccent : Colors.white,
-                  size: 20,
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Flexible(
-                          child: Text(
-                            title,
-                            overflow: TextOverflow.ellipsis,
-                            style: GoogleFonts.inter(
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                              fontSize: 14,
-                            ),
-                          ),
-                        ),
-                        if (delegated) ...[
-                          const SizedBox(width: 6),
-                          Icon(
-                            Icons.autorenew,
-                            size: 14,
-                            color: Colors.tealAccent.withOpacity(0.8),
-                          ),
-                        ],
-                      ],
-                    ),
-                    Text(
-                      date,
-                      style: GoogleFonts.inter(
-                        color: Colors.white38,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              Text(
-                '${isIncoming ? '+' : '-'}${formatter.format(absAmount)} Sats',
-                style: GoogleFonts.inter(
-                  fontWeight: FontWeight.bold,
-                  color: isIncoming ? Colors.greenAccent : Colors.white,
-                ),
-              ),
-            ],
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color:
+                  isIncoming ? Colors.green.withOpacity(0.1) : Colors.white10,
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isIncoming ? Icons.arrow_downward : Icons.arrow_upward,
+              color: isIncoming ? Colors.greenAccent : Colors.white,
+              size: 20,
+            ),
           ),
-        ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.inter(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white,
+                    fontSize: 14,
+                  ),
+                ),
+                Text(
+                  date,
+                  style: GoogleFonts.inter(
+                    color: Colors.white38,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Text(
+            '${isIncoming ? '+' : '-'}${formatter.format(absAmount)} Sats',
+            style: GoogleFonts.inter(
+              fontWeight: FontWeight.bold,
+              color: isIncoming ? Colors.greenAccent : Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -476,8 +508,9 @@ class ArkScreen extends StatelessWidget {
     final expiresAt = vtxo.expiresAt.toInt();
     final hasExpiry = expiresAt > 0;
     final fmt = DateFormat.yMMMd().add_jm();
-    final expiryStr =
-        hasExpiry ? fmt.format(DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000)) : null;
+    final expiryStr = hasExpiry
+        ? fmt.format(DateTime.fromMillisecondsSinceEpoch(expiresAt * 1000))
+        : null;
     final refreshAt = expiresAt - serverMargin;
     final nowSecs = DateTime.now().millisecondsSinceEpoch ~/ 1000;
     final hasRefreshEstimate = hasExpiry && serverMargin > 0;
@@ -516,8 +549,9 @@ class ArkScreen extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'This received VTXO is delegated to the server, which refreshes '
-              'it automatically before it expires — no action needed.',
+              'Your Ark balance is delegated to the server, which automatically '
+              'refreshes all your funds together into a single VTXO before they '
+              'expire — no action needed.',
               style: GoogleFonts.inter(
                 color: Colors.white60,
                 fontSize: 13,
