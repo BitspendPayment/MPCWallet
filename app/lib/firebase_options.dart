@@ -27,8 +27,8 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyDr3wlKcGDo90lzqCctChmbrMwuwFemNh0',
-    appId: '1:575541915148:android:5fbaa581de7d4686378829',
+    apiKey: 'AIzaSyCAP2ECcyasENtweohMkkQHhrf5Sn0bZQA',
+    appId: '1:575541915148:android:03d0cade16cd0393378829',
     messagingSenderId: '575541915148',
     projectId: 'vtxos-7afb3',
     storageBucket: 'vtxos-7afb3.firebasestorage.app',
