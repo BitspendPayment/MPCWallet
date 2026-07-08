@@ -27,7 +27,10 @@ Future<Process> startRuntime(int port, Directory dataDir) async {
       'BITCOIN_RPC_PASSWORD': '123',
       'ASP_URL': 'http://127.0.0.1:7070',
       'BITCOIN_NETWORK': 'regtest',
-      'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
+      // Huge margin -> auto-settle threshold clamps to 0 (always crossed),
+      // independent of ARKD_VTXO_TREE_EXPIRY, so stored intents fire on the
+      // next 60s tick.
+      'AUTO_SETTLE_SAFETY_MARGIN_SECS': '9999999999',
       'HOME': dataDir.path,
     },
   );

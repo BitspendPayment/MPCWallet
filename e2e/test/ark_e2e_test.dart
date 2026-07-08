@@ -126,11 +126,13 @@ Future<Process> startCosignerRuntime(
     // expectation isn't dependent on the cosigner-runtime default.
     'BITCOIN_NETWORK': 'regtest',
     // Force the auto-settle threshold to be "always crossed" for any
-    // realistic VTXO_TREE_EXPIRY. The tick task fires when
-    // `now > expires_at - safety_margin`; with 1 hour margin and the
-    // docker-compose's 512s expiry that's always true, so the next
-    // 60-second tick after the intent is stored will drive the batch.
-    'AUTO_SETTLE_SAFETY_MARGIN_SECS': '3600',
+    // VTXO_TREE_EXPIRY. The tick task fires when
+    // `now > expires_at - safety_margin`; the margin must therefore exceed
+    // the VTXO's remaining lifetime. docker-compose sets ARKD_VTXO_TREE_EXPIRY
+    // to ~4.3h, so a margin this large drives `expires_at - margin` below 0
+    // (clamped to 0) -> always crossed -> the next 60-second tick after the
+    // intent is stored drives the batch.
+    'AUTO_SETTLE_SAFETY_MARGIN_SECS': '9999999999',
     'HOME': dataDir.path,
     ...extraEnv,
   };
@@ -786,10 +788,10 @@ void main() {
   // Auto-settle round-trip: register a delegate intent with store_only=true,
   // then verify the cosigner's tick task drives it to completion on its own.
   //
-  // Requires `ARKD_VTXO_TREE_EXPIRY` short enough for the tick to cross the
-  // threshold before the test times out (the docker-compose has it at 60s).
-  // The cosigner's `AUTO_SETTLE_SAFETY_MARGIN_SECS` defaults to 1800, which
-  // means any intent fires on the next tick — no need to override in tests.
+  // Setup forces `AUTO_SETTLE_SAFETY_MARGIN_SECS` far larger than
+  // `ARKD_VTXO_TREE_EXPIRY`, so the tick threshold clamps to 0 (always
+  // crossed) and any stored intent fires on the next 60-second tick,
+  // independent of the arkd expiry configuration.
   test('Ark: auto-settle drives stored delegate intent without client', () async {
     print('1. Alice DKG');
     final alice = createClient(storageId: "alice");
@@ -856,7 +858,7 @@ void main() {
 
     print(
         '5. Wait up to 2 minutes for the cosigner tick task to drive the intent');
-    // Setup forces AUTO_SETTLE_SAFETY_MARGIN_SECS=3600, so the tick threshold
+    // Setup forces a huge AUTO_SETTLE_SAFETY_MARGIN_SECS, so the tick threshold
     // is "always crossed" regardless of VTXO_TREE_EXPIRY. Tick interval is
     // 60s with the first tick skipped on boot, so worst-case ~60s before
     // submission + ASP batch latency. Mining keeps the scheduler moving.
@@ -1002,8 +1004,8 @@ void main() {
   //
   // Pre-conditions covered:
   //   * OAuth round-trip happens (cosigner sets Authorization: Bearer <mock>)
-  //   * payload is data-only with `type=vtxo_received`
-  //   * Android `priority: HIGH` + APNS background headers present
+  //   * payload is a visible notification ("Funds received") + `type=vtxo_received` data
+  //   * Android `priority: HIGH` + APNS alert headers present
   //   * `user_id` field in data matches the recipient
   test('FCM push fires on VTXO receive with correct payload shape', () async {
     // Use a port for Bob's signer that isn't already taken by other tests in
@@ -1094,33 +1096,38 @@ void main() {
         reason:
             'cosigner should push to the FCM token Bob registered, not Alice or some default');
 
-    // 9. Payload shape — must be data-only, type=vtxo_received, with Bob's
-    // user_id (no notification body for silent background wake).
+    // 9. Payload shape — the vtxo-received push carries a data payload
+    // (type=vtxo_received + Bob's user_id) the app reads to scope its refresh.
     final data = p.data;
     expect(data, isNotNull, reason: 'message.data must be present');
     expect(data!['type'], equals('vtxo_received'),
-        reason: 'data.type identifies what woke the app');
+        reason: 'data.type identifies what the notification is about');
     expect(data['user_id'], isNotEmpty,
         reason: 'data.user_id lets the app scope its refresh to the right user');
 
-    // 10. Android + APNS routing headers — these are what make the device
-    // wake silently in the background.
+    // 10. Visible notification block + Android/APNS routing. The vtxo-received
+    // push is a user-visible banner ("Funds received" / "Tap to activate
+    // auto-settle protection"), so it carries a `notification` block and an
+    // APNS `alert` (not a silent content-available background wake).
+    const pushTitle = 'Funds received';
+    const pushBody = 'Tap to activate auto-settle protection';
     final message = p.body['message'] as Map<String, dynamic>;
-    expect(message['notification'], isNull,
-        reason:
-            'must be data-only — a `notification` field would force a visible banner and could change OS routing');
+    final notification = message['notification'] as Map<String, dynamic>?;
+    expect(notification, isNotNull,
+        reason: 'vtxo-received is a visible banner, so a notification block is present');
+    expect(notification!['title'], equals(pushTitle));
+    expect(notification['body'], equals(pushBody));
     expect((message['android'] as Map?)?['priority'], equals('HIGH'),
-        reason: 'Android needs HIGH priority to wake from idle');
+        reason: 'Android needs HIGH priority to deliver promptly');
     final apns = message['apns'] as Map<String, dynamic>?;
     expect(apns, isNotNull);
-    expect((apns!['headers'] as Map?)?['apns-priority'], equals('5'),
-        reason: 'APNS requires <=5 for content-available silent pushes');
-    expect((apns['headers'] as Map?)?['apns-push-type'], equals('background'),
-        reason: 'apns-push-type=background is required by iOS 13+');
-    expect(
-        ((apns['payload'] as Map?)?['aps'] as Map?)?['content-available'],
-        equals(1),
-        reason: 'content-available=1 is the iOS background-wake flag');
+    expect((apns!['headers'] as Map?)?['apns-priority'], equals('10'),
+        reason: 'apns-priority=10 for an immediate visible alert');
+    final alert = ((apns['payload'] as Map?)?['aps'] as Map?)?['alert']
+        as Map<String, dynamic>?;
+    expect(alert, isNotNull, reason: 'iOS shows the alert title/body');
+    expect(alert!['title'], equals(pushTitle));
+    expect(alert['body'], equals(pushBody));
 
     print('FCM push test complete!');
   }, timeout: Timeout(Duration(minutes: 4)));
