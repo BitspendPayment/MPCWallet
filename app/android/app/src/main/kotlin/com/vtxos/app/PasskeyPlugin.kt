@@ -1,4 +1,4 @@
-package com.example.ap
+package com.vtxos.app
 
 import android.app.Activity
 import android.os.Build

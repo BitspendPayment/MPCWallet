@@ -45,7 +45,7 @@ if (flutterVersionName == null) {
 }
 
 android {
-    namespace = "com.example.ap"
+    namespace = "com.vtxos.app"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
