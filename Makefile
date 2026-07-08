@@ -46,8 +46,9 @@ SESSIONS          ?= 10
 CONCURRENCY       ?= 5
 SERVER            ?= 127.0.0.1:7074
 
-# Firebase App Distribution. Read from app/android/app/google-services.json.
-FIREBASE_APP_ID  ?= 1:575541915148:android:5fbaa581de7d4686378829
+# Firebase App Distribution. Read from app/android/app/google-services.json
+# (the com.vtxos.app client's mobilesdk_app_id).
+FIREBASE_APP_ID  ?= 1:575541915148:android:03d0cade16cd0393378829
 FIREBASE_PROJECT ?= vtxos-7afb3
 TESTERS_GROUP    ?= internal
 RELEASE_NOTES    ?= Internal build
