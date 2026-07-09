@@ -1429,4 +1429,279 @@ void main() {
         '8. Cold-spawn auto-settle proven: ${originalTxid.substring(0, 12)}…');
     print('   → ${post.vtxos.first.txid.substring(0, 12)}…');
   }, timeout: Timeout(Duration(minutes: 6)));
+
+  // Delegate/auto-settle stress + regression. Ping-pongs Ark VTXOs between two
+  // BOARDED wallets for N cycles (DELEGATE_STRESS_CYCLES, default 10): each half a
+  // wallet sends (FROST-signs), the receiver delegates (FROST-signs), and the
+  // cosigner auto-settles it server-side to one VTXO; the next half spends that
+  // just-auto-settled VTXO. Asserts 4*N client signatures, 2*N server-side
+  // auto-settles, and per-cycle balance conservation.
+  //
+  // Regression: boarding gives each wallet a boarding-delay VTXO, so the first
+  // consolidated VTXO mixes boarding + unilateral delays. Spending it used to fail
+  // (INVALID_PSBT_INPUT) because route_tick_auto_settle guessed the consolidated
+  // VTXO's exit_delay from the first input; fixed by recording the settle's real
+  // unilateral_exit_delay. Spends auto-settled VTXOs every cycle → fails pre-fix.
+  test('Ark: delegate/auto-settle stress — many send/receive cycles', () async {
+    final cycles =
+        int.tryParse(Platform.environment['DELEGATE_STRESS_CYCLES'] ?? '') ?? 10;
+    final sendSats =
+        int.tryParse(Platform.environment['DELEGATE_STRESS_SEND_SATS'] ?? '') ??
+            50000;
+    print('=== delegate stress: $cycles cycles, send=$sendSats sats/leg ===');
+
+    // Two boarded wallets (sequential DKG — mirrors the other Ark tests).
+    final alice = createClient(storageId: 'stress_alice');
+    await alice.doDkg();
+    final bob = createClient(storageId: 'stress_bob');
+    await bob.doDkg();
+    final aliceArk = await alice.getArkAddress();
+    final bobArk = await bob.getArkAddress();
+
+    // Client-signing counters (the whole point of the test).
+    int totalSends = 0;
+    int totalDelegates = 0;
+    int totalAutoSettles = 0;
+
+    // One mining timer for the WHOLE test, GATED by `mineNow`. ASP batches are
+    // block-driven, so settle + auto-settle need blocks flowing — but an
+    // off-chain SEND must reference a stable VTXO checkpoint, and background
+    // re-batching mid-send makes arkd reject the PSBT (INVALID_PSBT_INPUT). So we
+    // mine only during settle/auto-settle and hold the chain quiet during sends.
+    final minerAddr = await btc.getNewAddress();
+    bool stillMining = true;
+    bool mineNow = false;
+    final miningTimer = Timer.periodic(Duration(seconds: 3), (t) async {
+      if (!stillMining) {
+        t.cancel();
+        return;
+      }
+      if (!mineNow) return;
+      try {
+        await btc.generateToAddress(1, minerAddr);
+      } catch (_) {}
+    });
+
+    try {
+      // ── Fund BOTH wallets by boarding 0.005 BTC then settling. Boarding is
+      // essential to the regression: it gives each wallet a boarding-delay VTXO,
+      // so the first consolidated VTXO mixes boarding + unilateral delays. ──
+      Future<int> fund(MpcClient c, String label) async {
+        final addr = await c.getBoardingAddress();
+        await btc.sendToAddress(addr, 0.005);
+        await btc.generateToAddress(1, minerAddr);
+        final utxos = await pollBoardingUtxos(addr, 500000);
+        expect(utxos, isNotEmpty,
+            reason: '$label boarding UTXO should index within 30s');
+        mineNow = true; // settle needs the ASP scheduler forming batches
+        final commitment = await c.settle(boardingUtxos: utxos);
+        mineNow = false;
+        expect(commitment, isNotEmpty,
+            reason: '$label settle should return a commitment txid');
+        int bal = 0;
+        for (int i = 0; i < 15; i++) {
+          bal = (await c.listVtxos()).totalBalance.toInt();
+          if (bal > 0) break;
+          await Future.delayed(Duration(seconds: 1));
+        }
+        expect(bal, greaterThan(0), reason: '$label should hold a settled VTXO');
+        print('   funded $label: balance=$bal');
+        return bal;
+      }
+
+      final a0 = await fund(alice, 'alice');
+      final b0 = await fund(bob, 'bob');
+      // Ping-pong is conservative: end of each cycle alice==a0, bob==b0. Both must
+      // stay solvent for `sendSats` every leg for any N.
+      expect(a0, greaterThan(sendSats * 2));
+      expect(b0, greaterThan(sendSats));
+
+      // Poll until every VTXO of `c` is confirmed (expires_at>0). Caller owns the
+      // mining gate (OFF before a send, ON before a delegate). Soft-warns on timeout.
+      Future<void> confirmVtxos(MpcClient c, String label) async {
+        for (int i = 0; i < 60; i++) {
+          final r = await c.listVtxos();
+          if (r.vtxos.isNotEmpty &&
+              r.vtxos.every((v) => v.expiresAt.toInt() > 0)) return;
+          await Future.delayed(Duration(seconds: 1));
+        }
+        print('   [$label] warning: not all VTXOs confirmed (expires_at) after 60s');
+      }
+
+      // Sender FROST-signs an off-chain send of `sendSats` to `recvAddr` (non-empty
+      // ark_txid only if the sig verified), asserts funds moved, polls the receiver.
+      Future<void> sendAndReceive(MpcClient sender, String senderLabel,
+          MpcClient receiver, String receiverLabel, String recvAddr) async {
+        // Hold the chain quiet: a send must reference a stable VTXO checkpoint,
+        // and background mining would move it out from under the built PSBT.
+        mineNow = false;
+        await confirmVtxos(sender, senderLabel);
+        await Future.delayed(Duration(seconds: 2)); // let any in-flight block land
+        final senderPre = (await sender.listVtxos()).totalBalance.toInt();
+        final recvPre = (await receiver.listVtxos()).totalBalance.toInt();
+
+        // Build → FROST-sign → submit, with retry: mining elsewhere can leave the
+        // ASP's checkpoint briefly ahead of listVtxos; re-reading + rebuilding
+        // converges now that the chain is quiet.
+        String arkTxid = '';
+        for (int attempt = 1; attempt <= 6; attempt++) {
+          final w = MpcArkWallet(sender);
+          final unsigned = await w.createTransaction(
+              destination: recvAddr, amountSats: sendSats);
+          expect(unsigned.sighashes, isNotEmpty,
+              reason: 'a send must produce sighashes for the client to FROST-sign');
+          final signedTx = await w.signTransaction(unsigned); // client FROST-signs
+          try {
+            arkTxid = await w.submit(signedTx);
+            break;
+          } catch (e) {
+            if (attempt < 6 && e.toString().contains('INVALID_PSBT_INPUT')) {
+              print(
+                  '   [$senderLabel] send attempt $attempt: stale checkpoint, retrying…');
+              await Future.delayed(Duration(seconds: 3));
+              continue;
+            }
+            rethrow;
+          }
+        }
+        expect(arkTxid, isNotEmpty,
+            reason:
+                '$senderLabel: a send only returns a txid if the FROST sig verified + ASP accepted it');
+        totalSends++;
+
+        final senderAfter = await sender.listVtxos();
+        expect(senderAfter.totalBalance.toInt(), equals(senderPre - sendSats),
+            reason: '$senderLabel balance must drop by exactly the sent amount');
+        expect(senderAfter.hasActiveDelegate, isFalse,
+            reason: 'a send must invalidate any active delegate');
+
+        int recvBal = recvPre;
+        for (int i = 0; i < 15; i++) {
+          recvBal = (await receiver.listVtxos()).totalBalance.toInt();
+          if (recvBal == recvPre + sendSats) break;
+          await Future.delayed(Duration(seconds: 1));
+        }
+        expect(recvBal, equals(recvPre + sendSats),
+            reason: '$receiverLabel should receive exactly $sendSats sats');
+
+        final receives = (await receiver.listArkTransactions())
+            .transactions
+            .where((e) => e.txType == 'receive')
+            .toList();
+        expect(receives, isNotEmpty,
+            reason: '$receiverLabel must record a receive history entry');
+        expect(receives.last.amountSats.toInt(), equals(sendSats));
+      }
+
+      // Receiver stores a delegate (FROST-signs), then waits (3-min deadline) for the
+      // cosigner to auto-settle it with NO client RPC → one VTXO, fresh txid, balance
+      // preserved, delegate cleared. Returns the consolidated balance.
+      Future<int> delegateAndAutoSettle(MpcClient c, String label) async {
+        // Mining is safe here (no send follows) and is needed both to confirm the
+        // just-received VTXO and to drive the auto-settle batch.
+        mineNow = true;
+        await confirmVtxos(c, label);
+        final before = await c.listVtxos();
+        final originalTxids = before.vtxos.map((v) => v.txid).toSet();
+        final originalBalance = before.totalBalance.toInt();
+
+        final delegated = await c.settleDelegate(storeOnly: true); // client signs
+        expect(delegated, isEmpty,
+            reason: '$label DELEGATED returns no commitment txid');
+        expect((await c.listVtxos()).hasActiveDelegate, isTrue,
+            reason: '$label cosigner should report an active delegate');
+        totalDelegates++;
+
+        String? newTxid;
+        int newBalance = originalBalance;
+        bool stillActive = true;
+        int vtxoCount = before.vtxos.length;
+        final deadline = DateTime.now().add(Duration(minutes: 3));
+        while (DateTime.now().isBefore(deadline)) {
+          await Future.delayed(Duration(seconds: 5));
+          try {
+            final r = await c.listVtxos();
+            stillActive = r.hasActiveDelegate;
+            vtxoCount = r.vtxos.length;
+            if (r.vtxos.isNotEmpty) {
+              newTxid = r.vtxos.first.txid;
+              newBalance = r.totalBalance.toInt();
+            }
+            if (vtxoCount == 1 &&
+                newTxid != null &&
+                !originalTxids.contains(newTxid) &&
+                !stillActive) {
+              break;
+            }
+          } catch (e) {
+            print('   [$label] listVtxos retry: $e');
+          }
+        }
+        // Finalize the freshly consolidated VTXO: keep mining until it's confirmed
+        // (expires_at>0) so the NEXT half can spend it with a stable checkpoint.
+        if (newTxid != null && !originalTxids.contains(newTxid) && !stillActive) {
+          for (int i = 0; i < 40; i++) {
+            final r = await c.listVtxos();
+            if (r.vtxos.isNotEmpty &&
+                r.vtxos.every((v) => v.expiresAt.toInt() > 0)) break;
+            await Future.delayed(Duration(seconds: 1));
+          }
+        }
+        mineNow = false; // hold the chain quiet before the next send
+        expect(newTxid, isNotNull,
+            reason: '$label auto-settle produced no VTXO update within 3min');
+        expect(originalTxids.contains(newTxid), isFalse,
+            reason: '$label auto-settle must replace the VTXO(s) with a fresh one');
+        expect(vtxoCount, equals(1),
+            reason: '$label auto-settle must consolidate to a single VTXO');
+        expect(newBalance, equals(originalBalance),
+            reason: '$label auto-settle must preserve the balance');
+        expect(stillActive, isFalse,
+            reason: '$label cosigner must clear the delegate after settling');
+        totalAutoSettles++;
+        return newBalance;
+      }
+
+      // ── ping-pong: Alice ⇄ Bob, `cycles` cycles ──
+      // Each half the receiver holds 2 VTXOs (its prior + the received one),
+      // delegates, and the cosigner auto-settles → 1 VTXO. The NEXT half spends
+      // that just-auto-settled VTXO (the regression path).
+      for (int cycle = 1; cycle <= cycles; cycle++) {
+        // Half 1: Alice → Bob, then Bob delegates + auto-settles.
+        await sendAndReceive(alice, 'alice', bob, 'bob', bobArk);
+        final bobBal = await delegateAndAutoSettle(bob, 'bob');
+        expect(bobBal, equals(b0 + sendSats),
+            reason: 'after A→B + auto-settle, Bob should hold B0 + sendSats');
+
+        // Half 2: Bob → Alice (spends Bob's auto-settled VTXO), then Alice
+        // delegates + auto-settles.
+        await sendAndReceive(bob, 'bob', alice, 'alice', aliceArk);
+        final aliceBal = await delegateAndAutoSettle(alice, 'alice');
+        expect(aliceBal, equals(a0),
+            reason: 'after B→A + auto-settle, Alice should be back to A0');
+
+        // Per-cycle invariant: balances return to their starting values.
+        expect((await alice.listVtxos()).totalBalance.toInt(), equals(a0));
+        expect((await bob.listVtxos()).totalBalance.toInt(), equals(b0));
+        print('cycle $cycle/$cycles ok — sends=$totalSends '
+            'delegates=$totalDelegates autoSettles=$totalAutoSettles');
+      }
+
+      // ── client-signing proof ──
+      expect(totalSends, equals(2 * cycles));
+      expect(totalDelegates, equals(2 * cycles));
+      expect(totalSends + totalDelegates, equals(4 * cycles),
+          reason:
+              'client FROST-signed 4*cycles times (2 sends + 2 delegates per cycle)');
+      expect(totalAutoSettles, equals(2 * cycles),
+          reason:
+              'cosigner auto-settled 2*cycles stored delegates with no client RPC');
+      print('=== delegate stress complete: $cycles cycles, '
+          '${totalSends + totalDelegates} client signatures, '
+          '$totalAutoSettles server-side auto-settles ===');
+    } finally {
+      stillMining = false;
+      miningTimer.cancel();
+    }
+  }, timeout: Timeout(Duration(minutes: 60)));
 }

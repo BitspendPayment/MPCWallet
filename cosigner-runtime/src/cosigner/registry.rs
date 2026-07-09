@@ -1494,17 +1494,18 @@ async fn route_tick_auto_settle(
         Ok(ActorResponse::SettleSubmitted {
             commitment_txid,
             vtxo_outpoint,
+            exit_delay,
         }) => {
             {
                 let mut st = state.lock();
                 st.guest_delegate_threshold = None;
-                // The delegate settle consolidated this actor's VTXOs into one refreshed VTXO. A
-                // cold-spawned actor has NO cached ASP info, so the indexer VTXO-stream notification is
-                // skipped — update the host projection directly from the settle result (balance is
-                // preserved by the refresh; exit delay carries over from the consolidated inputs).
+                // A cold-spawned actor skips the vtxo-stream, so update the host projection
+                // directly from the settle result. exit_delay comes from the settle (the
+                // unilateral_exit_delay the output was built with) — guessing it from the inputs
+                // (a boarding input carries boarding_exit_delay) re-derives a wrong scriptPubKey
+                // and the VTXO becomes unspendable (INVALID_PSBT_INPUT).
                 if let Some((txid, vout)) = vtxo_outpoint {
                     let amount: u64 = st.vtxos.iter().map(|e| e.amount).sum();
-                    let exit_delay = st.vtxos.first().map(|e| e.exit_delay).unwrap_or(0);
                     let expires_at = st.vtxos.iter().map(|e| e.expires_at).max().unwrap_or(0);
                     st.vtxos.clear();
                     st.vtxos.push(crate::cosigner::state::VtxoEntry {

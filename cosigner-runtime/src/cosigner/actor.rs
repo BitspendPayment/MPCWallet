@@ -900,6 +900,13 @@ impl CosignerActor {
             Ok(id) => id,
             Err(e) => return ActorResponse::Error(format!("RegisterIntent: {e}")),
         };
+        // The settled output uses the ASP's unilateral_exit_delay; capture it so the host
+        // records the right exit_delay on the consolidated VTXO (a wrong one re-derives a
+        // bad scriptPubKey → unspendable).
+        let settled_exit_delay = match asp.get_info().await {
+            Ok(i) => i.unilateral_exit_delay as u32,
+            Err(e) => return ActorResponse::Error(format!("GetInfo (exit_delay): {e}")),
+        };
         let mut stream = match asp.get_event_stream(topics).await {
             Ok(s) => s,
             Err(e) => return ActorResponse::Error(format!("GetEventStream: {e}")),
@@ -990,6 +997,7 @@ impl CosignerActor {
                         Some((commitment_txid, vtxo_outpoint)) => ActorResponse::SettleSubmitted {
                             commitment_txid,
                             vtxo_outpoint,
+                            exit_delay: settled_exit_delay,
                         },
                         None => ActorResponse::Error("no delegate session at finalize".into()),
                     };

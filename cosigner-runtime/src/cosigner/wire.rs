@@ -391,11 +391,13 @@ pub enum ActorResponse {
         cosigner_pk_hex: String,
         sig_map: Vec<(String, String)>,
     },
-    /// Reply to [`GuestCommand::SettleDelegate`] — the finalized batch commitment txid and
-    /// the settled VTXO outpoint `(txid, vout)` if one was produced.
+    /// Reply to [`GuestCommand::SettleDelegate`] — the finalized commitment txid, the settled
+    /// VTXO outpoint if produced, and `exit_delay` (the ASP's `unilateral_exit_delay` the output
+    /// was built with) so the host records the correct value on the consolidated VTXO entry.
     SettleSubmitted {
         commitment_txid: String,
         vtxo_outpoint: Option<(String, u32)>,
+        exit_delay: u32,
     },
     /// Reply to [`GuestCommand::SendVtxoStep1`] — sighashes the client must FROST-sign.
     SendVtxoSighashes { messages_to_sign: Vec<Vec<u8>> },
