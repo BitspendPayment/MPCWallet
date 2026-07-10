@@ -77,6 +77,38 @@ class MpcService extends ChangeNotifier {
   bool _arkAvailable = false;
   bool get arkAvailable => _arkAvailable;
 
+  /// User-forced offline mode (persisted). When true the wallet stays on-chain
+  /// only regardless of ASP reachability. [offlineMode] is the effective state:
+  /// forced OR the ASP is unreachable.
+  bool _offlineModeForced = false;
+  bool get offlineModeForced => _offlineModeForced;
+
+  /// On-chain-only mode: the Ark ASP is unavailable (auto-detected) or the user
+  /// forced it. In this mode the UI hides Ark + Services and only Bitcoin
+  /// (receive / balance / on-chain send) is usable.
+  bool get offlineMode => _offlineModeForced || !_arkAvailable;
+
+  /// Toggle user-forced offline mode. Persisted so it survives cold starts.
+  /// Turning it OFF kicks an immediate ASP re-probe so Ark comes back promptly;
+  /// turning it ON drops Ark polling/state right away.
+  Future<void> setOfflineMode(bool forced) async {
+    if (_offlineModeForced == forced) return;
+    _offlineModeForced = forced;
+    if (_identityBox != null && _identityBox!.isOpen) {
+      await _identityBox!.put('offlineMode', forced);
+    }
+    if (forced) {
+      _vtxoPollTimer?.cancel();
+      _arkWallet = null;
+      _arkAvailable = false;
+      notifyListeners();
+    } else {
+      notifyListeners();
+      // Re-probe the ASP; initArk restores Ark state + polling on success.
+      await initArk();
+    }
+  }
+
   void policyUpdated() {
     notifyListeners();
   }
@@ -198,6 +230,11 @@ class MpcService extends ChangeNotifier {
       // in-process software signer (2-of-2 with the cosigner). Drop any
       // persisted 'signerKind' key from prior versions. No-op if absent.
       await _identityBox!.delete('signerKind');
+
+      // User-forced offline mode (on-chain only). Defaults to false; when true
+      // the wallet stays on-chain only even if the ASP is reachable.
+      _offlineModeForced =
+          _identityBox!.get('offlineMode', defaultValue: false) as bool;
 
       _isInitialized = true;
     } catch (e) {
@@ -505,6 +542,15 @@ class MpcService extends ChangeNotifier {
 
   Future<void> initArk() async {
     if (_client == null) return;
+    // User forced on-chain-only: don't touch the ASP at all. The un-toggle path
+    // (setOfflineMode(false) -> initArk) restarts polling.
+    if (_offlineModeForced) {
+      _arkWallet = null;
+      _arkAvailable = false;
+      _vtxoPollTimer?.cancel();
+      notifyListeners();
+      return;
+    }
     try {
       _arkInfo = await _client!.getArkInfo();
       _arkAddress = await _client!.getArkAddress();
@@ -514,10 +560,11 @@ class MpcService extends ChangeNotifier {
       await refreshVtxos();
       _startVtxoPolling();
     } catch (e) {
-      debugPrint("Ark init failed (ASP may not be configured): $e");
+      debugPrint("Ark init failed (ASP unreachable — offline mode): $e");
       _arkWallet = null;
       _arkAvailable = false;
-      _vtxoPollTimer?.cancel();
+      // Keep polling so the ASP is re-probed and Ark auto-recovers when it returns.
+      _startVtxoPolling();
     }
     notifyListeners();
   }
@@ -555,19 +602,24 @@ class MpcService extends ChangeNotifier {
   /// delegate flow fired.
   bool get hasActiveDelegate => _serverHasActiveDelegate;
 
-  Future<void> refreshVtxos() async {
-    if (_client == null) return;
+  /// Refresh VTXO balance/state. Returns true if the ASP call succeeded — the
+  /// poll loop uses this to detect an ASP outage and flip into offline mode.
+  Future<bool> refreshVtxos() async {
+    if (_client == null) return false;
+    bool ok = false;
     try {
       final resp = await _client!.listVtxos();
       _vtxos = resp.vtxos;
       _arkBalance = BigInt.from(resp.totalBalance.toInt());
       _serverHasActiveDelegate = resp.hasActiveDelegate;
+      ok = true;
     } catch (e) {
       debugPrint("Refresh VTXOs failed: $e");
     }
     await refreshArkTransactions();
     notifyListeners();
     unawaited(_delegateIfNeeded());
+    return ok;
   }
 
   /// A re-delegate is needed when either:
@@ -659,19 +711,51 @@ class MpcService extends ChangeNotifier {
     }
   }
 
-  /// Start polling VTXOs so off-chain receives appear without a manual refresh.
-  /// Idempotent; skips a tick if a refresh is already in flight.
+  /// Periodic Ark health + VTXO poll. Runs continuously (idempotent; skips a
+  /// tick if one is in flight) and drives the offline-mode state machine:
+  ///  - forced offline    → do nothing (stay on-chain only);
+  ///  - Ark up            → refresh VTXOs; if the ASP call fails, probe
+  ///                        getArkInfo() and, if that also fails, flip to
+  ///                        offline mode (auto-fallback);
+  ///  - Ark down (auto)   → probe getArkInfo() and, on success, re-run initArk()
+  ///                        to restore Ark + polling (auto-recover).
   void _startVtxoPolling() {
     _vtxoPollTimer?.cancel();
     _vtxoPollTimer = Timer.periodic(_vtxoPollInterval, (_) async {
-      if (_client == null || !_arkAvailable || _vtxoPollInFlight) return;
+      if (_client == null || _vtxoPollInFlight || _offlineModeForced) return;
       _vtxoPollInFlight = true;
       try {
-        await refreshVtxos();
+        if (_arkAvailable) {
+          final ok = await refreshVtxos();
+          if (!ok && !await _probeArk()) {
+            // ASP went down — enter offline mode.
+            _arkAvailable = false;
+            _arkWallet = null;
+            debugPrint('Ark ASP unreachable — entering offline mode');
+            notifyListeners();
+          }
+        } else if (await _probeArk()) {
+          // ASP came back — restore Ark (re-fetches addresses, refreshes, notifies).
+          debugPrint('Ark ASP reachable again — leaving offline mode');
+          await initArk();
+        }
       } finally {
         _vtxoPollInFlight = false;
       }
     });
+  }
+
+  /// Cheap, definitive ASP reachability probe. Used so a single transient
+  /// listVtxos hiccup doesn't flap the offline flag.
+  Future<bool> _probeArk() async {
+    final c = _client;
+    if (c == null) return false;
+    try {
+      await c.getArkInfo();
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<void> refreshArkTransactions() async {

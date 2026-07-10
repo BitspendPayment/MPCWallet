@@ -4,6 +4,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:app/services/mpc_service.dart';
 import 'package:app/widgets/attestation_status.dart';
+import 'package:app/widgets/app_bottom_nav.dart';
+import 'package:app/widgets/offline_banner.dart';
 import 'package:intl/intl.dart';
 
 class HomeScreen extends StatelessWidget {
@@ -34,14 +36,16 @@ class HomeScreen extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.notifications_none),
-            onPressed: () {},
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => context.push('/settings'),
           ),
         ],
       ),
       body: SafeArea(
         child: Column(
           children: [
+            // On-chain-only banner (shown only in offline mode).
+            const OfflineBanner(),
             // Attestation status (only shown when using attested transport)
             AttestationStatusWidget(
               statusProvider: () => mpcService.getAttestationStatus(),
@@ -111,43 +115,7 @@ class HomeScreen extends StatelessWidget {
           ],
         ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor:
-            const Color(0xFF1E1E1E),
-        selectedItemColor: Colors.white,
-        unselectedItemColor: Colors.white38,
-        showSelectedLabels: true,
-        showUnselectedLabels: true,
-        type: BottomNavigationBarType.fixed,
-        currentIndex: 0,
-        onTap: (index) {
-          if (index == 1) context.go('/ark');
-          if (index == 2) context.push('/spending/send');
-          if (index == 3) context.go('/services');
-        },
-        items: const [
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_balance_wallet_outlined),
-            activeIcon: Icon(Icons.account_balance_wallet),
-            label: 'Home',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.account_tree_outlined),
-            activeIcon: Icon(Icons.account_tree),
-            label: 'Ark',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.send_outlined),
-            activeIcon: Icon(Icons.send),
-            label: 'Send',
-          ),
-          BottomNavigationBarItem(
-            icon: Icon(Icons.storefront_outlined),
-            activeIcon: Icon(Icons.storefront),
-            label: 'Services',
-          ),
-        ],
-      ),
+      bottomNavigationBar: const AppBottomNav(current: '/'),
     );
   }
 

@@ -12,6 +12,7 @@ import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
 import 'screens/receive_screen.dart';
+import 'screens/settings_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/ark/ark_screen.dart';
 import 'screens/ark/ark_receive_screen.dart';
@@ -62,21 +63,33 @@ class MerlinWalletApp extends StatefulWidget {
 }
 
 class _MerlinWalletAppState extends State<MerlinWalletApp> {
-  late final GoRouter _router = _buildRouter();
+  GoRouter? _router;
 
   @override
   Widget build(BuildContext context) {
+    // Build once, wiring the router to MpcService so the offline-mode guard can
+    // re-evaluate (refreshListenable) and redirect off Ark routes.
+    _router ??= _buildRouter(context.read<MpcService>());
     return MaterialApp.router(
       title: 'Merlin Wallet',
       theme: AppTheme.darkTheme,
-      routerConfig: _router,
+      routerConfig: _router!,
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-GoRouter _buildRouter() => GoRouter(
+GoRouter _buildRouter(MpcService mpc) => GoRouter(
   initialLocation: '/splash',
+  refreshListenable: mpc,
+  // In offline mode the Ark + Services routes are unreachable — bounce to Home.
+  redirect: (context, state) {
+    final path = state.uri.path;
+    final isArkRoute =
+        path == '/ark' || path.startsWith('/ark/') || path == '/services';
+    if (isArkRoute && mpc.offlineMode) return '/';
+    return null;
+  },
   routes: [
     GoRoute(
       path: '/splash',
@@ -147,6 +160,10 @@ GoRoute(
     GoRoute(
       path: '/services',
       builder: (context, state) => const ServicesScreen(),
+    ),
+    GoRoute(
+      path: '/settings',
+      builder: (context, state) => const SettingsScreen(),
     ),
   ],
 );
