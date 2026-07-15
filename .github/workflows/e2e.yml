@@ -18,8 +18,6 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip2
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -31,7 +29,6 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ffi/target
-            cosigner/target
             cosigner-runtime/target
             e2e/signer-server/target
           key: e2e-rust-merged-ffi-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
@@ -40,7 +37,6 @@ jobs:
       - name: Build all
         run: |
           cargo build --release --manifest-path ffi/Cargo.toml
-          (cd cosigner && cargo build --release --target wasm32-wasip2)
           cargo build --release --manifest-path cosigner-runtime/Cargo.toml
           cargo build --release --manifest-path e2e/signer-server/Cargo.toml
 
@@ -51,7 +47,6 @@ jobs:
           retention-days: 1
           path: |
             ffi/target/release/libmpcwallet_ffi.so
-            cosigner/target/wasm32-wasip2/release/cosigner.wasm
             cosigner-runtime/target/release/cosigner-runtime
             e2e/signer-server/target/release/signer-server
 
