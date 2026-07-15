@@ -9,7 +9,8 @@ use rand::rngs::OsRng;
 use threshold::commitment::SigningPackage;
 use threshold::identifier::Identifier;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
-use threshold::nonce::{self, SigningCommitments, SigningNonce};
+use std::sync::atomic::{AtomicBool, Ordering};
+use threshold::nonce::{self, SigningCommitments};
 use threshold::point;
 use threshold::scalar::{scalar_from_bytes, scalar_to_bytes};
 use threshold::signing;
@@ -122,7 +123,12 @@ pub extern "C" fn threshold_new_nonce(secret_hex: *const c_char) -> *mut FfiResu
         })
         .to_string();
 
-        let handle = box_handle(nonce);
+        // Box with a one-shot "spent" flag so `threshold_frost_sign` can enforce
+        // FROST's single-use-nonce requirement.
+        let handle = box_handle(super::FfiSigningNonce {
+            nonce,
+            spent: AtomicBool::new(false),
+        });
         Ok((data, handle))
     })();
 
@@ -161,13 +167,21 @@ pub extern "C" fn threshold_frost_sign(
 
         let signing_pkg = parse_signing_package_json(&pkg_str)?;
 
-        let nonce = unsafe { super::handles::borrow_handle::<SigningNonce>(nonce_handle) }
+        let nonce = unsafe { super::handles::borrow_handle::<super::FfiSigningNonce>(nonce_handle) }
             .ok_or("null nonce_handle")?;
+
+        // SECURITY (single-use nonce): FROST nonce reuse across two signatures over
+        // different challenges leaks the secret share. Atomically claim the nonce;
+        // a second sign on the same handle fails closed. Each `signWithContext` on the
+        // client mints a fresh nonce per message, so this never trips legitimate signing.
+        if nonce.spent.swap(true, Ordering::SeqCst) {
+            return Err("signing nonce already used (single-use only)".into());
+        }
 
         let kp = KeyPackage::from_json(&kp_str).map_err(|e| format!("bad key package: {e}"))?;
 
-        let share =
-            signing::sign(&signing_pkg, nonce, &kp).map_err(|e| format!("sign failed: {e}"))?;
+        let share = signing::sign(&signing_pkg, &nonce.nonce, &kp)
+            .map_err(|e| format!("sign failed: {e}"))?;
 
         Ok(hex_encode(&scalar_to_bytes(&share.s)))
     })();

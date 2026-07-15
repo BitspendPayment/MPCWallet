@@ -84,16 +84,9 @@ fn read_cstr(ptr: *const c_char) -> Option<String> {
 
 /// Helper: decode hex string to bytes.
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
-        return Err("odd-length hex string".into());
-    }
-    let mut out = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        let byte = u8::from_str_radix(&s[i..i + 2], 16)
-            .map_err(|_| format!("invalid hex at offset {i}"))?;
-        out.push(byte);
-    }
-    Ok(out)
+    // `hex::decode` rejects odd length + invalid chars and never panics (the old
+    // `&s[i..i+2]` slicing could panic on a non-char-boundary multi-byte UTF-8 input).
+    hex::decode(s).map_err(|e| format!("invalid hex: {e}"))
 }
 
 /// Helper: decode hex to 32-byte array.

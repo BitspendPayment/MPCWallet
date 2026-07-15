@@ -33,7 +33,7 @@ pub struct Round1Package {
 }
 
 /// Secret state kept by a participant between DKG rounds 1 and 2.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Round1SecretPackage {
     pub identifier: Identifier,
     pub coefficients: Vec<Scalar>,
@@ -42,20 +42,41 @@ pub struct Round1SecretPackage {
     pub max_signers: usize,
 }
 
+// Redacting Debug: `coefficients` includes the secret polynomial constant term.
+impl core::fmt::Debug for Round1SecretPackage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Round1SecretPackage { coefficients: <redacted>, .. }")
+    }
+}
+
 /// Package sent point-to-point from one participant to another in round 2.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Round2Package {
     pub secret_share: Scalar,
 }
 
+// Redacting Debug: `secret_share` is the dealt secret share.
+impl core::fmt::Debug for Round2Package {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Round2Package { secret_share: <redacted> }")
+    }
+}
+
 /// Secret state kept by a participant between DKG rounds 2 and 3.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct Round2SecretPackage {
     pub identifier: Identifier,
     pub commitment: VssCommitment,
     pub secret_share: Scalar,
     pub min_signers: usize,
     pub max_signers: usize,
+}
+
+// Redacting Debug: `secret_share` is secret.
+impl core::fmt::Debug for Round2SecretPackage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Round2SecretPackage { secret_share: <redacted>, .. }")
+    }
 }
 
 // ---------------------------------------------------------------------------

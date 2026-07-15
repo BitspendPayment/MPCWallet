@@ -87,11 +87,28 @@ pub extern "C" fn threshold_free_result(ptr: *mut FfiResult) {
     }
 }
 
-/// Handle type identifiers for threshold_free_handle.
+/// Handle type identifiers mirrored on the Dart side. Kept as ABI documentation:
+/// `threshold_free_handle` now frees by the `dyn Any` vtable and ignores `type_id`,
+/// but the Dart wrapper still passes these values.
+#[allow(dead_code)]
 pub const HANDLE_ROUND1_SECRET: u32 = 1;
+#[allow(dead_code)]
 pub const HANDLE_ROUND2_SECRET: u32 = 2;
+#[allow(dead_code)]
 pub const HANDLE_SIGNING_NONCE: u32 = 3;
+#[allow(dead_code)]
 pub const HANDLE_AUTH_SIGNER: u32 = 4;
+
+/// Wraps a [`threshold::nonce::SigningNonce`] with a one-shot "spent" flag so the
+/// FFI can enforce FROST's single-use-nonce requirement: the first
+/// `threshold_frost_sign` atomically claims it, and any later call on the same
+/// handle fails closed. Reusing a nonce across two signatures over different
+/// challenges leaks the secret share, so this guard is load-bearing. Boxed under
+/// [`HANDLE_SIGNING_NONCE`].
+pub(crate) struct FfiSigningNonce {
+    pub nonce: threshold::nonce::SigningNonce,
+    pub spent: std::sync::atomic::AtomicBool,
+}
 
 /// Free an opaque handle returned by a threshold_* function.
 ///
@@ -101,35 +118,11 @@ pub const HANDLE_AUTH_SIGNER: u32 = 4;
 ///   3 = SigningNonce
 ///   4 = AuthSigner
 #[no_mangle]
-pub extern "C" fn threshold_free_handle(handle: *mut c_void, type_id: u32) {
-    if handle.is_null() {
-        return;
-    }
-    unsafe {
-        match type_id {
-            HANDLE_ROUND1_SECRET => {
-                drop(Box::from_raw(
-                    handle as *mut threshold::dkg::Round1SecretPackage,
-                ));
-            }
-            HANDLE_ROUND2_SECRET => {
-                drop(Box::from_raw(
-                    handle as *mut threshold::dkg::Round2SecretPackage,
-                ));
-            }
-            HANDLE_SIGNING_NONCE => {
-                drop(Box::from_raw(
-                    handle as *mut threshold::nonce::SigningNonce,
-                ));
-            }
-            HANDLE_AUTH_SIGNER => {
-                drop(Box::from_raw(
-                    handle as *mut threshold::auth::AuthSigner,
-                ));
-            }
-            _ => {} // Unknown type — ignore.
-        }
-    }
+pub extern "C" fn threshold_free_handle(handle: *mut c_void, _type_id: u32) {
+    // Handles box a `Box<dyn Any>` (see `handles::box_handle`), so freeing runs the
+    // concrete destructor via the vtable — a wrong `type_id` can no longer trigger a
+    // wrong-`Layout` free / heap corruption. `_type_id` is kept only for ABI stability.
+    unsafe { handles::free_handle_any(handle) }
 }
 
 // ---------------------------------------------------------------------------

@@ -45,13 +45,20 @@ impl VerifyingKey {
 }
 
 /// Per-participant key package containing the secret share.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct KeyPackage {
     pub identifier: Identifier,
     pub secret_share: Scalar,
     pub verifying_share: ProjectivePoint,
     pub verifying_key: VerifyingKey,
     pub min_signers: usize,
+}
+
+// Redacting Debug: `secret_share` must never reach logs / panic output.
+impl core::fmt::Debug for KeyPackage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("KeyPackage { secret_share: <redacted>, .. }")
+    }
 }
 
 impl KeyPackage {

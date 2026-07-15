@@ -214,14 +214,22 @@ class _Attested {
     if (pubkeyHex.isEmpty) {
       throw Exception('enclave reports no attestation pubkey');
     }
-    if (v.appKeyHash.isNotEmpty) {
-      final expected =
-          sha256.convert(_unhex(pubkeyHex)).bytes;
-      final got = _unhex(v.appKeyHash);
-      if (!_constantTimeEq(expected, got)) {
-        throw Exception(
-            'appKeyHash mismatch: SHA256($pubkeyHex) != ${v.appKeyHash}');
-      }
+    // SECURITY: the appKeyHash binds the response-signing pubkey to the attested
+    // enclave image (SHA256(attestation_pubkey) must equal the appKeyHash embedded
+    // in the signed attestation UserData). This MUST fail closed: an empty /
+    // unextractable appKeyHash previously skipped the check, which would let a
+    // server present any `attestation_pubkey` and MITM every "attested" response.
+    if (v.appKeyHash.isEmpty) {
+      throw Exception(
+          'attestation has no appKeyHash binding — refusing to trust the '
+          'response-signing key (enclave must publish the sha256:tls;sha256:app '
+          'UserData binding)');
+    }
+    final expected = sha256.convert(_unhex(pubkeyHex)).bytes;
+    final got = _unhex(v.appKeyHash);
+    if (!_constantTimeEq(expected, got)) {
+      throw Exception(
+          'appKeyHash mismatch: SHA256($pubkeyHex) != ${v.appKeyHash}');
     }
 
     final cache = _AttestationCache(

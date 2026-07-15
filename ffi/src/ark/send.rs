@@ -671,10 +671,11 @@ fn parse_network(network: &str) -> Result<Network, String> {
 }
 
 fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).map_err(|e| format!("hex: {e}")))
-        .collect()
+    // Use the `hex` crate: rejects odd length + invalid chars and NEVER panics.
+    // The old `&hex[i..i+2]` slicing panicked on odd-length input (out-of-range
+    // final slice) and on multi-byte UTF-8 (non-char-boundary) — both reachable
+    // from ASP-supplied strings. Shared by the ark send / evtxo-spend paths.
+    hex::decode(hex).map_err(|e| format!("hex: {e}"))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

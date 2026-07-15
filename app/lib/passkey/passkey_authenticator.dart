@@ -191,6 +191,17 @@ class PasskeyAuthenticator {
 
     final prfSeed = _extractPrfResult(resp);
 
+    // SECURITY: the PRF output is the device-only seed that unblinds the wallet's
+    // FROST share (P_full = δ + b(seed)). It must NEVER leave the device. The
+    // cosigner runs a standard WebAuthn assert and neither emits nor inspects the
+    // PRF extension, so strip clientExtensionResults.prf from the credential before
+    // finishing the ceremony — the assertion signature (authenticatorData +
+    // clientDataHash) is unaffected.
+    final cer = resp['clientExtensionResults'];
+    if (cer is Map) {
+      cer.remove('prf');
+    }
+
     final finish = await _post('/api/passkey/assert/finish', {
       'ceremony_id': ceremonyId,
       'credential': resp,
