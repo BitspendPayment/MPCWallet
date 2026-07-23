@@ -106,7 +106,7 @@ impl ContractManager {
                 reply,
             })
             .await?;
-        let pairing = crate::cosigner::state::ContractPairing {
+        let pairing = crate::cosigner::types::ContractPairing {
             evtxo_spk_hex: spk_hex.clone(),
             contract_id,
             server_pk,

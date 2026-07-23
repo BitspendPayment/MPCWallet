@@ -1,28 +1,22 @@
-//! Integration test: a full 2-of-2 cooperative sign driven through the real
-//! `CosignerRegistry` actor flow (`SignStep1` → `SignStep2`), with the user/client
-//! half simulated host-side.
+//! Integration tests for the 2-of-2 cooperative sign driven through the real `CosignerRegistry`
+//! actor flow (`SeedPolicy` → `SignStep1` → `SignStep2`), with the user/client half simulated
+//! host-side. Covers both the warm path (seed + sign on one registry) and the cold-spawn path
+//! (seed on one registry, sign on a fresh one so the actor restores its keys from the sealed
+//! snapshot — exercising `to_snapshot`/`restore_snapshot` and the `SnapshotState` roundtrip).
 //!
-//! This goes through the cosigner-runtime end to end — actor spawn, policy load, auth
-//! (`verify_schnorr_signature`), the session reset/commit/sign/aggregate lifecycle on
-//! the merged `session` resource — and verifies the aggregated signature under the group
-//! key. It's the host-level counterpart to the guest exercised in `isolation_test`.
+//! Needs Redis (persistence). The ASP channel is lazy and never used on the signing path.
+
+mod common;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rand::rngs::OsRng;
-use tempfile::TempDir;
-use tokio::sync::Mutex as AsyncMutex;
 
 use cosigner_runtime::auth::message::{build_auth_message, OP_SIGN_STEP1, OP_SIGN_STEP2};
-use cosigner_runtime::bitcoin::{BitcoinHistoryService, ElectrumClient};
 use cosigner_runtime::cosigner::command::CosignerCommand;
 use cosigner_runtime::cosigner::registry::CosignerRegistry;
-use cosigner_runtime::persistence::SledStore;
-use cosigner_runtime::policy::{NormalPolicy, PolicyState};
-use cosigner_runtime::shared::SharedServices;
 use cosigner_runtime::wallet_proto::{SignStep1Request, SignStep2Request};
 
 use threshold::auth::AuthSigner;
@@ -37,31 +31,6 @@ use threshold::scalar::{scalar_from_bytes, scalar_to_bytes};
 use threshold::signature::Signature;
 use threshold::signing;
 
-fn wasm_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("cosigner/target/wasm32-wasip2/release/cosigner.wasm")
-}
-
-fn make_shared() -> (Arc<SharedServices>, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let store = Arc::new(SledStore::open(tmp.path()).unwrap());
-    let electrum = ElectrumClient::new("127.0.0.1", 50001);
-    let bitcoin_history = Arc::new(AsyncMutex::new(BitcoinHistoryService::new(electrum)));
-    let shared = Arc::new(SharedServices::new(
-        store.clone(),
-        store,
-        bitcoin_history,
-        None, // contract_host — None ⇒ the contract gate always allows (no PSBT needed)
-        None, // service_url
-        None,
-        1800,
-        1800,
-    ));
-    (shared, tmp)
-}
-
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -69,7 +38,7 @@ fn now_ms() -> i64 {
         .as_millis() as i64
 }
 
-/// Host-side 2-of-2 DKG (the guest no longer does DKG); even-Y-normalized outputs.
+/// Host-side 2-of-2 DKG (the actor no longer does DKG); even-Y-normalized outputs.
 fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     let mut rng = OsRng;
     let (min, max) = (2usize, 2usize);
@@ -126,51 +95,40 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
     (key_packages, pkp_out.unwrap())
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn full_2of2_sign_via_registry() {
-    let wasm = wasm_path();
-    if !wasm.exists() {
-        eprintln!("WASM component not found at {wasm:?}. Build the guest first.");
-        return;
-    }
+/// Seed the cosigner's policy into its actor: installs the key package + group PKP and seals it.
+async fn seed_policy(
+    registry: &Arc<CosignerRegistry>,
+    group_key: &str,
+    kp_cosigner: &KeyPackage,
+    kp_user: &KeyPackage,
+    pkp: &PublicKeyPackage,
+) {
+    registry
+        .dispatch(group_key, |reply| CosignerCommand::SeedPolicy {
+            key_package_json: kp_cosigner.to_json(),
+            public_key_package_json: pkp.to_json(),
+            user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
+            server_dkg_secret_hex: None,
+            contract_pairing: None,
+            reply,
+        })
+        .await
+        .expect("seed policy");
+}
 
-    let (shared, _tmp) = make_shared();
-
-    // 2-of-2 {user, cosigner} key. Index 0 = user (client), index 1 = cosigner (server).
-    let (kps, pkp) = dkg_2of2();
-    let kp_user = &kps[0];
-    let kp_cosigner = &kps[1];
-    let group_key = hex::encode(pkp.verifying_key.serialize());
-
-    // The user authenticates by signing auth messages with its FROST secret share; the
-    // matching pubkey is `user_id`.
+/// The client half of a cooperative sign against `registry`'s actor for `group_key`: drives
+/// `SignStep1` → `SignStep2` and asserts the aggregated signature verifies under `pkp`.
+async fn cooperative_sign_and_verify(
+    registry: &Arc<CosignerRegistry>,
+    group_key: &str,
+    kp_user: &KeyPackage,
+    pkp: &PublicKeyPackage,
+) {
+    // The user authenticates by signing auth messages with its FROST secret share (auth is
+    // verified at the REST boundary, not in the actor — supplied here for faithfulness).
     let auth = AuthSigner::from_secret_bytes(&scalar_to_bytes(&kp_user.secret_share)).unwrap();
     let user_id = auth.public_key_compressed().to_vec();
     let user_id_hex = hex::encode(&user_id);
-
-    // Persist the cosigner's policy (its key package + the group PKP) under the group key.
-    let policy = PolicyState {
-        cosigner_id: group_key.clone(),
-        user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
-        server_dkg_secret_hex: None,
-        normal_policy: NormalPolicy {
-            id: "normal".to_string(),
-            key_package_json: kp_cosigner.to_json(),
-            public_key_package_json: pkp.to_json(),
-        },
-        contracts: Default::default(),
-        contract_pairing: None,
-    };
-    shared
-        .persistence
-        .put(
-            "policies",
-            &group_key,
-            &serde_json::to_string(&policy).unwrap(),
-        )
-        .unwrap();
-
-    let registry = CosignerRegistry::new(wasm.to_str().unwrap(), shared.clone()).unwrap();
 
     let message = [0x42u8; 32];
 
@@ -195,11 +153,7 @@ async fn full_2of2_sign_via_registry() {
         ark_tx: vec![],
     };
     let resp1 = registry
-        .dispatch(&group_key, |reply| CosignerCommand::SignStep1 {
-            req: req1,
-            session: None,
-            reply,
-        })
+        .dispatch(group_key, |reply| CosignerCommand::SignStep1 { req: req1, reply })
         .await
         .expect("sign_step1");
 
@@ -232,11 +186,7 @@ async fn full_2of2_sign_via_registry() {
         timestamp_ms: ts2,
     };
     let resp2 = registry
-        .dispatch(&group_key, |reply| CosignerCommand::SignStep2 {
-            req: req2,
-            session: None,
-            reply,
-        })
+        .dispatch(group_key, |reply| CosignerCommand::SignStep2 { req: req2, reply })
         .await
         .expect("sign_step2");
 
@@ -250,6 +200,49 @@ async fn full_2of2_sign_via_registry() {
     signature
         .verify(&pkp.verifying_key, &message)
         .expect("aggregated 2-of-2 signature must verify under the group key");
+}
 
+/// Warm path: seed + sign on the same registry (the actor stays alive between commands).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn full_2of2_sign_via_registry() {
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
+
+    // 2-of-2 {user, cosigner} key. Index 0 = user (client), index 1 = cosigner (server).
+    let (kps, pkp) = dkg_2of2();
+    let group_key = hex::encode(pkp.verifying_key.serialize());
+
+    let registry = CosignerRegistry::new(shared.clone()).unwrap();
+    seed_policy(&registry, &group_key, &kps[1], &kps[0], &pkp).await;
+    cooperative_sign_and_verify(&registry, &group_key, &kps[0], &pkp).await;
+
+    let _ = shared.persistence.delete("sealed_state", &group_key);
     println!("full 2-of-2 sign via CosignerRegistry verified!");
+}
+
+/// Cold-spawn path: seed + seal on registry A, then sign on a FRESH registry B (no in-memory
+/// actor) so the actor cold-spawns and restores its key material from the sealed snapshot. This
+/// exercises `restore_snapshot` + the `SnapshotState` roundtrip end-to-end.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cold_spawn_restores_seal_and_signs() {
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
+
+    let (kps, pkp) = dkg_2of2();
+    let group_key = hex::encode(pkp.verifying_key.serialize());
+
+    // Seed + seal on registry A, then drop it so no live actor survives.
+    let registry_a = CosignerRegistry::new(shared.clone()).unwrap();
+    seed_policy(&registry_a, &group_key, &kps[1], &kps[0], &pkp).await;
+    drop(registry_a);
+
+    // Registry B has no in-memory actor: the first SignStep1 must cold-spawn it and restore its
+    // policy + keys from the sealed snapshot before it can sign.
+    let registry_b = CosignerRegistry::new(shared.clone()).unwrap();
+    cooperative_sign_and_verify(&registry_b, &group_key, &kps[0], &pkp).await;
+
+    let _ = shared.persistence.delete("sealed_state", &group_key);
+    println!("cold-spawn restore-from-seal + 2-of-2 sign verified!");
 }

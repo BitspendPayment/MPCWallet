@@ -3,38 +3,15 @@
 //! without driving a full 3-participant ceremony (which is covered E2E by
 //! `e2e/test/ark_e2e_test.dart` and `bin/load_tester.rs`).
 
+mod common;
+
 use std::sync::Arc;
 use std::time::Duration;
 
-use tempfile::TempDir;
-use tokio::sync::Mutex as AsyncMutex;
 use tonic::Code;
 
-use cosigner_runtime::bitcoin::{BitcoinHistoryService, ElectrumClient};
 use cosigner_runtime::onboarding::OnboardingManager;
-use cosigner_runtime::persistence::SledStore;
-use cosigner_runtime::shared::SharedServices;
-use cosigner_runtime::wallet_proto::{
-    DkgStep1Request, DkgStep1Response, DkgStep2Request, DkgStep3Request,
-};
-
-fn make_shared() -> (Arc<SharedServices>, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let store = Arc::new(SledStore::open(tmp.path()).unwrap());
-    let electrum = ElectrumClient::new("127.0.0.1", 50001);
-    let bitcoin_history = Arc::new(AsyncMutex::new(BitcoinHistoryService::new(electrum)));
-    let shared = Arc::new(SharedServices::new(
-        store.clone(),
-        store,
-        bitcoin_history,
-        None,
-        None, // service_url
-        None,
-        1800, // auto_settle_safety_margin_secs
-        1800, // actor_idle_threshold_secs
-    ));
-    (shared, tmp)
-}
+use cosigner_runtime::wallet_proto::{DkgStep1Request, DkgStep2Request, DkgStep3Request};
 
 fn dummy_identifier(seed: u8) -> Vec<u8> {
     let mut id = vec![0u8; 32];
@@ -50,9 +27,9 @@ fn step1_req(seed: u8) -> DkgStep1Request {
     }
 }
 
-/// Spawn `coord.onboarding_step1(...)` and return immediately. step1 parks in
-/// `pending_step1` waiting for the 2nd + 3rd participant; the returned
-/// JoinHandle can be `.abort()`-ed to avoid leaking the task on test exit.
+/// Spawn `coord.onboarding_step1(...)`. step1 responds immediately with the server's round1
+/// package but registers a session (kept for step2/3) that the TTL sweep can later evict; the
+/// returned JoinHandle can be `.abort()`-ed to avoid leaking the task on test exit.
 fn spawn_step1(
     coord: Arc<OnboardingManager>,
     user_id: &'static str,
@@ -63,19 +40,11 @@ fn spawn_step1(
     })
 }
 
-/// Like `spawn_step1` but returns the eventual result so tests can assert
-/// on the parked-sender outcome (e.g. that eviction produces `Aborted`).
-fn spawn_step1_capture(
-    coord: Arc<OnboardingManager>,
-    user_id: &'static str,
-    seed: u8,
-) -> tokio::task::JoinHandle<Result<DkgStep1Response, tonic::Status>> {
-    tokio::spawn(async move { coord.onboarding_step1(user_id, step1_req(seed)).await })
-}
-
 #[tokio::test]
 async fn test_dkg_session_evicted_after_ttl() {
-    let (shared, _tmp) = make_shared();
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
     let coord = OnboardingManager::new(shared, Duration::from_millis(50));
 
     let h = spawn_step1(coord.clone(), "deadbeef", 1);
@@ -94,7 +63,9 @@ async fn test_dkg_session_evicted_after_ttl() {
 
 #[tokio::test]
 async fn test_sweep_does_not_evict_fresh_sessions() {
-    let (shared, _tmp) = make_shared();
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
     let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let h = spawn_step1(coord.clone(), "fresh", 1);
@@ -108,7 +79,9 @@ async fn test_sweep_does_not_evict_fresh_sessions() {
 
 #[tokio::test]
 async fn test_concurrent_step1_creates_one_session() {
-    let (shared, _tmp) = make_shared();
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
     let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     // Two concurrent step1 calls for the same uid must dedupe through
@@ -125,7 +98,9 @@ async fn test_concurrent_step1_creates_one_session() {
 
 #[tokio::test]
 async fn test_step3_with_no_session_returns_aborted() {
-    let (shared, _tmp) = make_shared();
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
     let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let req = DkgStep3Request {
@@ -142,7 +117,9 @@ async fn test_step3_with_no_session_returns_aborted() {
 
 #[tokio::test]
 async fn test_step2_with_no_session_returns_aborted() {
-    let (shared, _tmp) = make_shared();
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
     let coord = OnboardingManager::new(shared, Duration::from_secs(300));
 
     let req = DkgStep2Request {
@@ -155,61 +132,4 @@ async fn test_step2_with_no_session_returns_aborted() {
         .await
         .expect_err("expected Status::aborted");
     assert_eq!(err.code(), Code::Aborted);
-}
-
-/// After TTL eviction, the parked oneshot sender for a still-awaiting
-/// step1 future must resolve with `Status::aborted`, not hang silently
-/// nor panic. Guards against regressing the `drain_*_with_err` call in
-/// `sweep_stale`.
-#[tokio::test]
-async fn test_evicted_session_drains_parked_sender_with_aborted() {
-    let (shared, _tmp) = make_shared();
-    let coord = OnboardingManager::new(shared, Duration::from_millis(50));
-
-    let h = spawn_step1_capture(coord.clone(), "deadc0de", 1);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(coord.active_session_count(), 1);
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(coord.sweep_stale(), 1);
-
-    let result = h.await.expect("step1 task panicked");
-    let err = result.expect_err("parked sender must resolve with Err after eviction");
-    assert_eq!(err.code(), Code::Aborted);
-}
-
-/// Concurrent step1 calls plus a sweep task firing every 15ms while step1
-/// is parked. Verifies no panic, no double-eviction. After TTL exactly one
-/// eviction should have occurred across the race window, and the parked
-/// future resolves with an error.
-#[tokio::test]
-async fn test_concurrent_step1_and_sweep_no_panic() {
-    let (shared, _tmp) = make_shared();
-    let coord = OnboardingManager::new(shared, Duration::from_millis(50));
-
-    let h = spawn_step1_capture(coord.clone(), "1ace1ace", 1);
-    tokio::time::sleep(Duration::from_millis(20)).await;
-    assert_eq!(coord.active_session_count(), 1);
-
-    let coord2 = coord.clone();
-    let sweep_task = tokio::spawn(async move {
-        let mut total = 0;
-        for _ in 0..10 {
-            total += coord2.sweep_stale();
-            tokio::time::sleep(Duration::from_millis(15)).await;
-        }
-        total
-    });
-
-    let total_evicted = sweep_task.await.expect("sweep task panicked");
-    assert_eq!(
-        total_evicted, 1,
-        "exactly one eviction across the race window"
-    );
-
-    let result = h.await.expect("step1 task panicked");
-    assert!(
-        result.is_err(),
-        "parked step1 must resolve with Err after eviction during concurrent sweeps"
-    );
 }

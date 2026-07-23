@@ -27,10 +27,9 @@ use super::command::CosignerCommand;
 use super::handle::{CosignerHandle, OwnedHandle};
 use super::handlers;
 use super::state::{CosignerState, DeviceToken};
-use crate::cosigner::wire::{
-    ActorCommand, ActorResponse, ApplyDelegateSigsWire, ArkTxEntryWire, ContractPairingWire,
-    GenerateDelegateWire, SendVtxoStep1Wire, SendVtxoStep2Wire, SignStep1Wire, SignStep2Wire,
-    VtxoInputWire,
+use crate::cosigner::types::{
+    ApplyDelegateSigs, ArkTxEntry, BoardingSettleOutcome, GenerateDelegate, SendVtxoStep1,
+    SendVtxoStep2, SignStep1, SignStep2, VtxoInput,
 };
 use crate::wallet_proto::{
     send_vtxo_response, settle_delegate_response, settle_response, sign_step1_response,
@@ -38,18 +37,6 @@ use crate::wallet_proto::{
     SettleRequest, SettleResponse, SignStep1Request, SignStep1Response, SignStep2Request,
     SignStep2Response,
 };
-
-/// Convert the host `ContractPairing` projection to the wire form carried into the actor's
-/// `InstallPolicy` (Plan A 1C — the actor does the cooperative-leaf conditioning).
-fn pairing_to_wire(p: &crate::cosigner::state::ContractPairing) -> ContractPairingWire {
-    ContractPairingWire {
-        evtxo_spk_hex: p.evtxo_spk_hex.clone(),
-        contract_id: p.contract_id.to_vec(),
-        server_pk: p.server_pk.to_vec(),
-        owner_pk: p.owner_pk.to_vec(),
-        exit_delay: p.exit_delay,
-    }
-}
 
 fn now_secs() -> i64 {
     SystemTime::now()
@@ -104,82 +91,27 @@ impl CosignerRegistry {
         if let Some(entry) = self.actors.get(group_key) {
             return Ok(entry.handle.clone());
         }
-        // Slow path: spawn the actor task. `CosignerState` is wrapped in `Arc<Mutex<>>` so the
-        // actor's panic-recovery path keeps user state (policy, vtxos, delegate, history,
-        // device_tokens) intact across a caught panic. All signing keys live in the actor.
-        let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
-
-        // Rehydrate persistable state from sled. `vtxos` is also reconciled
-        // by the vtxo_stream subscription as events arrive, but loading the
-        // last-saved set keeps the actor coherent for any RPC that fires
-        // before the first stream event. `ark_tx_history` and
-        // `device_tokens` have no other reconstruction path — without these
-        // loads they would be empty until new events accrued (history) or
-        // the client re-registered (push tokens).
-        let persistence = self.shared.persistence.as_ref();
-        let mut fresh_state = CosignerState::new(group_key.to_string());
-        fresh_state.vtxos = super::handlers::helpers::load_user_vtxos(persistence, group_key);
-        fresh_state.ark_tx_history =
-            super::handlers::helpers::load_user_ark_history(persistence, group_key);
-        fresh_state.device_tokens =
-            super::handlers::helpers::load_user_device_tokens(persistence, group_key);
-
-        // Plan A Phase 2: restore the actor-delegate auto-settle threshold from its SECRET-FREE
-        // marker, so a stored delegate survives a runtime restart. The delegate itself lives in the
-        // actor's sealed snapshot (restored on first actor spawn) — the host keeps no key. (This
-        // replaces the legacy host-delegate rehydration that read `dkg-secret` from the SecretStore.)
-        let delegate_loaded =
-            match super::handlers::helpers::load_guest_delegate_threshold(persistence, group_key) {
-                Some(threshold) => {
-                    fresh_state.guest_delegate_threshold = Some(threshold);
-                    true
-                }
-                None => false,
-            };
-
-        if !fresh_state.vtxos.is_empty()
-            || !fresh_state.ark_tx_history.is_empty()
-            || !fresh_state.device_tokens.is_empty()
-            || delegate_loaded
-        {
-            tracing::info!(
-                "Rehydrated actor {group_key}: vtxos={}, history={}, device_tokens={}, delegate={}",
-                fresh_state.vtxos.len(),
-                fresh_state.ark_tx_history.len(),
-                fresh_state.device_tokens.len(),
-                delegate_loaded,
-            );
-        }
-        let state = Arc::new(Mutex::new(fresh_state));
-
-        let last_active = Arc::new(AtomicI64::new(now_secs()));
-        let shared = self.shared.clone();
-        let registry = self.clone();
-        let last_active_for_task = last_active.clone();
-        let join = tokio::spawn(run_cosigner(
-            state,
-            rx,
-            shared,
-            registry,
-            last_active_for_task,
-        ));
-        let handle = CosignerHandle::new(tx);
-        let owned = OwnedHandle {
-            handle: handle.clone(),
-            join,
-            last_active,
-        };
-        // Insert; if a concurrent caller beat us to it, drop ours and use theirs.
+        // Slow path: only the `entry()` winner spawns. The actor rehydrates its own state on
+        // startup, so no blocking I/O runs under the shard lock and there's no speculative
+        // spawn/abort — a concurrent caller for the same key just reuses the winner's handle.
         match self.actors.entry(group_key.to_string()) {
-            dashmap::mapref::entry::Entry::Occupied(e) => {
-                // Race: another caller spawned. Cancel our spawn and use theirs.
-                drop(handle);
-                owned.join.abort();
-                Ok(e.get().handle.clone())
-            }
+            dashmap::mapref::entry::Entry::Occupied(e) => Ok(e.get().handle.clone()),
             dashmap::mapref::entry::Entry::Vacant(e) => {
+                let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
+                let last_active = Arc::new(AtomicI64::new(now_secs()));
+                tokio::spawn(run_cosigner(
+                    group_key.to_string(),
+                    rx,
+                    self.shared.clone(),
+                    self.clone(),
+                    last_active.clone(),
+                ));
+                let handle = CosignerHandle::new(tx);
+                e.insert(OwnedHandle {
+                    handle: handle.clone(),
+                    last_active,
+                });
                 tracing::info!("Spawned actor for user {group_key}");
-                e.insert(owned);
                 Ok(handle)
             }
         }
@@ -305,13 +237,53 @@ where
     }
 }
 
+/// Rehydrate a fresh actor's durable state from persistence (vtxos, history, device tokens, and
+/// the secret-free auto-settle delegate marker). Runs in the actor task on startup, so these
+/// blocking loads happen off the spawn path — no DashMap lock is held across them (see get_or_spawn).
+fn rehydrate_cosigner_state(group_key: &str, shared: &SharedServices) -> CosignerState {
+    let persistence = shared.persistence.as_ref();
+    let mut fresh_state = CosignerState::new(group_key.to_string());
+    fresh_state.vtxos = super::handlers::helpers::load_user_vtxos(persistence, group_key);
+    fresh_state.ark_tx_history =
+        super::handlers::helpers::load_user_ark_history(persistence, group_key);
+    fresh_state.device_tokens =
+        super::handlers::helpers::load_user_device_tokens(persistence, group_key);
+
+    let delegate_loaded =
+        match super::handlers::helpers::load_guest_delegate_threshold(persistence, group_key) {
+            Some(threshold) => {
+                fresh_state.guest_delegate_threshold = Some(threshold);
+                true
+            }
+            None => false,
+        };
+
+    if !fresh_state.vtxos.is_empty()
+        || !fresh_state.ark_tx_history.is_empty()
+        || !fresh_state.device_tokens.is_empty()
+        || delegate_loaded
+    {
+        tracing::info!(
+            "Rehydrated actor {group_key}: vtxos={}, history={}, device_tokens={}, delegate={}",
+            fresh_state.vtxos.len(),
+            fresh_state.ark_tx_history.len(),
+            fresh_state.device_tokens.len(),
+            delegate_loaded,
+        );
+    }
+    fresh_state
+}
+
 pub async fn run_cosigner(
-    state: Arc<Mutex<CosignerState>>,
+    group_key: String,
     mut rx: mpsc::Receiver<CosignerCommand>,
     shared: Arc<SharedServices>,
     registry: Arc<CosignerRegistry>,
     last_active: Arc<AtomicI64>,
 ) {
+    // Rehydrate durable state on startup (off the spawn path — see get_or_spawn).
+    let state = Arc::new(Mutex::new(rehydrate_cosigner_state(&group_key, &shared)));
+
     // Per-actor native-async actor (lazily spawned on the first sign). Its in-WASM state
     // (keys + ceremony) persists across commands. ALL signing routes through it.
     let mut actor: Option<CosignerActor> = None;
@@ -492,19 +464,7 @@ pub async fn run_cosigner(
         )
         .await;
 
-        // Gap 2: wrap each command dispatch in `catch_unwind`. After Gap 1's
-        // fix, handler panics already reach us as `Err(Status::internal(...))`
-        // via `run_blocking`. This outer catch is belt-and-suspenders against
-        // any panic that escapes the macros / async glue (rare, but cheap to
-        // guard). On catch:
-        //   1. Rebuild the WASM instance — its session handles may be wedged.
-        //   2. Drain `pending_*` rendezvous replies so multi-party callers
-        //      don't hang on a reply that will never come.
-        //   3. Keep the recv loop running for the next command.
-        //
-        // `AssertUnwindSafe` is sound here: `parking_lot::Mutex` doesn't poison on panic, and
-        // `CosignerState` holds only plain data (no wasm Store), so a caught panic leaves it
-        // consistent and the recv loop simply continues with the next command.
+
         let dispatch_outcome = AssertUnwindSafe(
             actor
                 .as_mut()
@@ -537,8 +497,8 @@ async fn persist_actor_snapshot(
     shared: &SharedServices,
     group_key: &str,
 ) {
-    match actor.command(ActorCommand::Snapshot).await {
-        Ok(ActorResponse::Snapshot { blob }) => {
+    match actor.to_snapshot() {
+        Ok(blob) => {
             if let Err(e) = shared
                 .persistence
                 .put(SEALED_STATE_TREE, group_key, &hex::encode(blob))
@@ -546,8 +506,7 @@ async fn persist_actor_snapshot(
                 tracing::warn!("persist sealed_state/{group_key} failed: {e}");
             }
         }
-        Ok(other) => tracing::warn!("snapshot: unexpected response {other:?}"),
-        Err(e) => tracing::warn!("snapshot command failed: {e}"),
+        Err(e) => tracing::warn!("snapshot failed: {e}"),
     }
 }
 
@@ -568,17 +527,13 @@ async fn restore_actor_snapshot(
         tracing::warn!("sealed_state/{group_key}: corrupt hex; ignoring");
         return false;
     };
-    match actor.command(ActorCommand::RestoreSnapshot { blob }).await {
-        Ok(ActorResponse::Restored) => {
+    match actor.restore_snapshot(&blob) {
+        Ok(()) => {
             tracing::info!("restored actor snapshot for {group_key}");
             true
         }
-        Ok(other) => {
-            tracing::warn!("restore: unexpected response {other:?}");
-            false
-        }
         Err(e) => {
-            tracing::warn!("restore command failed: {e}");
+            tracing::warn!("restore failed: {e}");
             false
         }
     }
@@ -605,49 +560,31 @@ async fn route_contract_refresh(
         let _ = reply.send(Err(e));
         return;
     }
-    let result = actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::ContractRefresh {
-            receiver_id_hex,
-            receiver_partial_point,
-            wallet_id_hex,
-            a_at_cosigner,
-            min_signers,
-        })
-        .await;
+    let result = actor.as_mut().unwrap().contract_refresh(
+        &receiver_id_hex,
+        &receiver_partial_point,
+        &wallet_id_hex,
+        &a_at_cosigner,
+        min_signers as usize,
+    );
     match result {
-        Ok(ActorResponse::ContractRefreshed {
-            pairing_public_key_package_json,
-            receiver_half,
-            my_key_package_json,
-        }) => {
+        Ok(refreshed) => {
             let _ = reply.send(Ok(crate::cosigner::command::ContractRefreshOutput {
-                pairing_public_key_package_json,
-                receiver_half,
-                my_key_package_json,
+                pairing_public_key_package_json: refreshed.pairing_public_key_package_json,
+                receiver_half: refreshed.receiver_half,
+                my_key_package_json: refreshed.my_key_package_json,
             }));
         }
-        Ok(ActorResponse::Error(msg)) => {
-            let _ = reply.send(Err(Status::internal(msg)));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Ok(other) => {
-            let _ = reply.send(Err(Status::internal(format!(
-                "contract_refresh: {other:?}"
-            ))));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Err(e) => {
-            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {e}"))));
+        Err(msg) => {
+            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {msg}"))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
 }
 
-/// Route `SignStep1`: non-contract spends (raw script-path AND key-path-tweaked) go to the
-/// native-async actor where the keys live — every spend type (script-path, key-path tweak,
-/// contract). The contract gate is enforced inside the actor's sign step2.
+/// Route `SignStep1`: spends go to the native-async actor where the keys live (cooperative Ark
+/// spends are always script-path; contract eVTXO spends route through their pairing actor). The
+/// contract gate is enforced inside the actor's sign step2.
 #[allow(clippy::too_many_arguments)]
 async fn route_sign_step1(
     req: SignStep1Request,
@@ -706,26 +643,17 @@ async fn route_sign_step1(
             // No snapshot yet but the host holds policy material (normal wallet, pre-seal edge):
             // install from it, then immediately seal so every later cold spawn restores instead.
             // A pairing actor never reaches here — it has no material and MUST restore from its seal.
-            let result = actor
-                .as_mut()
-                .unwrap()
-                .command(ActorCommand::InstallPolicy {
-                    group_key,
-                    key_package_json,
-                    public_key_package_json,
-                    user_signing_identifier_hex: user_identifier_hex,
-                    server_dkg_secret_hex,
-                    contract_pairing: None,
-                    contracts_json: String::new(),
-                })
-                .await;
+            let result = actor.as_mut().unwrap().install_policy(
+                group_key,
+                &key_package_json,
+                &public_key_package_json,
+                user_identifier_hex.as_deref(),
+                server_dkg_secret_hex,
+                None,
+                String::new(),
+            );
             match result {
-                Ok(ActorResponse::PolicyInstalled) => *actor_policy_installed = true,
-                Ok(other) => {
-                    let _ = reply.send(Err(Status::internal(format!("InstallPolicy: {other:?}"))));
-                    reseat_actor(actor, actor_policy_installed);
-                    return;
-                }
+                Ok(()) => *actor_policy_installed = true,
                 Err(e) => {
                     let _ = reply.send(Err(Status::internal(format!("InstallPolicy: {e}"))));
                     reseat_actor(actor, actor_policy_installed);
@@ -743,7 +671,7 @@ async fn route_sign_step1(
         }
     }
 
-    let wire = SignStep1Wire {
+    let wire = SignStep1 {
         user_id: req.user_id,
         hiding_commitment: req.hiding_commitment,
         binding_commitment: req.binding_commitment,
@@ -754,18 +682,10 @@ async fn route_sign_step1(
         script_path_spend: req.script_path_spend,
         ark_tx: req.ark_tx,
     };
-    let result = actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::FrostSignStep1(wire))
-        .await;
-    match result {
-        Ok(ActorResponse::SignStep1 {
-            commitments,
-            message_to_sign,
-        }) => {
+    match actor.as_mut().unwrap().sign_step1(wire) {
+        Ok(out) => {
             let mut response = SignStep1Response::default();
-            for c in commitments {
+            for c in out.commitments {
                 response.commitments.insert(
                     c.identifier_hex,
                     sign_step1_response::Commitment {
@@ -774,19 +694,11 @@ async fn route_sign_step1(
                     },
                 );
             }
-            response.message_to_sign = message_to_sign;
+            response.message_to_sign = out.message_to_sign;
             let _ = reply.send(Ok(response));
         }
-        Ok(ActorResponse::Error(msg)) => {
+        Err(msg) => {
             let _ = reply.send(Err(Status::internal(msg)));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Ok(other) => {
-            let _ = reply.send(Err(Status::internal(format!("sign_step1: {other:?}"))));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Err(e) => {
-            let _ = reply.send(Err(Status::internal(format!("actor sign_step1: {e}"))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
@@ -808,31 +720,21 @@ async fn route_sign_step2(
         return;
     }
 
-    let wire = SignStep2Wire {
+    let wire = SignStep2 {
         user_id: req.user_id,
         signature_share: req.signature_share,
         signature: req.signature,
         timestamp_ms: req.timestamp_ms,
     };
-    let result = actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::FrostSignStep2(wire))
-        .await;
-    match result {
-        Ok(ActorResponse::SignStep2 { r_point, z_scalar }) => {
-            let _ = reply.send(Ok(SignStep2Response { r_point, z_scalar }));
+    match actor.as_mut().unwrap().sign_step2(wire) {
+        Ok(out) => {
+            let _ = reply.send(Ok(SignStep2Response {
+                r_point: out.r_point,
+                z_scalar: out.z_scalar,
+            }));
         }
-        Ok(ActorResponse::Error(msg)) => {
+        Err(msg) => {
             let _ = reply.send(Err(Status::internal(msg)));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Ok(other) => {
-            let _ = reply.send(Err(Status::internal(format!("sign_step2: {other:?}"))));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        Err(e) => {
-            let _ = reply.send(Err(Status::internal(format!("actor sign_step2: {e}"))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
@@ -848,7 +750,7 @@ async fn route_seed_policy(
     public_key_package_json: String,
     user_signing_identifier_hex: Option<String>,
     server_dkg_secret_hex: Option<String>,
-    contract_pairing: Option<crate::cosigner::state::ContractPairing>,
+    contract_pairing: Option<crate::cosigner::types::ContractPairing>,
     reply: oneshot::Sender<Result<(), Status>>,
     state: &Arc<Mutex<CosignerState>>,
     shared: &Arc<SharedServices>,
@@ -926,21 +828,9 @@ async fn route_add_contract(
             }
         }
     };
-    match actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::SetContracts { contracts_json })
-        .await
-    {
-        Ok(ActorResponse::PolicyInstalled) => {}
-        Ok(other) => {
-            let _ = reply.send(Err(Status::internal(format!("SetContracts: {other:?}"))));
-            return;
-        }
-        Err(e) => {
-            let _ = reply.send(Err(Status::internal(format!("SetContracts: {e}"))));
-            return;
-        }
+    if let Err(e) = actor.as_mut().unwrap().set_contracts(contracts_json) {
+        let _ = reply.send(Err(Status::internal(format!("SetContracts: {e}"))));
+        return;
     }
     persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
     let _ = reply.send(Ok(()));
@@ -986,30 +876,20 @@ async fn ensure_actor(
             let Some((gk, kpj, pkpj, usih, secret, pairing, contracts_json)) = material else {
                 return Err(Status::not_found(format!("no policy for {group_key}")));
             };
-            let result = actor
-                .as_mut()
-                .unwrap()
-                .command(ActorCommand::InstallPolicy {
-                    group_key: gk,
-                    key_package_json: kpj,
-                    public_key_package_json: pkpj,
-                    user_signing_identifier_hex: usih,
-                    server_dkg_secret_hex: secret,
-                    contract_pairing: pairing.as_ref().map(pairing_to_wire),
-                    contracts_json,
-                })
-                .await;
-            match result {
-                Ok(ActorResponse::PolicyInstalled) => *actor_policy_installed = true,
-                Ok(other) => {
-                    reseat_actor(actor, actor_policy_installed);
-                    return Err(Status::internal(format!("InstallPolicy: {other:?}")));
-                }
-                Err(e) => {
-                    reseat_actor(actor, actor_policy_installed);
-                    return Err(Status::internal(format!("InstallPolicy: {e}")));
-                }
+            let result = actor.as_mut().unwrap().install_policy(
+                gk,
+                &kpj,
+                &pkpj,
+                usih.as_deref(),
+                secret,
+                pairing,
+                contracts_json,
+            );
+            if let Err(e) = result {
+                reseat_actor(actor, actor_policy_installed);
+                return Err(Status::internal(format!("InstallPolicy: {e}")));
             }
+            *actor_policy_installed = true;
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
         }
     }
@@ -1023,36 +903,29 @@ async fn load_policy_state_from_actor(
     state: &Arc<Mutex<CosignerState>>,
     actor: &mut CosignerActor,
 ) -> Result<(), Status> {
-    match actor.command(ActorCommand::GetPublicPolicy).await {
-        Ok(ActorResponse::PublicPolicy {
-            group_key,
-            public_key_package_json,
-            user_signing_identifier_hex,
-            contract_pairing: _,
-            contracts_json,
-        }) => {
-            let contracts = if contracts_json.is_empty() {
+    match actor.public_policy() {
+        Ok(pp) => {
+            let contracts = if pp.contracts_json.is_empty() {
                 Default::default()
             } else {
-                serde_json::from_str(&contracts_json)
+                serde_json::from_str(&pp.contracts_json)
                     .map_err(|e| Status::internal(format!("bad contracts json: {e}")))?
             };
             let mut st = state.lock();
             st.policy_state = Some(crate::cosigner::state::PolicyState {
-                cosigner_id: group_key,
-                user_signing_identifier_hex,
+                cosigner_id: pp.group_key,
+                user_signing_identifier_hex: pp.user_signing_identifier_hex,
                 server_dkg_secret_hex: None,
                 normal_policy: crate::cosigner::state::NormalPolicy {
                     id: "normal".to_string(),
                     key_package_json: String::new(),
-                    public_key_package_json,
+                    public_key_package_json: pp.public_key_package_json,
                 },
                 contracts,
                 contract_pairing: None,
             });
             Ok(())
         }
-        Ok(other) => Err(Status::internal(format!("GetPublicPolicy: {other:?}"))),
         Err(e) => Err(Status::internal(format!("GetPublicPolicy: {e}"))),
     }
 }
@@ -1080,7 +953,7 @@ async fn route_send_vtxo(
         // Carry the current VTXO set in the wire; the actor selects + balance-checks it itself.
         let wire = {
             let st = state.lock();
-            SendVtxoStep1Wire {
+            SendVtxoStep1 {
                 user_id: req.user_id.clone(),
                 signature: req.signature.clone(),
                 timestamp_ms: req.timestamp_ms,
@@ -1089,7 +962,7 @@ async fn route_send_vtxo(
                 vtxos: st
                     .vtxos
                     .iter()
-                    .map(|e| VtxoInputWire {
+                    .map(|e| VtxoInput {
                         txid: e.txid.clone(),
                         vout: e.vout,
                         amount_sats: e.amount,
@@ -1101,10 +974,10 @@ async fn route_send_vtxo(
         let result = actor
             .as_mut()
             .unwrap()
-            .command(ActorCommand::SendVtxoStep1(wire))
+            .send_vtxo_step1(wire)
             .await;
         match result {
-            Ok(ActorResponse::SendVtxoSighashes { messages_to_sign }) => {
+            Ok(messages_to_sign) => {
                 let _ = reply.send(Ok(SendVtxoResponse {
                     status: send_vtxo_response::Status::SigningRequired as i32,
                     messages_to_sign,
@@ -1113,65 +986,46 @@ async fn route_send_vtxo(
                     error_message: String::new(),
                 }));
             }
-            Ok(ActorResponse::Error(msg)) => {
-                let _ = reply.send(Err(Status::internal(msg)));
-                reseat_actor(actor, actor_policy_installed);
-            }
-            Ok(other) => {
-                let _ = reply.send(Err(Status::internal(format!("send_vtxo step1: {other:?}"))));
-                reseat_actor(actor, actor_policy_installed);
-            }
-            Err(e) => {
-                let _ = reply.send(Err(Status::internal(format!("actor send_vtxo step1: {e}"))));
+            Err(msg) => {
+                let _ = reply.send(Err(Status::internal(format!("send_vtxo step1: {msg}"))));
                 reseat_actor(actor, actor_policy_installed);
             }
         }
     } else {
-        let wire = SendVtxoStep2Wire {
+        let wire = SendVtxoStep2 {
             user_id: req.user_id.clone(),
             signature: req.signature.clone(),
             timestamp_ms: req.timestamp_ms,
             signed_messages: req.signed_messages.clone(),
         };
-        let result = actor
-            .as_mut()
-            .unwrap()
-            .command(ActorCommand::SendVtxoStep2(wire))
-            .await;
-        match result {
-            Ok(ActorResponse::SendVtxoSubmitted { ark_txid, change }) => {
+        match actor.as_mut().unwrap().send_vtxo_step2(wire).await {
+            Ok(submitted) => {
                 // Mirror the send into the actor's owned history (it owns the data for the
                 // sealed snapshot); the host projection is still updated for live queries.
-                let entry = ArkTxEntryWire {
+                let entry = ArkTxEntry {
                     tx_type: "send".to_string(),
                     amount_sats: -(req.amount as i64),
-                    txid: ark_txid.clone(),
+                    txid: submitted.ark_txid.clone(),
                     timestamp: now_secs(),
                 };
                 let resp = {
                     let mut st = state.lock();
-                    handlers::ark_send::apply_send_result(&mut st, shared, &req, ark_txid, change)
+                    handlers::ark_send::apply_send_result(
+                        &mut st,
+                        shared,
+                        &req,
+                        submitted.ark_txid,
+                        submitted.change,
+                    )
                 };
-                let _ = actor
-                    .as_mut()
-                    .unwrap()
-                    .command(ActorCommand::AppendHistory { entry })
-                    .await;
+                actor.as_mut().unwrap().append_history(entry);
                 // Phase 4: the send mutated actor VTXOs + history — persist the snapshot.
                 let group_key = state.lock().cosigner_id.clone();
                 persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
                 let _ = reply.send(Ok(resp));
             }
-            Ok(ActorResponse::Error(msg)) => {
-                let _ = reply.send(Err(Status::internal(msg)));
-                reseat_actor(actor, actor_policy_installed);
-            }
-            Ok(other) => {
-                let _ = reply.send(Err(Status::internal(format!("send_vtxo step2: {other:?}"))));
-                reseat_actor(actor, actor_policy_installed);
-            }
-            Err(e) => {
-                let _ = reply.send(Err(Status::internal(format!("actor send_vtxo step2: {e}"))));
+            Err(msg) => {
+                let _ = reply.send(Err(Status::internal(format!("send_vtxo step2: {msg}"))));
                 reseat_actor(actor, actor_policy_installed);
             }
         }
@@ -1211,32 +1065,15 @@ async fn route_settle_delegate(
                 return;
             }
         };
-        match actor
-            .as_mut()
-            .unwrap()
-            .command(ActorCommand::SetVtxos { vtxos })
-            .await
-        {
-            Ok(ActorResponse::VtxosSet) => {}
-            other => {
-                let _ = reply.send(Err(Status::internal(format!("SetVtxos: {other:?}"))));
-                reseat_actor(actor, actor_policy_installed);
-                return;
-            }
-        }
-        let wire = GenerateDelegateWire {
+        actor.as_mut().unwrap().set_vtxos(vtxos);
+        let wire = GenerateDelegate {
             user_id: req.user_id,
             signature: req.signature,
             timestamp_ms: req.timestamp_ms,
             intent_valid_at,
         };
-        match actor
-            .as_mut()
-            .unwrap()
-            .command(ActorCommand::GenerateDelegate(wire))
-            .await
-        {
-            Ok(ActorResponse::DelegateSighashes { messages_to_sign }) => {
+        match actor.as_mut().unwrap().generate_delegate(wire).await {
+            Ok(messages_to_sign) => {
                 let _ = reply.send(Ok(SettleDelegateResponse {
                     status: settle_delegate_response::Status::SigningRequired as i32,
                     messages_to_sign,
@@ -1245,14 +1082,8 @@ async fn route_settle_delegate(
                     error_message: String::new(),
                 }));
             }
-            Ok(ActorResponse::Error(msg)) => {
-                let _ = reply.send(Err(Status::internal(msg)));
-                reseat_actor(actor, actor_policy_installed);
-            }
-            other => {
-                let _ = reply.send(Err(Status::internal(format!(
-                    "GenerateDelegate: {other:?}"
-                ))));
+            Err(msg) => {
+                let _ = reply.send(Err(Status::internal(format!("GenerateDelegate: {msg}"))));
                 reseat_actor(actor, actor_policy_installed);
             }
         }
@@ -1260,31 +1091,16 @@ async fn route_settle_delegate(
     }
 
     // Phase 2: insert the client's signatures → ReadyToSettle.
-    let apply = ApplyDelegateSigsWire {
+    let apply = ApplyDelegateSigs {
         user_id: req.user_id,
         signature: req.signature,
         timestamp_ms: req.timestamp_ms,
         signed_messages: req.signed_messages,
     };
-    match actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::ApplyDelegateSigs(apply))
-        .await
-    {
-        Ok(ActorResponse::DelegateReady) => {}
-        Ok(ActorResponse::Error(msg)) => {
-            let _ = reply.send(Err(Status::internal(msg)));
-            reseat_actor(actor, actor_policy_installed);
-            return;
-        }
-        other => {
-            let _ = reply.send(Err(Status::internal(format!(
-                "ApplyDelegateSigs: {other:?}"
-            ))));
-            reseat_actor(actor, actor_policy_installed);
-            return;
-        }
+    if let Err(msg) = actor.as_mut().unwrap().apply_delegate_sigs(apply) {
+        let _ = reply.send(Err(Status::internal(format!("ApplyDelegateSigs: {msg}"))));
+        reseat_actor(actor, actor_policy_installed);
+        return;
     }
 
     if req.store_only {
@@ -1321,32 +1137,19 @@ async fn route_settle_delegate(
     }
 
     // Manual path: drive the batch immediately in the actor.
-    match actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::SettleDelegate)
-        .await
-    {
-        Ok(ActorResponse::SettleSubmitted {
-            commitment_txid, ..
-        }) => {
+    match actor.as_mut().unwrap().settle_delegate().await {
+        Ok(settled) => {
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
             let _ = reply.send(Ok(SettleDelegateResponse {
                 status: settle_delegate_response::Status::Settled as i32,
                 messages_to_sign: vec![],
                 script_path_spend: false,
-                commitment_txid,
+                commitment_txid: settled.commitment_txid,
                 error_message: String::new(),
             }));
         }
-        Ok(ActorResponse::Error(msg)) => {
-            let _ = reply.send(Err(Status::internal(msg)));
-            reseat_actor(actor, actor_policy_installed);
-        }
-        other => {
-            let _ = reply.send(Err(Status::internal(format!(
-                "SettleDelegate drive: {other:?}"
-            ))));
+        Err(msg) => {
+            let _ = reply.send(Err(Status::internal(format!("SettleDelegate drive: {msg}"))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
@@ -1386,14 +1189,11 @@ async fn route_settle_boarding(
     let resp = actor
         .as_mut()
         .unwrap()
-        .command(ActorCommand::BoardingSettle {
-            boarding_utxo,
-            signed_messages: req.signed_messages,
-        })
+        .boarding_settle(boarding_utxo, req.signed_messages)
         .await;
 
     match resp {
-        Ok(ActorResponse::BoardingSettleSighashes { messages_to_sign }) => {
+        Ok(BoardingSettleOutcome::Sighashes(messages_to_sign)) => {
             let _ = reply.send(Ok(SettleResponse {
                 status: settle_response::Status::SigningRequired as i32,
                 messages_to_sign,
@@ -1402,22 +1202,16 @@ async fn route_settle_boarding(
                 error_message: String::new(),
             }));
         }
-        Ok(ActorResponse::BoardingSettleSubmitted {
-            commitment_txid,
-            vtxo_txid,
-            vtxo_vout,
-            amount_sats,
-            exit_delay,
-        }) => {
+        Ok(BoardingSettleOutcome::Submitted(sub)) => {
             {
                 let mut st = state.lock();
                 st.vtxos
-                    .retain(|e| !(e.txid == vtxo_txid && e.vout == vtxo_vout));
+                    .retain(|e| !(e.txid == sub.vtxo_txid && e.vout == sub.vtxo_vout));
                 st.vtxos.push(crate::cosigner::state::VtxoEntry {
-                    txid: vtxo_txid.clone(),
-                    vout: vtxo_vout,
-                    amount: amount_sats,
-                    exit_delay,
+                    txid: sub.vtxo_txid.clone(),
+                    vout: sub.vtxo_vout,
+                    amount: sub.amount_sats,
+                    exit_delay: sub.exit_delay,
                     created_at: now_secs(),
                     expires_at: 0,
                 });
@@ -1428,8 +1222,8 @@ async fn route_settle_boarding(
                 );
                 st.ark_tx_history.push(crate::cosigner::types::ArkTxEntry {
                     tx_type: "board".into(),
-                    amount_sats: amount_sats as i64,
-                    txid: vtxo_txid,
+                    amount_sats: sub.amount_sats as i64,
+                    txid: sub.vtxo_txid,
                     timestamp: now_secs(),
                 });
                 handlers::helpers::save_user_ark_history(
@@ -1443,21 +1237,13 @@ async fn route_settle_boarding(
                 status: settle_response::Status::Settled as i32,
                 messages_to_sign: vec![],
                 script_path_spend: false,
-                commitment_txid,
+                commitment_txid: sub.commitment_txid,
                 error_message: String::new(),
             }));
         }
-        Ok(ActorResponse::Error(m)) => {
+        Err(m) => {
             reseat_actor(actor, actor_policy_installed);
-            let _ = reply.send(Err(Status::internal(m)));
-        }
-        Ok(other) => {
-            reseat_actor(actor, actor_policy_installed);
-            let _ = reply.send(Err(Status::internal(format!("BoardingSettle: {other:?}"))));
-        }
-        Err(e) => {
-            reseat_actor(actor, actor_policy_installed);
-            let _ = reply.send(Err(Status::internal(format!("BoardingSettle: {e}"))));
+            let _ = reply.send(Err(Status::internal(format!("BoardingSettle: {m}"))));
         }
     }
 }
@@ -1485,17 +1271,11 @@ async fn route_tick_auto_settle(
         return;
     }
     let group_key = state.lock().cosigner_id.clone();
-    match actor
-        .as_mut()
-        .unwrap()
-        .command(ActorCommand::SettleDelegate)
-        .await
-    {
-        Ok(ActorResponse::SettleSubmitted {
-            commitment_txid,
-            vtxo_outpoint,
-            exit_delay,
-        }) => {
+    match actor.as_mut().unwrap().settle_delegate().await {
+        Ok(settled) => {
+            let commitment_txid = settled.commitment_txid;
+            let vtxo_outpoint = settled.vtxo_outpoint;
+            let exit_delay = settled.exit_delay;
             {
                 let mut st = state.lock();
                 st.guest_delegate_threshold = None;
@@ -1530,12 +1310,8 @@ async fn route_tick_auto_settle(
             persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
             tracing::info!("auto-settle (actor): commitment_txid={commitment_txid}");
         }
-        Ok(ActorResponse::Error(msg)) => {
+        Err(msg) => {
             tracing::warn!("auto-settle (actor): {msg}");
-            reseat_actor(actor, actor_policy_installed);
-        }
-        other => {
-            tracing::warn!("auto-settle (actor): unexpected {other:?}");
             reseat_actor(actor, actor_policy_installed);
         }
     }

@@ -67,9 +67,6 @@ Inside the runtime, every user (keyed by FROST verifying-share / group key) gets
 const MAILBOX_CAPACITY: usize = 256;
 
 let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
-// The actor owns a native `CosignerActor` — FROST key package + Ark secret + VTXOs +
-// sessions — restored from its own sealed snapshot. The host keeps no plaintext
-// key, and the crypto runs in-process.
 tokio::spawn(run_cosigner(rx, shared, registry));
 ```
 

@@ -9,11 +9,9 @@ use crate::cosigner::actor::CosignerActor;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::registry::run_blocking;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
-use crate::cosigner::types::ArkTxEntry;
+use crate::cosigner::types::{ArkTxEntry, VtxoInput};
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
-
-use crate::cosigner::wire::VtxoInputWire;
 
 use super::helpers::{
     delete_user_delegate, now_secs, save_user_ark_history, save_user_vtxos,
@@ -46,14 +44,14 @@ fn fetch_asp_info(
 pub fn build_delegate_step1(
     state: &CosignerState,
     shared: &SharedServices,
-) -> Result<(Vec<VtxoInputWire>, Option<u64>), Status> {
+) -> Result<(Vec<VtxoInput>, Option<u64>), Status> {
     if state.vtxos.is_empty() {
         return Err(Status::failed_precondition("no VTXOs to settle"));
     }
     let vtxos = state
         .vtxos
         .iter()
-        .map(|e| VtxoInputWire {
+        .map(|e| VtxoInput {
             txid: e.txid.clone(),
             vout: e.vout,
             amount_sats: e.amount,

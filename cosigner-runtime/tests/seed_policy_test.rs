@@ -1,52 +1,24 @@
-//! Plan A foundation: `SeedPolicy` installs freshly-computed key material into the
-//! per-actor guest and seals it into the guest snapshot — with NO plaintext policy in
-//! persistence. Proves the guest owns the keys via the seed path alone (a `sealed_state`
-//! blob appears, the `policies` tree stays empty), which is what lets later cold spawns
-//! restore keys without the host keeping a plaintext signing key.
+//! Plan A foundation: `SeedPolicy` installs freshly-computed key material into the per-user
+//! actor and seals it into the actor snapshot — with NO plaintext policy in persistence. Proves
+//! the actor owns the keys via the seed path alone (a `sealed_state` blob appears; nothing is
+//! written to a plaintext `policies` tree), which is what lets later cold spawns restore keys
+//! without the host keeping a plaintext signing key.
+//!
+//! Integration test: needs Redis (persistence). The ASP channel is lazy and never used here.
+
+mod common;
 
 use std::collections::BTreeMap;
-use std::path::PathBuf;
-use std::sync::Arc;
 
 use rand::rngs::OsRng;
-use tempfile::TempDir;
-use tokio::sync::Mutex as AsyncMutex;
 
-use cosigner_runtime::bitcoin::{BitcoinHistoryService, ElectrumClient};
 use cosigner_runtime::cosigner::command::CosignerCommand;
 use cosigner_runtime::cosigner::registry::CosignerRegistry;
-use cosigner_runtime::persistence::SledStore;
-use cosigner_runtime::shared::SharedServices;
 
 use threshold::dkg::{self, Round1Package, Round2Package};
 use threshold::identifier::Identifier;
 use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::random;
-
-fn wasm_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("cosigner/target/wasm32-wasip2/release/cosigner.wasm")
-}
-
-fn make_shared() -> (Arc<SharedServices>, TempDir) {
-    let tmp = TempDir::new().unwrap();
-    let store = Arc::new(SledStore::open(tmp.path()).unwrap());
-    let electrum = ElectrumClient::new("127.0.0.1", 50001);
-    let bitcoin_history = Arc::new(AsyncMutex::new(BitcoinHistoryService::new(electrum)));
-    let shared = Arc::new(SharedServices::new(
-        store.clone(),
-        store,
-        bitcoin_history,
-        None,
-        None,
-        None,
-        1800,
-        1800,
-    ));
-    (shared, tmp)
-}
 
 /// Host-side 2-of-2 DKG; even-Y-normalized outputs. Index 0 = user, 1 = cosigner.
 fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
@@ -107,19 +79,16 @@ fn dkg_2of2() -> (Vec<KeyPackage>, PublicKeyPackage) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seed_policy_installs_and_seals_without_plaintext() {
-    let wasm = wasm_path();
-    if !wasm.exists() {
-        eprintln!("cosigner-guest not built at {wasm:?}; skipping.");
+    let Some(shared) = common::try_shared().await else {
         return;
-    }
+    };
 
-    let (shared, _tmp) = make_shared();
     let (kps, pkp) = dkg_2of2();
     let kp_user = &kps[0];
     let kp_cosigner = &kps[1];
     let group_key = hex::encode(pkp.verifying_key.serialize());
 
-    let registry = CosignerRegistry::new(wasm.to_str().unwrap(), shared.clone()).unwrap();
+    let registry = CosignerRegistry::new(shared.clone()).unwrap();
 
     // Seed via the actor command — note we never write the `policies` tree.
     let res: Result<(), _> = registry
@@ -134,17 +103,17 @@ async fn seed_policy_installs_and_seals_without_plaintext() {
         .await;
     assert!(res.is_ok(), "SeedPolicy failed: {res:?}");
 
-    // The guest sealed its state ⇒ a sealed_state blob exists for the group key.
+    // The actor sealed its state ⇒ a sealed_state blob exists for the group key.
     let blob = shared.persistence.get("sealed_state", &group_key).unwrap();
-    assert!(
-        blob.is_some(),
-        "expected a sealed_state blob after SeedPolicy"
-    );
+    assert!(blob.is_some(), "expected a sealed_state blob after SeedPolicy");
 
-    // …and no plaintext policy was written/needed — the guest owns the keys.
+    // …and no plaintext policy was written/needed — the actor owns the keys.
     let plaintext = shared.persistence.get("policies", &group_key).unwrap();
     assert!(
         plaintext.is_none(),
         "SeedPolicy must not require a plaintext policy in the `policies` tree"
     );
+
+    // Clean up the dev-Redis key this test wrote.
+    let _ = shared.persistence.delete("sealed_state", &group_key);
 }

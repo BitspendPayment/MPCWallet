@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use std::collections::HashMap;
 
-use crate::cosigner::types::ArkTxEntry;
+use crate::cosigner::types::{arr32_hex, ArkTxEntry, ContractPairing};
 
 /// One VTXO owned by the user. Persisted in `vtxo_store`. `created_at` and
 /// `expires_at` come from the ASP `Vtxo` event and feed the auto-settle
@@ -126,21 +126,6 @@ impl Default for CosignerState {
 // cosigner's policy; the secret key lives only in the CosignerActor seal.
 // ===========================================================================
 
-mod arr32_hex {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&hex::encode(b))
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
-        let h = String::deserialize(d)?;
-        let bytes = hex::decode(&h).map_err(serde::de::Error::custom)?;
-        bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
-    }
-}
-
 /// Per-user policy state. Mirrors `PolicyState` from `server/lib/state.dart`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyState {
@@ -171,26 +156,6 @@ pub struct PolicyState {
     /// funds. `normal_policy` holds the cosigner's pairing counter-share + the V PKP.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub contract_pairing: Option<ContractPairing>,
-}
-
-/// Association binding a `{service, cosigner}` pairing actor to the single eVTXO it
-/// co-signs. All params needed to reconstruct the eVTXO cooperative-leaf script (and
-/// thus the script-path sighash) host-side, independent of the spend PSBT.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractPairing {
-    /// The eVTXO scriptPubKey hex this actor is allowed to co-sign spends of.
-    pub evtxo_spk_hex: String,
-    /// sha256(component_wasm) — the gate's contract id (also the leaf hashlock seed).
-    #[serde(with = "arr32_hex")]
-    pub contract_id: [u8; 32],
-    /// ASP signer x-only key (cooperative leaf).
-    #[serde(with = "arr32_hex")]
-    pub server_pk: [u8; 32],
-    /// Exit-leaf owner x-only key (part of the taptree).
-    #[serde(with = "arr32_hex")]
-    pub owner_pk: [u8; 32],
-    /// Unilateral-exit CSV delay (part of the taptree).
-    pub exit_delay: u32,
 }
 
 /// Normal (default) spending policy.

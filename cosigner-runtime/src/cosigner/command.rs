@@ -110,7 +110,7 @@ pub enum CosignerCommand {
         server_dkg_secret_hex: Option<String>,
         /// For a `{service, cosigner}` pairing actor: the eVTXO conditioning params, seeded into
         /// the guest so it rebuilds + binds the cooperative-leaf sighash itself (Plan A 1C).
-        contract_pairing: Option<crate::cosigner::state::ContractPairing>,
+        contract_pairing: Option<crate::cosigner::types::ContractPairing>,
         reply: Reply<()>,
     },
 

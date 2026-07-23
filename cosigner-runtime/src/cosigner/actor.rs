@@ -17,10 +17,10 @@ use crate::cosigner::handlers;
 use crate::cosigner::registry::{push_vtxo_received, CosignerRegistry};
 use crate::cosigner::state::CosignerState;
 
-use crate::cosigner::wire::{
-    ActorCommand, ActorResponse, ApplyDelegateSigsWire, ArkTxEntryWire, CommitmentWire,
-    ContractPairingWire, SendVtxoStep1Wire, SignStep1Wire, SignStep2Wire, SnapshotState,
-    TreeTxChunkWire, VtxoInputWire,
+use crate::cosigner::types::{
+    ApplyDelegateSigs, ArkTxEntry, BoardingSettleOutcome, BoardingSettleSubmitted, Commitment,
+    ContractPairing, ContractRefreshed, PublicPolicy, SendVtxoStep1, SendVtxoSubmitted,
+    SettleSubmitted, SignStep1, SignStep1Out, SignStep2, SignStep2Out, SnapshotState, VtxoInput,
 };
 
 use ark::client::batch::{DelegateSettleSession, PersistedDelegate};
@@ -63,9 +63,6 @@ struct Ceremony {
     shares: BTreeMap<Identifier, SignatureShare>,
     /// The cosigner's single-use nonce for this round (set in step1, consumed in step2).
     nonce: Option<SigningNonce>,
-    /// True ⇒ key-path (taproot) spend: sign under the BIP-341 key-path-tweaked key
-    /// (`merkle_root = None`). False ⇒ raw FROST (script-path spend).
-    tweaked: bool,
     /// The full transaction being signed (from step1), passed to the contract gate in step2
     /// before the cosigner produces its share.
     full_transaction: Vec<u8>,
@@ -78,9 +75,6 @@ pub struct CosignerActor {
     send_session: Option<(SendSession, u32)>,
     /// A `ReadyToSettle` delegate session the core can drive autonomously (auto-settle).
     delegate_session: Option<DelegateSettleSession>,
-    /// In-flight boarding tree-signer: holds the secret per-node nonces between `BoardingGenNonces`
-    /// and `BoardingTreeSign`.
-    boarding_signer: Option<ark::client::batch::BoardingTreeSigner>,
     /// In-flight GUEST-style boarding settle, held across the commitment-FROST pause (the client
     /// must FROST-sign the commitment sighashes between step 2 and step 3). Native: no held stream
     /// (step 3 finalizes optimistically). Transient — never snapshotted.
@@ -88,9 +82,9 @@ pub struct CosignerActor {
     /// The Ark cosigner (MuSig2) secret, hex — zeroized on drop. Used for tree signing.
     ark_cosigner_secret_hex: Option<Zeroizing<String>>,
     /// The owned spendable VTXO set.
-    vtxos: Vec<VtxoInputWire>,
+    vtxos: Vec<VtxoInput>,
     /// The owned Ark transaction history (display log; non-secret).
-    history: Vec<ArkTxEntryWire>,
+    history: Vec<ArkTxEntry>,
     /// Global services (contract gate + ASP url). Held so `command()` is a drop-in for the old
     /// `GuestInstance::command` — no per-call-site `shared` threading.
     pub(crate) shared: Arc<SharedServices>,
@@ -119,7 +113,6 @@ impl CosignerActor {
             ceremony: Ceremony::default(),
             send_session: None,
             delegate_session: None,
-            boarding_signer: None,
             boarding_settle: None,
             ark_cosigner_secret_hex: None,
             vtxos: Vec::new(),
@@ -142,7 +135,7 @@ impl CosignerActor {
                 .as_ref()
                 .map(|id| hex::encode(id.serialize())),
             ark_cosigner_secret_hex: self.ark_secret().map(|s| s.to_string()),
-            contract_pairing: policy.contract_pairing.as_ref().map(pairing_to_wire),
+            contract_pairing: policy.contract_pairing.clone(),
             contracts_json: policy.contracts_json.clone(),
             vtxos: self.vtxos.clone(),
             history: self.history.clone(),
@@ -173,7 +166,7 @@ impl CosignerActor {
             key_package,
             public_key_package,
             user_signing_identifier,
-            contract_pairing: snap.contract_pairing.map(pairing_from_wire).transpose()?,
+            contract_pairing: snap.contract_pairing,
             contracts_json: snap.contracts_json,
         });
         self.ark_cosigner_secret_hex = snap.ark_cosigner_secret_hex.map(Zeroizing::new);
@@ -201,12 +194,24 @@ impl CosignerActor {
     }
 
     /// The owned VTXO set.
-    pub fn vtxos(&self) -> &[VtxoInputWire] {
+    pub fn vtxos(&self) -> &[VtxoInput] {
         &self.vtxos
     }
 
-    pub fn set_vtxos(&mut self, vtxos: Vec<VtxoInputWire>) {
+    pub fn set_vtxos(&mut self, vtxos: Vec<VtxoInput>) {
         self.vtxos = vtxos;
+    }
+
+    /// Append one entry to the owned Ark transaction history (after a send/settle).
+    pub fn append_history(&mut self, entry: ArkTxEntry) {
+        self.history.push(entry);
+    }
+
+    /// Replace the stored contract registry (opaque host JSON). Errors if no policy is installed.
+    pub fn set_contracts(&mut self, contracts_json: String) -> Result<(), String> {
+        let p = self.policy.as_mut().ok_or("no policy installed")?;
+        p.contracts_json = contracts_json;
+        Ok(())
     }
 
     /// The wallet's group x-only pubkey (hex) — the VTXO owner key, from the installed policy's PKP.
@@ -221,7 +226,7 @@ impl CosignerActor {
         self.delegate_session.as_mut()
     }
 
-    fn apply_delegate_sigs(&mut self, req: ApplyDelegateSigsWire) -> Result<ActorResponse, String> {
+    pub(crate) fn apply_delegate_sigs(&mut self, req: ApplyDelegateSigs) -> Result<(), String> {
         // Auth (OP_SETTLE_DELEGATE) ran at the REST boundary.
         let signatures: Vec<[u8; 64]> = req
             .signed_messages
@@ -237,137 +242,21 @@ impl CosignerActor {
             .as_mut()
             .ok_or("no delegate session")?;
         session.sign_with_frost(signatures)?;
-        Ok(ActorResponse::DelegateReady)
-    }
-
-    /// Handle one SYNC command, in-process. Async commands (SendVtxo, GenerateDelegate,
-    /// SettleDelegate, BoardingSettle{2,3}) are routed by `command()` to the async flows instead.
-    pub fn handle(&mut self, cmd: ActorCommand) -> ActorResponse {
-        let result = match cmd {
-            ActorCommand::Ping => return ActorResponse::Pong,
-            ActorCommand::InstallPolicy {
-                group_key,
-                key_package_json,
-                public_key_package_json,
-                user_signing_identifier_hex,
-                server_dkg_secret_hex,
-                contract_pairing,
-                contracts_json,
-            } => self.install_policy(
-                group_key,
-                &key_package_json,
-                &public_key_package_json,
-                user_signing_identifier_hex.as_deref(),
-                server_dkg_secret_hex,
-                contract_pairing,
-                contracts_json,
-            ),
-            ActorCommand::SetContracts { contracts_json } => match self.policy.as_mut() {
-                Some(p) => {
-                    p.contracts_json = contracts_json;
-                    return ActorResponse::PolicyInstalled;
-                }
-                None => return ActorResponse::Error("no policy installed".into()),
-            },
-            ActorCommand::GetPublicPolicy => return self.public_policy(),
-            ActorCommand::ContractRefresh {
-                receiver_id_hex,
-                receiver_partial_point,
-                wallet_id_hex,
-                a_at_cosigner,
-                min_signers,
-            } => self.contract_refresh(
-                &receiver_id_hex,
-                &receiver_partial_point,
-                &wallet_id_hex,
-                &a_at_cosigner,
-                min_signers as usize,
-            ),
-            ActorCommand::ApplyDelegateSigs(req) => self.apply_delegate_sigs(req),
-            ActorCommand::GetArkCosignerPubkey => self.get_ark_cosigner_pubkey(),
-            ActorCommand::BoardingGenNonces {
-                tree_tx_chunks,
-                commitment_psbt_b64,
-                batch_id: _,
-            } => self.boarding_gen_nonces(tree_tx_chunks, &commitment_psbt_b64),
-            ActorCommand::BoardingTreeSign {
-                pending_nonces,
-                batch_expiry,
-                forfeit_pk_hex,
-            } => self.boarding_tree_sign(pending_nonces, batch_expiry, &forfeit_pk_hex),
-            ActorCommand::FrostSignStep1(req) => self.sign_step1(req),
-            ActorCommand::FrostSignStep2(req) => {
-                // Plan A: enforce the bound contract (native `ContractHost`) over the full tx BEFORE
-                // producing the cosigner's share — on Deny we refuse. No-op for non-contract spends.
-                let full_tx = self.ceremony.full_transaction.clone();
-                if let Err(e) = crate::cosigner::handlers::contract_gate::enforce_contracts(
-                    &self.shared,
-                    &full_tx,
-                ) {
-                    return ActorResponse::Error(format!("contract gate denied: {}", e.message()));
-                }
-                self.sign_step2(req)
-            }
-            ActorCommand::SetVtxos { vtxos } => {
-                self.vtxos = vtxos;
-                return ActorResponse::VtxosSet;
-            }
-            ActorCommand::ListVtxos => {
-                return ActorResponse::Vtxos {
-                    vtxos: self.vtxos.clone(),
-                }
-            }
-            ActorCommand::SetHistory { entries } => {
-                self.history = entries;
-                return ActorResponse::HistoryUpdated;
-            }
-            ActorCommand::AppendHistory { entry } => {
-                self.history.push(entry);
-                return ActorResponse::HistoryUpdated;
-            }
-            ActorCommand::ListArkTransactions => {
-                return ActorResponse::ArkTransactions {
-                    entries: self.history.clone(),
-                }
-            }
-            ActorCommand::Snapshot => {
-                return match self.to_snapshot() {
-                    Ok(blob) => ActorResponse::Snapshot { blob },
-                    Err(e) => ActorResponse::Error(e),
-                }
-            }
-            ActorCommand::RestoreSnapshot { blob } => {
-                return match self.restore_snapshot(&blob) {
-                    Ok(()) => ActorResponse::Restored,
-                    Err(e) => ActorResponse::Error(e),
-                }
-            }
-            // Async flows are driven by the actor's async methods, never this dispatcher.
-            ActorCommand::SendVtxoStep1(_)
-            | ActorCommand::SendVtxoStep2(_)
-            | ActorCommand::GenerateDelegate(_)
-            | ActorCommand::SettleDelegate { .. }
-            | ActorCommand::BoardingSettle { .. } => {
-                return ActorResponse::Error(
-                    "async command must be driven by the actor's async path, not handle()".into(),
-                )
-            }
-        };
-        result.unwrap_or_else(ActorResponse::Error)
+        Ok(())
     }
 
     /// Key-preserving REFRESH of this core's `V` onto a `{receiver, cosigner}` pairing, computed
     /// in-process so `V` never leaves it (Plan A). Returns the public pairing PKP + the receiver's
     /// half + the cosigner's pairing key package (the host relays the latter to seed the pairing
     /// actor; it is never persisted host-side).
-    fn contract_refresh(
+    pub(crate) fn contract_refresh(
         &mut self,
         receiver_id_hex: &str,
         receiver_partial_point: &[u8],
         wallet_id_hex: &str,
         a_at_cosigner: &[u8],
         min_signers: usize,
-    ) -> Result<ActorResponse, String> {
+    ) -> Result<ContractRefreshed, String> {
         let policy = self.policy.as_ref().ok_or("no policy installed")?;
         let receiver_id = parse_identifier_hex(receiver_id_hex)?;
         let wallet_id = parse_identifier_hex(wallet_id_hex)?;
@@ -392,7 +281,7 @@ impl CosignerActor {
             &mut OsRng,
         )
         .map_err(|e| format!("refresh_to_receiver: {e:?}"))?;
-        Ok(ActorResponse::ContractRefreshed {
+        Ok(ContractRefreshed {
             pairing_public_key_package_json: pairing.pairing_pkp.to_json(),
             receiver_half: pairing.receiver_half.to_vec(),
             my_key_package_json: pairing.my_kp.to_json(),
@@ -400,16 +289,16 @@ impl CosignerActor {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn install_policy(
+    pub(crate) fn install_policy(
         &mut self,
         group_key: String,
         key_package_json: &str,
         public_key_package_json: &str,
         user_signing_identifier_hex: Option<&str>,
         server_dkg_secret_hex: Option<String>,
-        contract_pairing: Option<ContractPairingWire>,
+        contract_pairing: Option<ContractPairing>,
         contracts_json: String,
-    ) -> Result<ActorResponse, String> {
+    ) -> Result<(), String> {
         let key_package =
             KeyPackage::from_json(key_package_json).map_err(|e| format!("bad key package: {e}"))?;
         let public_key_package = PublicKeyPackage::from_json(public_key_package_json)
@@ -423,87 +312,29 @@ impl CosignerActor {
             key_package,
             public_key_package,
             user_signing_identifier,
-            contract_pairing: contract_pairing.map(pairing_from_wire).transpose()?,
+            contract_pairing,
             contracts_json,
         });
         self.ark_cosigner_secret_hex = server_dkg_secret_hex.map(Zeroizing::new);
-        Ok(ActorResponse::PolicyInstalled)
+        Ok(())
     }
 
     /// Return the PUBLIC policy projection the host loads into its `policy_state`.
-    fn public_policy(&self) -> ActorResponse {
-        match self.policy.as_ref() {
-            Some(p) => ActorResponse::PublicPolicy {
-                group_key: p.group_key.clone(),
-                public_key_package_json: p.public_key_package.to_json(),
-                user_signing_identifier_hex: p
-                    .user_signing_identifier
-                    .as_ref()
-                    .map(|id| hex::encode(id.serialize())),
-                contract_pairing: p.contract_pairing.as_ref().map(pairing_to_wire),
-                contracts_json: p.contracts_json.clone(),
-            },
-            None => ActorResponse::Error("no policy installed".into()),
-        }
-    }
-
-    /// Return the Ark cosigner MuSig2 pubkey derived from the in-core secret (for the boarding
-    /// intent), without the secret leaving the core.
-    fn get_ark_cosigner_pubkey(&self) -> Result<ActorResponse, String> {
-        let secret = self
-            .ark_secret()
-            .ok_or("no Ark cosigner secret installed")?;
-        let signer = ark::client::batch::BoardingTreeSigner::new(secret)?;
-        Ok(ActorResponse::ArkCosignerPubkey {
-            pubkey_hex: signer.cosigner_pubkey_hex(),
+    pub(crate) fn public_policy(&self) -> Result<PublicPolicy, String> {
+        let p = self.policy.as_ref().ok_or("no policy installed")?;
+        Ok(PublicPolicy {
+            group_key: p.group_key.clone(),
+            public_key_package_json: p.public_key_package.to_json(),
+            user_signing_identifier_hex: p
+                .user_signing_identifier
+                .as_ref()
+                .map(|id| hex::encode(id.serialize())),
+            contract_pairing: p.contract_pairing.clone(),
+            contracts_json: p.contracts_json.clone(),
         })
     }
 
-    /// Boarding-settle tree-signing step 1: build the tx graph from the (public) chunks, generate the
-    /// secret per-node nonces with the in-core cosigner key, and return the public nonce points.
-    fn boarding_gen_nonces(
-        &mut self,
-        chunks: Vec<TreeTxChunkWire>,
-        commitment_psbt_b64: &str,
-    ) -> Result<ActorResponse, String> {
-        let secret = self
-            .ark_secret()
-            .ok_or("no Ark cosigner secret installed")?
-            .to_string();
-        let mut signer = ark::client::batch::BoardingTreeSigner::new(&secret)?;
-        let chunk_tuples: Vec<(String, String, Vec<(u32, String)>)> = chunks
-            .into_iter()
-            .map(|c| (c.txid, c.psbt_b64, c.children))
-            .collect();
-        let (cosigner_pk_hex, nonce_map) = signer.gen_nonces(&chunk_tuples, commitment_psbt_b64)?;
-        self.boarding_signer = Some(signer);
-        Ok(ActorResponse::BoardingNonces {
-            cosigner_pk_hex,
-            nonce_map,
-        })
-    }
-
-    /// Boarding-settle tree-signing step 2: MuSig2-sign every tree tx with the in-core cosigner key +
-    /// the nonces held since step 1, then drop the session.
-    fn boarding_tree_sign(
-        &mut self,
-        pending_nonces: Vec<(String, Vec<(String, String)>)>,
-        batch_expiry: u32,
-        forfeit_pk_hex: &str,
-    ) -> Result<ActorResponse, String> {
-        let mut signer = self
-            .boarding_signer
-            .take()
-            .ok_or("no boarding signer (call BoardingGenNonces first)")?;
-        let (cosigner_pk_hex, sig_map) =
-            signer.sign(&pending_nonces, batch_expiry, forfeit_pk_hex)?;
-        Ok(ActorResponse::BoardingTreeSigs {
-            cosigner_pk_hex,
-            sig_map,
-        })
-    }
-
-    pub fn sign_step1(&mut self, req: SignStep1Wire) -> Result<ActorResponse, String> {
+    pub fn sign_step1(&mut self, req: SignStep1) -> Result<SignStep1Out, String> {
         // Auth (OP_SIGN_STEP1) ran at the REST boundary.
         let policy = self.policy.as_ref().ok_or("no policy installed")?;
         let user_identifier = policy
@@ -512,14 +343,7 @@ impl CosignerActor {
             .ok_or("policy has no user_signing_identifier")?;
         let server_identifier = policy.key_package.identifier.clone();
 
-        // Key-path (taproot) spends sign under the BIP-341-tweaked key; script-path spends use the
-        // raw FROST key. The client tweaks symmetrically based on `script_path_spend`.
-        let tweaked = !req.script_path_spend;
-        let key_package = if tweaked {
-            policy.key_package.tweak(None)
-        } else {
-            policy.key_package.clone()
-        };
+        let key_package = policy.key_package.clone();
 
         // Plan A 1C: a `{service, cosigner}` pairing actor is AUTHORITATIVE about WHAT it signs. A
         // contract eVTXO's cooperative leaf is ONLY ever spent through arkd as an ark transaction
@@ -553,10 +377,8 @@ impl CosignerActor {
             }
         };
 
-        // Fresh round.
-        let mut ceremony = Ceremony {
+        let mut new_signing_ceremony = Ceremony {
             message,
-            tweaked,
             full_transaction: req.full_transaction.clone(),
             ..Default::default()
         };
@@ -564,32 +386,38 @@ impl CosignerActor {
         let user_comm = commitments_from_bytes(&req.hiding_commitment, &req.binding_commitment)?;
         let mut rng = OsRng;
         let server_nonce = nonce::new_nonce(&mut rng, &key_package.secret_share);
-        ceremony
+        new_signing_ceremony
             .commitments
             .insert(server_identifier.clone(), server_nonce.commitments.clone());
-        ceremony.commitments.insert(user_identifier, user_comm);
-        ceremony.nonce = Some(server_nonce);
+        new_signing_ceremony.commitments.insert(user_identifier, user_comm);
+        new_signing_ceremony.nonce = Some(server_nonce);
 
-        let commitments = ceremony
+        let commitments = new_signing_ceremony
             .commitments
             .iter()
-            .map(|(id, c)| CommitmentWire {
+            .map(|(id, c)| Commitment {
                 identifier_hex: hex::encode(id.serialize()),
                 hiding: point::serialize_compressed(&c.hiding).to_vec(),
                 binding: point::serialize_compressed(&c.binding).to_vec(),
             })
             .collect();
-        let message_to_sign = ceremony.message.clone();
-        self.ceremony = ceremony;
+        let message_to_sign = new_signing_ceremony.message.clone();
+        self.ceremony = new_signing_ceremony;
 
-        Ok(ActorResponse::SignStep1 {
+        Ok(SignStep1Out {
             commitments,
             message_to_sign,
         })
     }
 
-    pub fn sign_step2(&mut self, req: SignStep2Wire) -> Result<ActorResponse, String> {
+    pub fn sign_step2(&mut self, req: SignStep2) -> Result<SignStep2Out, String> {
         // Auth (OP_SIGN_STEP2) ran at the REST boundary.
+        // Plan A: enforce the bound contract (native `ContractHost`) over the full tx BEFORE
+        // producing the cosigner's share — on Deny we refuse. No-op for non-contract spends.
+        let full_tx = self.ceremony.full_transaction.clone();
+        crate::cosigner::handlers::contract_gate::enforce_contracts(&self.shared, &full_tx)
+            .map_err(|e| format!("contract gate denied: {}", e.message()))?;
+
         let policy = self.policy.as_ref().ok_or("no policy installed")?;
         let user_identifier = policy
             .user_signing_identifier
@@ -597,17 +425,8 @@ impl CosignerActor {
             .ok_or("policy has no user_signing_identifier")?;
         let server_identifier = policy.key_package.identifier.clone();
 
-        // Match the tweak chosen in step1 (key-path spends sign under the tweaked key).
-        let key_package = if self.ceremony.tweaked {
-            policy.key_package.tweak(None)
-        } else {
-            policy.key_package.clone()
-        };
-        let public_key_package = if self.ceremony.tweaked {
-            policy.public_key_package.tweak(None)
-        } else {
-            policy.public_key_package.clone()
-        };
+        let key_package = policy.key_package.clone();
+        let public_key_package = policy.public_key_package.clone();
 
         // Insert the client's signature share.
         let user_s_bytes: [u8; 32] = req
@@ -652,57 +471,35 @@ impl CosignerActor {
         let z_scalar = scalar_to_bytes(&signature.z).to_vec();
 
         self.ceremony = Ceremony::default();
-        Ok(ActorResponse::SignStep2 { r_point, z_scalar })
+        Ok(SignStep2Out { r_point, z_scalar })
     }
 
-    pub async fn command(
+    /// Boarding settle — the actor owns the phase via its in-flight session. No `signed_messages`
+    /// ⇒ START (abandon any in-flight session and rebuild). With sigs ⇒ advance the held session:
+    /// the commitment round if the event stream is still held, else the intent round. Acquires the
+    /// ASP client itself.
+    pub(crate) async fn boarding_settle(
         &mut self,
-        cmd: crate::cosigner::wire::ActorCommand,
-    ) -> anyhow::Result<ActorResponse> {
-        use crate::cosigner::wire::ActorCommand as C;
-
-        let resp = match cmd {
-            C::SendVtxoStep1(req) => {
-                let asp_arc = self.shared.asp_client.clone();
-                let mut asp = asp_arc.lock().await;
-                self.send_vtxo_step1(req, &mut asp).await
+        boarding_utxo: Option<(String, u32, u64)>,
+        signed_messages: Vec<Vec<u8>>,
+    ) -> Result<BoardingSettleOutcome, String> {
+        let asp_arc = self.shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
+        if signed_messages.is_empty() {
+            self.boarding_settle = None; // poll-without-sigs ⇒ abandon any in-flight, restart
+            let sighashes = self.boarding_settle_start(boarding_utxo, &mut asp).await?;
+            Ok(BoardingSettleOutcome::Sighashes(sighashes))
+        } else {
+            match self.boarding_settle.as_ref().map(|b| b.stream.is_some()) {
+                Some(true) => Ok(BoardingSettleOutcome::Submitted(
+                    self.boarding_settle_step3(signed_messages, &mut asp).await?,
+                )),
+                Some(false) => Ok(BoardingSettleOutcome::Sighashes(
+                    self.boarding_settle_step2(signed_messages, &mut asp).await?,
+                )),
+                None => Err("no active boarding settle".into()),
             }
-            C::SendVtxoStep2(req) => {
-                let asp_arc = self.shared.asp_client.clone();
-                let mut asp = asp_arc.lock().await;
-                self.send_vtxo_step2(req, &mut asp).await
-            }
-            C::GenerateDelegate(req) => {
-                let asp_arc = self.shared.asp_client.clone();
-                let mut asp = asp_arc.lock().await;
-                self.generate_delegate(req, &mut asp).await
-            }
-            C::SettleDelegate => {
-                let asp_arc = self.shared.asp_client.clone();
-                let mut asp = asp_arc.lock().await;
-                self.settle_delegate(&mut asp).await
-            }
-
-            C::BoardingSettle {
-                boarding_utxo,
-                signed_messages,
-            } => {
-                let asp_arc = self.shared.asp_client.clone();
-                let mut asp = asp_arc.lock().await;
-                if signed_messages.is_empty() {
-                    self.boarding_settle = None; // poll-without-sigs ⇒ abandon any in-flight, restart
-                    self.boarding_settle_start(boarding_utxo, &mut asp).await
-                } else {
-                    match self.boarding_settle.as_ref().map(|b| b.stream.is_some()) {
-                        Some(true) => self.boarding_settle_step3(signed_messages, &mut asp).await,
-                        Some(false) => self.boarding_settle_step2(signed_messages, &mut asp).await,
-                        None => ActorResponse::Error("no active boarding settle".into()),
-                    }
-                }
-            }
-            other => self.handle(other),
-        };
-        Ok(resp)
+        }
     }
 
     /// Boarding settle START: derive the owner key (from the installed policy), the ASP info, and
@@ -712,18 +509,18 @@ impl CosignerActor {
         &mut self,
         boarding_utxo: Option<(String, u32, u64)>,
         asp: &mut AspClient,
-    ) -> ActorResponse {
+    ) -> Result<Vec<Vec<u8>>, String> {
         let owner_pk_hex = match self.owner_pk_hex() {
             Ok(o) => o,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let info = match asp.get_info().await {
             Ok(i) => i,
-            Err(e) => return ActorResponse::Error(format!("GetInfo: {e}")),
+            Err(e) => return Err(format!("GetInfo: {e}")),
         };
         let network = match ark::client::parse_network(&info.network) {
             Ok(n) => n,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let boarding_exit_delay = info.boarding_exit_delay as u32;
         let boarding_address = match ark::client::boarding_address(
@@ -733,13 +530,13 @@ impl CosignerActor {
             network,
         ) {
             Ok(a) => a,
-            Err(e) => return ActorResponse::Error(format!("boarding_address: {e}")),
+            Err(e) => return Err(format!("boarding_address: {e}")),
         };
         let (txid, vout, amount) = match boarding_utxo {
             Some(u) => u,
-            None => return ActorResponse::Error("no boarding UTXO supplied".into()),
+            None => return Err("no boarding UTXO supplied".into()),
         };
-        match self.boarding_settle_step1(
+        self.boarding_settle_step1(
             &owner_pk_hex,
             &info.signer_pubkey,
             &info.forfeit_pubkey,
@@ -749,10 +546,7 @@ impl CosignerActor {
             amount,
             boarding_exit_delay,
             &info.network,
-        ) {
-            Ok(r) => r,
-            Err(e) => ActorResponse::Error(e),
-        }
+        )
     }
 
     /// Boarding settle step 1: build the boarding session + tree-signer from the (caller-derived)
@@ -769,7 +563,7 @@ impl CosignerActor {
         boarding_amount_sats: u64,
         boarding_exit_delay: u32,
         network: &str,
-    ) -> Result<ActorResponse, String> {
+    ) -> Result<Vec<Vec<u8>>, String> {
         let secret = self
             .ark_cosigner_secret_hex()
             .ok_or("no Ark cosigner secret installed")?
@@ -796,38 +590,37 @@ impl CosignerActor {
             exit_delay: boarding_exit_delay,
             stream: None,
         });
-        Ok(ActorResponse::BoardingSettleSighashes {
-            messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
-        })
+        Ok(sighashes.iter().map(|s| s.to_vec()).collect())
     }
 
     /// Delegate phase 1: build the pre-authorized intent + forfeit PSBTs (after `GetInfo`) and return
     /// the sighashes the client must FROST-sign. The Ark cosigner secret never leaves the core.
     pub(crate) async fn generate_delegate(
         &mut self,
-        req: GenerateDelegateWire,
-        asp: &mut AspClient,
-    ) -> ActorResponse {
+        req: GenerateDelegate,
+    ) -> Result<Vec<Vec<u8>>, String> {
         // Auth (OP_SETTLE_DELEGATE) ran at the REST boundary.
+        let asp_arc = self.shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
         let (owner_pk_hex, cosigner_secret_hex, vtxos) = {
             let owner = match self.owner_pk_hex() {
                 Ok(o) => o,
-                Err(e) => return ActorResponse::Error(e),
+                Err(e) => return Err(e),
             };
             let secret = match self.ark_cosigner_secret_hex() {
                 Some(s) => s.to_string(),
-                None => return ActorResponse::Error("no Ark cosigner secret installed".into()),
+                None => return Err("no Ark cosigner secret installed".into()),
             };
             (owner, secret, self.vtxos().to_vec())
         };
 
         let info = match asp.get_info().await {
             Ok(i) => i,
-            Err(e) => return ActorResponse::Error(format!("GetInfo: {e}")),
+            Err(e) => return Err(format!("GetInfo: {e}")),
         };
 
         if vtxos.is_empty() {
-            return ActorResponse::Error("no VTXOs to settle".into());
+            return Err("no VTXOs to settle".into());
         }
         let vtxo_inputs: Vec<DelegateVtxoInput> = vtxos
             .iter()
@@ -842,7 +635,7 @@ impl CosignerActor {
 
         let network = match ark::client::parse_network(&info.network) {
             Ok(n) => n,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let total: u64 = vtxos.iter().map(|v| v.amount_sats).sum();
         let owner_ark_address = match ark::client::ark_address(
@@ -852,7 +645,7 @@ impl CosignerActor {
             network,
         ) {
             Ok(a) => a,
-            Err(e) => return ActorResponse::Error(format!("ark_address: {e}")),
+            Err(e) => return Err(format!("ark_address: {e}")),
         };
         let outputs = vec![DelegateOutput {
             ark_address: owner_ark_address,
@@ -873,11 +666,9 @@ impl CosignerActor {
         ) {
             Ok((session, sighashes)) => {
                 self.delegate_session = Some(session);
-                ActorResponse::DelegateSighashes {
-                    messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
-                }
+                Ok(sighashes.iter().map(|s| s.to_vec()).collect())
             }
-            Err(e) => ActorResponse::Error(format!("generate_delegate: {e}")),
+            Err(e) => Err(format!("generate_delegate: {e}")),
         }
     }
 
@@ -885,7 +676,9 @@ impl CosignerActor {
     /// stream, and run the MuSig2 tree-signing + forfeit loop to completion. Requires an installed
     /// `ReadyToSettle` delegate session. Each arm runs a sync (secret-using) session step then an
     /// `asp.*().await` — `self` and `asp` are disjoint, no held cross-await borrow.
-    pub(crate) async fn settle_delegate(&mut self, asp: &mut AspClient) -> ActorResponse {
+    pub(crate) async fn settle_delegate(&mut self) -> Result<SettleSubmitted, String> {
+        let asp_arc = self.shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
         let (proof, message, topics) = match self
             .delegate_session
             .as_ref()
@@ -893,30 +686,30 @@ impl CosignerActor {
             .and_then(|s| s.register_payload())
         {
             Ok(v) => v,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
 
         let intent_id = match asp.register_intent(proof, message).await {
             Ok(id) => id,
-            Err(e) => return ActorResponse::Error(format!("RegisterIntent: {e}")),
+            Err(e) => return Err(format!("RegisterIntent: {e}")),
         };
         // The settled output uses the ASP's unilateral_exit_delay; capture it so the host
         // records the right exit_delay on the consolidated VTXO (a wrong one re-derives a
         // bad scriptPubKey → unspendable).
         let settled_exit_delay = match asp.get_info().await {
             Ok(i) => i.unilateral_exit_delay as u32,
-            Err(e) => return ActorResponse::Error(format!("GetInfo (exit_delay): {e}")),
+            Err(e) => return Err(format!("GetInfo (exit_delay): {e}")),
         };
         let mut stream = match asp.get_event_stream(topics).await {
             Ok(s) => s,
-            Err(e) => return ActorResponse::Error(format!("GetEventStream: {e}")),
+            Err(e) => return Err(format!("GetEventStream: {e}")),
         };
 
         loop {
             let resp = match stream.message().await {
                 Ok(Some(r)) => r,
-                Ok(None) => return ActorResponse::Error("event stream ended unexpectedly".into()),
-                Err(e) => return ActorResponse::Error(format!("event stream: {e}")),
+                Ok(None) => return Err("event stream ended unexpectedly".into()),
+                Err(e) => return Err(format!("event stream: {e}")),
             };
             let Some(event) = resp.event else { continue };
             match event {
@@ -926,10 +719,10 @@ impl CosignerActor {
                         .ok_or_else(|| "no delegate session".to_string())
                         .and_then(|s| s.on_batch_started(e))
                     {
-                        return ActorResponse::Error(e);
+                        return Err(e);
                     }
                     if let Err(e) = asp.confirm_registration(intent_id.clone()).await {
-                        return ActorResponse::Error(format!("ConfirmRegistration: {e}"));
+                        return Err(format!("ConfirmRegistration: {e}"));
                     }
                 }
                 Event::TreeTx(e) => {
@@ -938,7 +731,7 @@ impl CosignerActor {
                         .ok_or_else(|| "no delegate session".to_string())
                         .and_then(|s| s.on_tree_tx(e))
                     {
-                        return ActorResponse::Error(e);
+                        return Err(e);
                     }
                 }
                 Event::TreeSigningStarted(e) => {
@@ -948,10 +741,10 @@ impl CosignerActor {
                         .and_then(|s| s.on_tree_signing_started(e))
                     {
                         Ok(v) => v,
-                        Err(e) => return ActorResponse::Error(e),
+                        Err(e) => return Err(e),
                     };
                     if let Err(e) = asp.submit_tree_nonces(&batch_id, pubkey, tree_nonces).await {
-                        return ActorResponse::Error(format!("SubmitTreeNonces: {e}"));
+                        return Err(format!("SubmitTreeNonces: {e}"));
                     }
                 }
                 Event::TreeNonces(e) => {
@@ -961,14 +754,14 @@ impl CosignerActor {
                         .and_then(|s| s.on_tree_nonces(e))
                     {
                         Ok(v) => v,
-                        Err(e) => return ActorResponse::Error(e),
+                        Err(e) => return Err(e),
                     };
                     if let Some((batch_id, pubkey, tree_signatures)) = maybe {
                         if let Err(e) = asp
                             .submit_tree_signatures(&batch_id, pubkey, tree_signatures)
                             .await
                         {
-                            return ActorResponse::Error(format!("SubmitTreeSignatures: {e}"));
+                            return Err(format!("SubmitTreeSignatures: {e}"));
                         }
                     }
                 }
@@ -979,14 +772,14 @@ impl CosignerActor {
                         .and_then(|s| s.on_batch_finalization(e))
                     {
                         Ok(v) => v,
-                        Err(e) => return ActorResponse::Error(e),
+                        Err(e) => return Err(e),
                     };
                     if let Some(signed_forfeit_txs) = maybe {
                         if let Err(e) = asp
                             .submit_signed_forfeit_txs(signed_forfeit_txs, String::new())
                             .await
                         {
-                            return ActorResponse::Error(format!("SubmitSignedForfeitTxs: {e}"));
+                            return Err(format!("SubmitSignedForfeitTxs: {e}"));
                         }
                     }
                 }
@@ -994,16 +787,16 @@ impl CosignerActor {
                     let finalized = self.delegate_session_mut().map(|s| s.on_batch_finalized(e));
                     self.delegate_session = None;
                     return match finalized {
-                        Some((commitment_txid, vtxo_outpoint)) => ActorResponse::SettleSubmitted {
+                        Some((commitment_txid, vtxo_outpoint)) => Ok(SettleSubmitted {
                             commitment_txid,
                             vtxo_outpoint,
                             exit_delay: settled_exit_delay,
-                        },
-                        None => ActorResponse::Error("no delegate session at finalize".into()),
+                        }),
+                        None => Err("no delegate session at finalize".into()),
                     };
                 }
                 Event::BatchFailed(e) => {
-                    return ActorResponse::Error(format!("batch failed: {}", e.reason))
+                    return Err(format!("batch failed: {}", e.reason))
                 }
                 _ => {}
             }
@@ -1018,52 +811,52 @@ impl CosignerActor {
         &mut self,
         intent_sigs_wire: Vec<Vec<u8>>,
         asp: &mut AspClient,
-    ) -> ActorResponse {
+    ) -> Result<Vec<Vec<u8>>, String> {
         let intent_sigs = match sigs_from_wire(&intent_sigs_wire) {
             Ok(s) => s,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let inflight = match self.boarding_settle.as_mut() {
             Some(b) => b,
-            None => return ActorResponse::Error("no boarding settle in flight".into()),
+            None => return Err("no boarding settle in flight".into()),
         };
         if let Err(e) = inflight.session.insert_intent_signatures(intent_sigs) {
-            return ActorResponse::Error(e);
+            return Err(e);
         }
         let (proof, message, topics) = match inflight.session.register_payload() {
             Ok(v) => v,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let intent_id = match asp.register_intent(proof, message).await {
             Ok(id) => id,
-            Err(e) => return ActorResponse::Error(format!("RegisterIntent: {e}")),
+            Err(e) => return Err(format!("RegisterIntent: {e}")),
         };
         let mut stream = match asp.get_event_stream(topics).await {
             Ok(s) => s,
-            Err(e) => return ActorResponse::Error(format!("GetEventStream: {e}")),
+            Err(e) => return Err(format!("GetEventStream: {e}")),
         };
 
         // Drive to BatchFinalization, returning the commitment sighashes (the pause).
         loop {
             let resp = match stream.message().await {
                 Ok(Some(r)) => r,
-                Ok(None) => return ActorResponse::Error("event stream ended unexpectedly".into()),
-                Err(e) => return ActorResponse::Error(format!("event stream: {e}")),
+                Ok(None) => return Err("event stream ended unexpectedly".into()),
+                Err(e) => return Err(format!("event stream: {e}")),
             };
             let Some(event) = resp.event else { continue };
             let inflight = self.boarding_settle.as_mut().unwrap();
             match event {
                 Event::BatchStarted(e) => {
                     if let Err(e) = inflight.session.on_batch_started(e) {
-                        return ActorResponse::Error(e);
+                        return Err(e);
                     }
                     if let Err(e) = asp.confirm_registration(intent_id.clone()).await {
-                        return ActorResponse::Error(format!("ConfirmRegistration: {e}"));
+                        return Err(format!("ConfirmRegistration: {e}"));
                     }
                 }
                 Event::TreeTx(e) => {
                     if let Err(e) = inflight.session.handle_tree_tx(e) {
-                        return ActorResponse::Error(e);
+                        return Err(e);
                     }
                 }
                 Event::TreeSigningStarted(e) => match inflight.session.on_tree_signing_started(e) {
@@ -1076,18 +869,18 @@ impl CosignerActor {
                             .gen_nonces(&tree_tx_chunks, &commitment_psbt_b64)
                         {
                             Ok(v) => v,
-                            Err(e) => return ActorResponse::Error(e),
+                            Err(e) => return Err(e),
                         };
                         let batch_id = inflight.session.batch_id();
                         if let Err(e) = asp
                             .submit_tree_nonces(&batch_id, pubkey, nonce_map.into_iter().collect())
                             .await
                         {
-                            return ActorResponse::Error(format!("SubmitTreeNonces: {e}"));
+                            return Err(format!("SubmitTreeNonces: {e}"));
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => return ActorResponse::Error(e),
+                    Err(e) => return Err(e),
                 },
                 Event::TreeNonces(e) => match inflight.session.on_tree_nonces(e) {
                     Ok(Some(SettleAction::NeedTreeSign {
@@ -1101,7 +894,7 @@ impl CosignerActor {
                             &forfeit_pk_hex,
                         ) {
                             Ok(v) => v,
-                            Err(e) => return ActorResponse::Error(e),
+                            Err(e) => return Err(e),
                         };
                         let batch_id = inflight.session.batch_id();
                         if let Err(e) = asp
@@ -1112,29 +905,27 @@ impl CosignerActor {
                             )
                             .await
                         {
-                            return ActorResponse::Error(format!("SubmitTreeSignatures: {e}"));
+                            return Err(format!("SubmitTreeSignatures: {e}"));
                         }
                     }
                     Ok(_) => {}
-                    Err(e) => return ActorResponse::Error(e),
+                    Err(e) => return Err(e),
                 },
                 Event::BatchFinalization(e) => {
                     return match inflight.session.handle_batch_finalization(e) {
                         Ok(sighashes) => {
                             // Hold the open stream across the pause; step 3 drives it to BatchFinalized.
                             inflight.stream = Some(stream);
-                            ActorResponse::BoardingSettleSighashes {
-                                messages_to_sign: sighashes.iter().map(|s| s.to_vec()).collect(),
-                            }
+                            Ok(sighashes.iter().map(|s| s.to_vec()).collect())
                         }
-                        Err(e) => ActorResponse::Error(e),
+                        Err(e) => Err(e),
                     };
                 }
                 Event::BatchFinalized(_) => {
-                    return ActorResponse::Error("batch finalized before commitment signing".into())
+                    return Err("batch finalized before commitment signing".into())
                 }
                 Event::BatchFailed(e) => {
-                    return ActorResponse::Error(format!("batch failed: {}", e.reason))
+                    return Err(format!("batch failed: {}", e.reason))
                 }
                 _ => {}
             }
@@ -1147,27 +938,27 @@ impl CosignerActor {
         &mut self,
         commitment_sigs_wire: Vec<Vec<u8>>,
         asp: &mut AspClient,
-    ) -> ActorResponse {
+    ) -> Result<BoardingSettleSubmitted, String> {
         let commitment_sigs = match sigs_from_wire(&commitment_sigs_wire) {
             Ok(s) => s,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let mut inflight = match self.boarding_settle.take() {
             Some(b) => b,
-            None => return ActorResponse::Error("no boarding settle in flight".into()),
+            None => return Err("no boarding settle in flight".into()),
         };
         let signed_commitment_b64 = match inflight
             .session
             .insert_commitment_signatures(commitment_sigs)
         {
             Ok(v) => v,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         if let Err(e) = asp
             .submit_signed_forfeit_txs(vec![], signed_commitment_b64)
             .await
         {
-            return ActorResponse::Error(format!("SubmitSignedForfeitTxs: {e}"));
+            return Err(format!("SubmitSignedForfeitTxs: {e}"));
         }
         // Drive the held event stream to BatchFinalized so the new VTXO is settled + ASP-indexed
         // before we return — an immediate send must find it (the optimistic txid is already correct;
@@ -1178,73 +969,73 @@ impl CosignerActor {
                     Ok(Some(resp)) => match resp.event {
                         Some(Event::BatchFinalized(_)) => break,
                         Some(Event::BatchFailed(e)) => {
-                            return ActorResponse::Error(format!("batch failed: {}", e.reason))
+                            return Err(format!("batch failed: {}", e.reason))
                         }
                         _ => continue,
                     },
                     Ok(None) => break,
-                    Err(e) => return ActorResponse::Error(format!("event stream: {e}")),
+                    Err(e) => return Err(format!("event stream: {e}")),
                 }
             }
         }
         let (commitment_txid, vtxo) = match inflight.session.finalize_optimistic() {
             Ok(v) => v,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let (vtxo_txid, vtxo_vout) = vtxo.unwrap_or_else(|| (commitment_txid.clone(), 0));
-        ActorResponse::BoardingSettleSubmitted {
+        Ok(BoardingSettleSubmitted {
             commitment_txid,
             vtxo_txid,
             vtxo_vout,
             amount_sats: inflight.amount_sats,
             exit_delay: inflight.exit_delay,
-        }
+        })
     }
 
     /// SendVtxo phase 1: build the off-chain send tx (after `GetInfo`) and return the sighashes the
     /// client must FROST-sign.
     pub(crate) async fn send_vtxo_step1(
         &mut self,
-        req: SendVtxoStep1Wire,
-        asp: &mut AspClient,
-    ) -> ActorResponse {
+        req: SendVtxoStep1,
+    ) -> Result<Vec<Vec<u8>>, String> {
         // Auth (OP_SEND_VTXO) ran at the REST boundary.
+        let asp_arc = self.shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
         let total: u64 = req.vtxos.iter().map(|v| v.amount_sats).sum();
         if total < req.amount {
-            return ActorResponse::Error(format!(
+            return Err(format!(
                 "insufficient balance: have {} sats, need {} sats",
                 total, req.amount
             ));
         }
         let owner_pk_hex = match self.owner_pk_hex() {
             Ok(o) => o,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
         let info = match asp.get_info().await {
             Ok(i) => i,
-            Err(e) => return ActorResponse::Error(format!("GetInfo: {e}")),
+            Err(e) => return Err(format!("GetInfo: {e}")),
         };
         match build_send(&owner_pk_hex, &req.vtxos, &req, &info) {
             Ok((session, change_exit_delay, sighashes)) => {
                 self.send_session = Some((session, change_exit_delay));
-                ActorResponse::SendVtxoSighashes {
-                    messages_to_sign: sighashes,
-                }
+                Ok(sighashes)
             }
-            Err(e) => ActorResponse::Error(format!("build send: {e}")),
+            Err(e) => Err(format!("build send: {e}")),
         }
     }
 
     /// SendVtxo phase 2: insert the client's signatures, then submit + finalize via the ASP.
     pub(crate) async fn send_vtxo_step2(
         &mut self,
-        req: SendVtxoStep2Wire,
-        asp: &mut AspClient,
-    ) -> ActorResponse {
+        req: SendVtxoStep2,
+    ) -> Result<SendVtxoSubmitted, String> {
         // Auth (OP_SEND_VTXO) ran at the REST boundary.
+        let asp_arc = self.shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
         let signatures = match sigs_from_wire(&req.signed_messages) {
             Ok(s) => s,
-            Err(e) => return ActorResponse::Error(e),
+            Err(e) => return Err(e),
         };
 
         let (ark_b64, checkpoints) = match self
@@ -1256,12 +1047,12 @@ impl CosignerActor {
                 session.prepare_submit()
             }) {
             Ok(x) => x,
-            Err(e) => return ActorResponse::Error(format!("prepare submit: {e}")),
+            Err(e) => return Err(format!("prepare submit: {e}")),
         };
 
         let submit = match asp.submit_tx(ark_b64, checkpoints).await {
             Ok(r) => r,
-            Err(e) => return ActorResponse::Error(format!("SubmitTx: {e}")),
+            Err(e) => return Err(format!("SubmitTx: {e}")),
         };
 
         let final_checkpoints = match self
@@ -1271,14 +1062,14 @@ impl CosignerActor {
             .and_then(|(session, _)| session.finalize_checkpoints(&submit.signed_checkpoint_txs))
         {
             Ok(c) => c,
-            Err(e) => return ActorResponse::Error(format!("finalize checkpoints: {e}")),
+            Err(e) => return Err(format!("finalize checkpoints: {e}")),
         };
 
         if let Err(e) = asp
             .finalize_tx(submit.ark_txid.clone(), final_checkpoints)
             .await
         {
-            return ActorResponse::Error(format!("FinalizeTx: {e}"));
+            return Err(format!("FinalizeTx: {e}"));
         }
 
         let change = {
@@ -1297,7 +1088,7 @@ impl CosignerActor {
             // The send spent all current VTXOs; re-add the change VTXO to the owned set, if any.
             self.vtxos.clear();
             if let Some((txid, vout, amount_sats, exit_delay)) = change.clone() {
-                self.vtxos.push(VtxoInputWire {
+                self.vtxos.push(VtxoInput {
                     txid,
                     vout,
                     amount_sats,
@@ -1306,10 +1097,10 @@ impl CosignerActor {
             }
             change
         };
-        ActorResponse::SendVtxoSubmitted {
+        Ok(SendVtxoSubmitted {
             ark_txid: submit.ark_txid,
             change,
-        }
+        })
     }
 }
 
@@ -1326,37 +1117,13 @@ fn parse_identifier_hex(h: &str) -> Result<Identifier, String> {
     Identifier::deserialize(&arr).map_err(|e| format!("bad identifier: {e}"))
 }
 
-fn arr32(v: &[u8], what: &str) -> Result<[u8; 32], String> {
-    v.try_into().map_err(|_| format!("{what} must be 32 bytes"))
-}
-
-fn pairing_from_wire(w: ContractPairingWire) -> Result<ContractPairing, String> {
-    Ok(ContractPairing {
-        contract_spk_hex: w.evtxo_spk_hex,
-        contract_id: arr32(&w.contract_id, "contract_id")?,
-        server_pk: arr32(&w.server_pk, "server_pk")?,
-        owner_pk: arr32(&w.owner_pk, "owner_pk")?,
-        exit_delay: w.exit_delay,
-    })
-}
-
-fn pairing_to_wire(p: &ContractPairing) -> ContractPairingWire {
-    ContractPairingWire {
-        evtxo_spk_hex: p.contract_spk_hex.clone(),
-        contract_id: p.contract_id.to_vec(),
-        server_pk: p.server_pk.to_vec(),
-        owner_pk: p.owner_pk.to_vec(),
-        exit_delay: p.exit_delay,
-    }
-}
-
 /// Build the off-chain send transactions (SendVtxoStep1): derive change address, run
 /// `SendSession::build`, and return `(session, change_exit_delay, sighashes)`. Pure ark signing math
 /// (no I/O); `info` comes from a prior gRPC `GetInfo`.
 pub(crate) fn build_send(
     owner_pk_hex: &str,
-    vtxos: &[VtxoInputWire],
-    req: &SendVtxoStep1Wire,
+    vtxos: &[VtxoInput],
+    req: &SendVtxoStep1,
     info: &ArkInfo,
 ) -> Result<(SendSession, u32, Vec<Vec<u8>>), String> {
     if vtxos.is_empty() {
@@ -1426,7 +1193,7 @@ use ark::client::batch::{DelegateOutput, DelegateVtxoInput, SettleAction};
 use ark::client::proto::get_event_stream_response::Event;
 use ark::client::AspClient;
 
-use crate::cosigner::wire::{GenerateDelegateWire, SendVtxoStep2Wire};
+use crate::cosigner::types::{GenerateDelegate, SendVtxoStep2};
 
 fn sigs_from_wire(wire: &[Vec<u8>]) -> Result<Vec<[u8; 64]>, String> {
     wire.iter()
@@ -1442,19 +1209,7 @@ use bitcoin::taproot::LeafVersion;
 use bitcoin::{TapLeafHash, TapSighashType};
 use sha2::{Digest, Sha256};
 
-/// Binds a pairing actor to the single eVTXO it may co-sign. All params needed to rebuild the
-/// cooperative-leaf script (and thus the script-path sighash), carried in via `install_policy` and
-/// sealed in the snapshot.
-#[derive(Clone, Debug)]
-pub struct ContractPairing {
-    pub contract_spk_hex: String,
-    pub contract_id: [u8; 32],
-    pub server_pk: [u8; 32],
-    pub owner_pk: [u8; 32],
-    pub exit_delay: u32,
-}
-
-/// LEG 1: the cooperative-leaf script-path sighash of the input that spends this actor's eVTXO.
+/// the cooperative-leaf script-path sighash of the input that spends this actor's eVTXO.
 /// The leaf is rebuilt from the cosigner's own registration params (NOT the client PSBT scripts),
 /// so the only thing this can ever produce a signature over is a spend of its own eVTXO. `pkp` is
 /// the pairing PKP (its group key is `V`, the cooperative key). Errs if the spend doesn't touch it.
@@ -1478,7 +1233,7 @@ pub fn build_checkpoint_sighash(
         .collect();
     let input_idx = prevouts
         .iter()
-        .position(|p| hex::encode(p.script_pubkey.as_bytes()) == pairing.contract_spk_hex)
+        .position(|p| hex::encode(p.script_pubkey.as_bytes()) == pairing.evtxo_spk_hex)
         .ok_or("service pairing may only co-sign a spend of its own eVTXO")?;
 
     let commit: [u8; 32] = Sha256::digest(pairing.contract_id).into();
@@ -1505,7 +1260,7 @@ pub fn build_checkpoint_sighash(
     Ok(sighash.to_byte_array())
 }
 
-/// LEG 2 (service spend THROUGH arkd): the script-path sighash of the `ark_tx` input that spends an
+/// the script-path sighash of the `ark_tx` input that spends an
 /// OUTPUT of the verified `checkpoint_tx`. We don't re-derive ark-core's protocol; we CHAIN leg 2
 /// to leg 1 — the `ark_tx` input's prevout must be an output of the same checkpoint leg 1 verified
 /// spends the eVTXO. That binds the bundle to the eVTXO. The checkpoint output is `V`+server and

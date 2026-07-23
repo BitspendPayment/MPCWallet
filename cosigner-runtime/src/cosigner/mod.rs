@@ -8,7 +8,6 @@ pub mod handlers;
 pub mod registry;
 pub mod state;
 pub mod types;
-pub mod wire;
 
 pub use actor::CosignerActor;
 pub use command::CosignerCommand;
