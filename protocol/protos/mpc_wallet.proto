@@ -22,6 +22,18 @@ service MPCWallet {
   rpc EvtxoPendingShares (EvtxoPendingSharesRequest) returns (EvtxoPendingSharesResponse);
   rpc EvtxoAckShare (EvtxoAckShareRequest) returns (EvtxoAckShareResponse);
 
+  // Request-to-pay. A party is known by its single group verifying key. A wallet allowlists a
+  // contact; that contact may then send it payment requests. The payer's cosigner authenticates
+  // the requester, checks the allowlist, DERIVES the requester's Ark address from the allowlisted
+  // key (never trusting a supplied address), and records the resulting intent. The payer reviews
+  // it and either signs the payment (the normal interactive ark/send) or declines.
+  rpc ContactAdd (ContactAddRequest) returns (ContactAddResponse);
+  rpc ContactRemove (ContactRemoveRequest) returns (ContactRemoveResponse);
+  rpc ContactList (ContactListRequest) returns (ContactListResponse);
+  rpc PaymentRequestCreate (PaymentRequestCreateRequest) returns (PaymentRequestCreateResponse);
+  rpc PaymentRequestList (PaymentRequestListRequest) returns (PaymentRequestListResponse);
+  rpc PaymentRequestDecline (PaymentRequestDeclineRequest) returns (PaymentRequestDeclineResponse);
+
   // Signing
   rpc SignStep1 (SignStep1Request) returns (SignStep1Response);
   rpc SignStep2 (SignStep2Request) returns (SignStep2Response);
@@ -456,5 +468,96 @@ message EvtxoAckShareRequest {
   int64 timestamp_ms = 4;
 }
 message EvtxoAckShareResponse {
+  bool ok = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Request-to-pay
+// ---------------------------------------------------------------------------
+
+// A party this wallet has authorized to send it payment requests. One-way: the owner decides who
+// may bill it; the contact needs no consent and is not notified.
+message Contact {
+  bytes verifying_key = 1;   // the contact's group verifying key (33-byte compressed)
+  string label = 2;          // local display name, chosen by the owner
+  int64 added_at = 3;        // unix seconds
+}
+
+message ContactAddRequest {
+  bytes user_id = 1;                 // the owner (its own actor)
+  bytes contact_verifying_key = 2;
+  string label = 3;
+  bytes signature = 4;
+  int64 timestamp_ms = 5;
+}
+message ContactAddResponse {
+  bool ok = 1;
+}
+
+message ContactRemoveRequest {
+  bytes user_id = 1;                 // the owner
+  bytes contact_verifying_key = 2;
+  bytes signature = 3;
+  int64 timestamp_ms = 4;
+}
+message ContactRemoveResponse {
+  bool ok = 1;
+}
+
+message ContactListRequest {
+  bytes user_id = 1;                 // the owner
+  bytes signature = 2;
+  int64 timestamp_ms = 3;
+}
+message ContactListResponse {
+  repeated Contact contacts = 1;
+}
+
+// A request-to-pay held for the payer. NOT a pre-signed transaction: FROST is 2-round interactive
+// and Ark checkpoints need an ASP counter-signature, so no payment can be fully signed ahead of the
+// payer's approval. This records WHO asked, HOW MUCH, TO WHICH ADDRESS and UNTIL WHEN; the payer
+// reviews it and either signs the payment or declines.
+message PaymentIntent {
+  string id = 1;
+  bytes from_verifying_key = 2;      // the requester (was on the payer's allowlist at create time)
+  string to_ark_address = 3;         // DERIVED by the cosigner from from_verifying_key
+  uint64 amount_sats = 4;
+  string memo = 5;
+  int64 created_at = 6;
+  int64 expires_at = 7;
+  string status = 8;                 // pending | fulfilled | declined | expired
+  string ark_txid = 9;               // set when fulfilled
+}
+
+// Sent by the REQUESTER but routed to the PAYER's actor: `user_id` is the requester (who signs),
+// while the URL/actor id is the payer. The payer's allowlist is the only authorization.
+message PaymentRequestCreateRequest {
+  bytes user_id = 1;                 // the REQUESTER (signer) — not the payer
+  uint64 amount_sats = 2;
+  string memo = 3;
+  int64 expires_in_secs = 4;         // 0 ⇒ cosigner default
+  bytes signature = 5;
+  int64 timestamp_ms = 6;
+}
+message PaymentRequestCreateResponse {
+  PaymentIntent intent = 1;
+}
+
+message PaymentRequestListRequest {
+  bytes user_id = 1;                 // the payer (its own actor)
+  bytes signature = 2;
+  int64 timestamp_ms = 3;
+}
+message PaymentRequestListResponse {
+  repeated PaymentIntent intents = 1;
+}
+
+message PaymentRequestDeclineRequest {
+  bytes user_id = 1;                 // the payer
+  string id = 2;
+  bytes signature = 3;
+  int64 timestamp_ms = 4;
+}
+message PaymentRequestDeclineResponse {
   bool ok = 1;
 }

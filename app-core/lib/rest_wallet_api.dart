@@ -222,6 +222,103 @@ class RestWalletApi implements WalletApi {
     return EvtxoAckShareResponse()..ok = resp['ok'] as bool? ?? false;
   }
 
+
+  // -------------------------------------------------------------------------
+  // Request-to-pay
+  // -------------------------------------------------------------------------
+  //
+  // Identity here is the wallet's GROUP key, not its share key: the cosigner derives the payee's
+  // Ark address from whatever key identifies the requester, so a share key would produce an
+  // address the requester cannot spend. A group key also can't be Schnorr-signed (nobody holds
+  // its private half) — the session token, whose `sub` IS the group key, is what authenticates.
+
+  @override
+  Future<ContactAddResponse> contactAdd(ContactAddRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/contacts/add', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'contact_verifying_key': _hex(r.contactVerifyingKey),
+      'label': r.label,
+    });
+    return ContactAddResponse()..ok = resp['ok'] as bool? ?? false;
+  }
+
+  @override
+  Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/contacts/remove', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'contact_verifying_key': _hex(r.contactVerifyingKey),
+    });
+    return ContactRemoveResponse()..ok = resp['ok'] as bool? ?? false;
+  }
+
+  @override
+  Future<ContactListResponse> contactList(ContactListRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/contacts/list',
+        _authFields(r.userId, r.signature, r.timestampMs));
+    final contacts = (resp['contacts'] as List<dynamic>? ?? [])
+        .map((c) => Contact()
+          ..verifyingKey = _unhex(c['verifying_key'] as String?)
+          ..label = c['label'] as String? ?? ''
+          ..addedAt = Int64(_asInt(c['added_at'])))
+        .toList();
+    return ContactListResponse()..contacts.addAll(contacts);
+  }
+
+  /// Ask [payerGroupKeyHex] to pay us. The URL addresses the PAYER's actor while `user_id`
+  /// identifies US — the only call where those differ. The payer's contact allowlist is the
+  /// authorization; being able to reach the endpoint is not.
+  @override
+  Future<PaymentRequestCreateResponse> createPaymentRequest(
+      PaymentRequestCreateRequest r, String payerGroupKeyHex) async {
+    final resp = await _post('/api/u/$payerGroupKeyHex/payment-request/create', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'amount_sats': r.amountSats.toInt(),
+      'memo': r.memo,
+      'expires_in_secs': r.expiresInSecs.toInt(),
+    });
+    final intent = resp['intent'];
+    return PaymentRequestCreateResponse()
+      ..intent = intent == null
+          ? PaymentIntent()
+          : _intentFromJson(intent as Map<String, dynamic>);
+  }
+
+  @override
+  Future<PaymentRequestListResponse> paymentRequestList(
+      PaymentRequestListRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/payment-request/list',
+        _authFields(r.userId, r.signature, r.timestampMs));
+    final intents = (resp['intents'] as List<dynamic>? ?? [])
+        .map((i) => _intentFromJson(i as Map<String, dynamic>))
+        .toList();
+    return PaymentRequestListResponse()..intents.addAll(intents);
+  }
+
+  @override
+  Future<PaymentRequestDeclineResponse> paymentRequestDecline(
+      PaymentRequestDeclineRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/payment-request/decline', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'id': r.id,
+    });
+    return PaymentRequestDeclineResponse()..ok = resp['ok'] as bool? ?? false;
+  }
+
+  PaymentIntent _intentFromJson(Map<String, dynamic> i) => PaymentIntent()
+    ..id = i['id'] as String? ?? ''
+    ..fromVerifyingKey = _unhex(i['from_verifying_key'] as String?)
+    ..toArkAddress = i['to_ark_address'] as String? ?? ''
+    ..amountSats = Int64(_asInt(i['amount_sats']))
+    ..memo = i['memo'] as String? ?? ''
+    ..createdAt = Int64(_asInt(i['created_at']))
+    ..expiresAt = Int64(_asInt(i['expires_at']))
+    ..status = i['status'] as String? ?? ''
+    ..arkTxid = i['ark_txid'] as String? ?? '';
+
+  /// JSON numbers arrive as `int` (or `double` after a round-trip); normalise.
+  static int _asInt(dynamic v) =>
+      v is int ? v : (v is num ? v.toInt() : 0);
+
   // -------------------------------------------------------------------------
   // Signing
   // -------------------------------------------------------------------------

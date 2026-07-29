@@ -88,6 +88,37 @@ pub enum CosignerCommand {
         reply: Reply<RegisterDeviceTokenResponse>,
     },
 
+    // --- Request-to-pay ---
+    /// Authorize / revoke / list the parties allowed to bill this wallet. Signed by the owner.
+    ContactAdd {
+        req: ContactAddRequest,
+        reply: Reply<ContactAddResponse>,
+    },
+    ContactRemove {
+        req: ContactRemoveRequest,
+        reply: Reply<ContactRemoveResponse>,
+    },
+    ContactList {
+        req: ContactListRequest,
+        reply: Reply<ContactListResponse>,
+    },
+    /// Sent by the REQUESTER, routed to the PAYER's actor. `req.user_id` is the requester; the
+    /// payer is whichever actor this lands on. The payer's allowlist is the only authorization,
+    /// so the handler MUST check it before touching state.
+    PaymentRequestCreate {
+        req: PaymentRequestCreateRequest,
+        reply: Reply<PaymentRequestCreateResponse>,
+    },
+    /// The payer's own inbox.
+    PaymentRequestList {
+        req: PaymentRequestListRequest,
+        reply: Reply<PaymentRequestListResponse>,
+    },
+    PaymentRequestDecline {
+        req: PaymentRequestDeclineRequest,
+        reply: Reply<PaymentRequestDeclineResponse>,
+    },
+
     // --- Peer-contract share inbox (receiver's own actor) ---
     EvtxoPendingShares {
         req: EvtxoPendingSharesRequest,

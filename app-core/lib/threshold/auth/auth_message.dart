@@ -34,6 +34,16 @@ class AuthMessage {
   static const String opEvtxoPending = 'EVTXO_PENDING';
   static const String opEvtxoAck = 'EVTXO_ACK';
   static const String opEventsSubscribe = 'EVENTS_SUBSCRIBE';
+  // Request-to-pay. All are signed by the wallet that owns the actor EXCEPT opPayreqCreate,
+  // which is sent by the REQUESTER to the PAYER's actor and identifies the requester by its
+  // GROUP key (authenticated with that wallet's session token, since a group key cannot be
+  // Schnorr-signed).
+  static const String opContactAdd = 'CONTACT_ADD';
+  static const String opContactRemove = 'CONTACT_REMOVE';
+  static const String opContactList = 'CONTACT_LIST';
+  static const String opPayreqCreate = 'PAYREQ_CREATE';
+  static const String opPayreqList = 'PAYREQ_LIST';
+  static const String opPayreqDecline = 'PAYREQ_DECLINE';
 
   final String operation;
   final int timestampMs;

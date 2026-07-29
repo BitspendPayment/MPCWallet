@@ -696,6 +696,92 @@ void main() {
     expect(bobFinalBalance, equals(totalSent),
         reason: 'Bob should have received $totalSent sats total');
 
+    // ---------------------------------------------------------------------
+    // 11. Request-to-pay, end to end: Bob bills Alice and Alice pays it.
+    //
+    // Runs here rather than standalone because it needs a FUNDED payer, which
+    // this test already has. Covers the half a mocked test cannot: the payment
+    // actually settles and the cosigner marks the request fulfilled.
+    // ---------------------------------------------------------------------
+    print('11. Request-to-pay: Bob bills Alice, Alice pays');
+
+    // These endpoints authenticate against the id in the URL, so both sides need
+    // a token bound to the id they address the API by.
+    alice.setSessionTokenSource(
+        StaticSessionToken(await mintSessionToken(alice.userId!, webauthTokenSecret)));
+    bob.setSessionTokenSource(
+        StaticSessionToken(await mintSessionToken(bob.userId!, webauthTokenSecret)));
+
+    // A stranger cannot bill Alice: the allowlist is the only authorization, since
+    // auth proves key possession but does not bind a signer to the actor addressed.
+    await expectLater(
+      bob.requestPayment(alice.userId!, 1000, memo: 'not yet allowed'),
+      throwsA(isA<Exception>()),
+      reason: 'a non-contact must not be able to bill Alice',
+    );
+    print('   Un-allowlisted request refused');
+
+    await alice.contactAdd(bob.userId!, 'Bob');
+    final aliceContacts = await alice.contactList();
+    expect(aliceContacts, hasLength(1));
+    print('   Alice allowlisted Bob');
+
+    final requestAmount = 15000;
+    final intent =
+        await bob.requestPayment(alice.userId!, requestAmount, memo: 'invoice 1');
+    expect(intent.status, 'pending');
+    expect(intent.amountSats.toInt(), requestAmount);
+    // The payee address is derived by Alice's cosigner from Bob's group key — never
+    // supplied by Bob. A wrongly-derived one would send funds Bob cannot spend.
+    expect(intent.toArkAddress, bobArkAddress,
+        reason: "payee address must be Bob's own Ark address");
+    print('   Request created, payee address == Bob\'s own address');
+
+    final inbox = await alice.paymentRequests();
+    expect(inbox.map((i) => i.id), contains(intent.id));
+
+    // Pay it: amount + payee come from the STORED intent, never from the caller.
+    final aliceBeforePay = (await alice.listVtxos()).totalBalance.toInt();
+    final payWallet = MpcArkWallet(alice);
+    final payUnsigned = await payWallet.createTransaction(
+      destination: intent.toArkAddress,
+      amountSats: intent.amountSats.toInt(),
+    );
+    final payTxid = await payWallet.submit(await payWallet.signTransaction(payUnsigned));
+    expect(payTxid, isNotEmpty);
+    print('   Paid: ark_txid=$payTxid');
+
+    // The cosigner recognises the settled send as satisfying the request.
+    final afterPay = await alice.paymentRequests();
+    final paid = afterPay.firstWhere((i) => i.id == intent.id);
+    expect(paid.status, 'fulfilled',
+        reason: 'the settled send must mark the request fulfilled');
+    expect(paid.arkTxid, payTxid);
+    print('   Request marked fulfilled with the settling txid');
+
+    // And the money actually moved.
+    final aliceAfterPay = (await alice.listVtxos()).totalBalance.toInt();
+    expect(aliceAfterPay, lessThan(aliceBeforePay),
+        reason: "Alice's balance must drop by the paid amount");
+    int bobAfterPay = 0;
+    for (var i = 0; i < 20; i++) {
+      bobAfterPay = (await bob.listVtxos()).totalBalance.toInt();
+      if (bobAfterPay >= totalSent + requestAmount) break;
+      await Future.delayed(Duration(seconds: 1));
+    }
+    expect(bobAfterPay, equals(totalSent + requestAmount),
+        reason: 'Bob must receive the requested amount');
+    print('   Bob received it: balance=$bobAfterPay');
+
+    // Revoking must also drop that contact's pending requests.
+    final second =
+        await bob.requestPayment(alice.userId!, 500, memo: 'will be revoked');
+    await alice.contactRemove(bob.userId!);
+    final afterRevoke = await alice.paymentRequests();
+    expect(afterRevoke.where((i) => i.id == second.id), isEmpty,
+        reason: 'revoking a contact must discard their pending requests');
+    print('   Revoke closed the gate and dropped the pending request');
+
     print('Full Ark E2E flow complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
 
@@ -1704,4 +1790,115 @@ void main() {
       miningTimer.cancel();
     }
   }, timeout: Timeout(Duration(minutes: 60)));
+
+  /// Stale-cache self-heal: a spent VTXO that the push subscription missed must not survive a
+  /// read, or it gets picked as a send input and every send dies with VTXO_ALREADY_SPENT forever.
+  ///
+  /// Desynchronises for real rather than mocking: spend a VTXO (so the ASP genuinely marks it
+  /// spent), write it back into the cosigner's persisted cache, restart so the actor rehydrates
+  /// from that poisoned cache, then assert the next read drops it.
+  test('Ark: a spent VTXO the stream missed is dropped on read', () async {
+    print('--- Stale spent-VTXO self-heal ---');
+
+    print('1. Alice DKG + fund');
+    final alice = createClient(storageId: 'stale_vtxo_alice');
+    await alice.doDkg();
+    alice.setSessionTokenSource(
+        StaticSessionToken(await mintSessionToken(alice.userId!, webauthTokenSecret)));
+    final groupKey = alice.groupKeyHex!;
+
+    final boardingAddress = await alice.getBoardingAddress();
+    await btc.sendToAddress(boardingAddress, 0.005);
+    await btc.generateToAddress(1, await btc.getNewAddress());
+    final boardingUtxos = await pollBoardingUtxos(boardingAddress, 500000);
+    expect(boardingUtxos, isNotEmpty);
+
+    bool mining = true;
+    final miner = Timer.periodic(Duration(seconds: 3), (timer) async {
+      if (!mining) {
+        timer.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+    await alice.settle(boardingUtxos: boardingUtxos);
+    mining = false;
+    miner.cancel();
+
+    final arkWallet = MpcArkWallet(alice);
+    final funded = await alice.listVtxos();
+    expect(funded.vtxos, isNotEmpty, reason: 'Alice must hold a VTXO to spend');
+    print('   Alice funded: balance=${funded.totalBalance}');
+
+    // 2. Spend it, so the ASP genuinely considers those outpoints spent. Capture them first —
+    //    a successful send removes them from the cache, which is what we then undo.
+    print('2. Spend it (ASP now considers these outpoints spent)');
+    final spentOutpoints = funded.vtxos
+        .map((v) => {'txid': v.txid, 'vout': v.vout, 'amount': v.amount.toInt(),
+                     'exit_delay': v.exitDelay, 'created_at': v.createdAt.toInt(),
+                     'expires_at': v.expiresAt.toInt()})
+        .toList();
+    final bob = createClient(storageId: 'stale_vtxo_bob');
+    await bob.doDkg();
+    final unsigned = await arkWallet.createTransaction(
+      destination: await bob.getArkAddress(),
+      amountSats: 50000,
+    );
+    await arkWallet.submit(await arkWallet.signTransaction(unsigned));
+    print('   Sent; the spent outpoints are gone from the cache');
+
+    // 3. Poison the persisted cache with the now-spent entries — exactly the state a missed
+    //    stream event leaves behind.
+    print('3. Re-inject the spent VTXOs alongside the surviving change');
+    // Merge, don't replace: the cache a missed stream event leaves behind still holds the change
+    // VTXO from the send. Writing only the spent entries would leave nothing to keep, and the
+    // "wallet not wiped" assertion below could then pass vacuously.
+    final surviving = (await alice.listVtxos()).vtxos.map((v) => {
+          'txid': v.txid,
+          'vout': v.vout,
+          'amount': v.amount.toInt(),
+          'exit_delay': v.exitDelay,
+          'created_at': v.createdAt.toInt(),
+          'expires_at': v.expiresAt.toInt(),
+        });
+    final poisoned = jsonEncode([...spentOutpoints, ...surviving]);
+    final setResult = await Process.run('docker', [
+      'exec', 'mpc_cosigner_redis', 'redis-cli', '-a', 'testpass', '--no-auth-warning',
+      'SET', 'vtxo_store:$groupKey', poisoned,
+    ]);
+    expect(setResult.exitCode, 0, reason: 'failed to poison the cache: ${setResult.stderr}');
+
+    // 4. Restart so the actor cold-spawns and rehydrates from the poisoned cache.
+    print('4. Restart the cosigner so the actor rehydrates from it');
+    final old = serverProcess!;
+    serverProcess = null;
+    old.kill(ProcessSignal.sigterm);
+    await old.exitCode;
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
+
+    // 5. The read must drop them. Without the check they would still be listed — and the next
+    //    send would pick them and fail at the ASP.
+    print('5. Read must drop the spent entries');
+    final afterHeal = await alice.listVtxos();
+    final stillListed = afterHeal.vtxos
+        .where((v) => spentOutpoints.any((s) => s['txid'] == v.txid && s['vout'] == v.vout))
+        .toList();
+    expect(stillListed, isEmpty,
+        reason: 'a VTXO the ASP reports as spent must not survive a read '
+            '(otherwise it is chosen as a send input and VTXO_ALREADY_SPENT recurs)');
+    print('   Spent entries dropped — cache self-healed');
+
+    // 6. And the wallet is not wiped: the change VTXO from the send is still spendable.
+    expect(afterHeal.totalBalance.toInt(), greaterThan(0),
+        reason: 'pruning must remove only the spent entries, never the whole wallet');
+    print('   Change VTXO retained: balance=${afterHeal.totalBalance}');
+
+    print('Stale spent-VTXO self-heal complete!');
+  }, timeout: Timeout(Duration(minutes: 10)));
 }

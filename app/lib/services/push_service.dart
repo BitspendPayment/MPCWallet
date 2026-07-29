@@ -162,6 +162,15 @@ class PushService {
       } catch (e) {
         debugPrint('[push] foreground pickUpContractShares failed: $e');
       }
+    } else if (type == 'payment_request') {
+      // App is open: an allowlisted contact asked us to pay. The intent is already sealed
+      // cosigner-side, so this is only a nudge to refresh the inbox.
+      try {
+        await svc.refreshPaymentRequests();
+        debugPrint('[push] foreground payment requests refreshed');
+      } catch (e) {
+        debugPrint('[push] foreground refreshPaymentRequests failed: $e');
+      }
     }
   }
 

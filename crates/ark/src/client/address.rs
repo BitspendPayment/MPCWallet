@@ -127,3 +127,14 @@ pub fn parse_xonly_pubkey(hex: &str) -> Result<bitcoin::key::PublicKey, String> 
         bitcoin::secp256k1::PublicKey::from_x_only_public_key(xonly, bitcoin::key::Parity::Even),
     ))
 }
+
+/// The scriptPubKey (hex) an Ark address pays to.
+///
+/// Lets a caller recognise "this transaction output pays that address" without re-deriving the
+/// taptree — the address already commits to the tweaked output key.
+pub fn ark_address_script_pubkey_hex(ark_address: &str) -> Result<String, String> {
+    let addr: ark_core::ArkAddress = ark_address
+        .parse()
+        .map_err(|e| format!("parse ark address: {e:?}"))?;
+    Ok(hex::encode(addr.to_p2tr_script_pubkey().as_bytes()))
+}

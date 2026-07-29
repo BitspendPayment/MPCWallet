@@ -136,7 +136,7 @@ impl CosignerActor {
     pub async fn submit_ark_send(
         &mut self,
         req: SubmitArkSendRequest,
-    ) -> Result<SubmitArkSendResponse, Status> {
+    ) -> Result<(SubmitArkSendResponse, Vec<(String, u64)>), Status> {
         let shared = self.shared.clone();
         let span = tracing::info_span!("actor::submit_ark_send", user_id = %parsers::user_id_hex(&req.user_id));
         run_blocking(self.state.clone(), move |state| {
@@ -330,12 +330,24 @@ impl CosignerActor {
         &state.ark_tx_history,
     );
 
-    Ok(SubmitArkSendResponse {
-        ark_txid,
-        change_txid,
-        change_vout,
-        change_amount,
-    })
+    // Hand back every output as (scriptPubKey hex, sats) so the caller can recognise a payment
+    // that settles an outstanding request — this path never says which request it pays.
+    let paid_outputs: Vec<(String, u64)> = signed_ark_psbt
+        .unsigned_tx
+        .output
+        .iter()
+        .map(|o| (hex::encode(o.script_pubkey.as_bytes()), o.value.to_sat()))
+        .collect();
+
+    Ok((
+        SubmitArkSendResponse {
+            ark_txid,
+            change_txid,
+            change_vout,
+            change_amount,
+        },
+        paid_outputs,
+    ))
         })
         .await
     }

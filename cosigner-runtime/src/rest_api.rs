@@ -73,6 +73,24 @@ pub fn routes(state: AppState) -> Router {
             post(contract_pending_shares),
         )
         .route("/u/{group_key}/evtxo/ack", post(contract_ack_share))
+        // Request-to-pay. All signed by the wallet that owns `{group_key}` EXCEPT
+        // `payment-request/create`, which is signed by the REQUESTER and routed to the PAYER's
+        // actor — the payer's contact allowlist is what authorizes it.
+        .route("/u/{group_key}/contacts/add", post(contact_add))
+        .route("/u/{group_key}/contacts/remove", post(contact_remove))
+        .route("/u/{group_key}/contacts/list", post(contact_list))
+        .route(
+            "/u/{group_key}/payment-request/create",
+            post(payment_request_create),
+        )
+        .route(
+            "/u/{group_key}/payment-request/list",
+            post(payment_request_list),
+        )
+        .route(
+            "/u/{group_key}/payment-request/decline",
+            post(payment_request_decline),
+        )
         // SSE event stream — a backend user holds this open and reacts to cosigner events.
         .route("/u/{group_key}/events", get(events_stream))
         // Contract template directory (peer model): publish + browse
@@ -445,6 +463,240 @@ async fn contract_pending_shares(
         }
         Err(status) => Err(status_to_response(status)),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Request-to-pay
+// ---------------------------------------------------------------------------
+
+/// Project a contact to JSON with HEX byte fields. `dispatch_json!` would serialise proto `bytes`
+/// as a JSON number array; every other endpoint here emits hex, and the Dart client parses hex, so
+/// these responses are built by hand to match.
+fn contact_json(c: &wallet_proto::Contact) -> Value {
+    json!({
+        "verifying_key": to_hex(&c.verifying_key),
+        "label": c.label,
+        "added_at": c.added_at,
+    })
+}
+
+/// Project a payment intent to JSON with HEX byte fields (see `contact_json`).
+fn intent_json(i: &wallet_proto::PaymentIntent) -> Value {
+    json!({
+        "id": i.id,
+        "from_verifying_key": to_hex(&i.from_verifying_key),
+        "to_ark_address": i.to_ark_address,
+        "amount_sats": i.amount_sats,
+        "memo": i.memo,
+        "created_at": i.created_at,
+        "expires_at": i.expires_at,
+        "status": i.status,
+        "ark_txid": i.ark_txid,
+    })
+}
+
+/// Authorize a party to bill this wallet. Signed by the owner.
+#[tracing::instrument(skip_all, name = "rest::contact_add", fields(group_key = %group_key))]
+async fn contact_add(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::ContactAddRequest {
+        user_id: signer_user_id(&body, &group_key),
+        contact_verifying_key: hex_field(&body, "contact_verifying_key"),
+        label: body
+            .get("label")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    dispatch_json!(
+        reg,
+        group_key,
+        ContactAdd,
+        crate::auth::message::OP_CONTACT_ADD,
+        session,
+        req
+    )
+}
+
+/// Revoke a contact (also drops that contact's pending requests). Signed by the owner.
+#[tracing::instrument(skip_all, name = "rest::contact_remove", fields(group_key = %group_key))]
+async fn contact_remove(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::ContactRemoveRequest {
+        user_id: signer_user_id(&body, &group_key),
+        contact_verifying_key: hex_field(&body, "contact_verifying_key"),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    dispatch_json!(
+        reg,
+        group_key,
+        ContactRemove,
+        crate::auth::message::OP_CONTACT_REMOVE,
+        session,
+        req
+    )
+}
+
+/// List the wallet's authorized contacts. Signed by the owner.
+#[tracing::instrument(skip_all, name = "rest::contact_list", fields(group_key = %group_key))]
+async fn contact_list(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::ContactListRequest {
+        user_id: signer_user_id(&body, &group_key),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    if let Err(status) = crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_CONTACT_LIST,
+        session.as_ref(),
+    ) {
+        return Err(status_to_response(status));
+    }
+    match reg
+        .dispatch(&group_key, move |reply| CosignerCommand::ContactList { req, reply })
+        .await
+    {
+        Ok(r) => {
+            let contacts: Vec<Value> = r.contacts.iter().map(contact_json).collect();
+            Ok(Json(json!({ "contacts": contacts })))
+        }
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+/// Ask `{group_key}` to pay. **Signed by the REQUESTER, not the payer**: `user_id` in the body is
+/// the requester's key, while the URL selects the payer's actor. `verify_auth` only proves the
+/// caller holds that key — the payer's contact allowlist (checked in the actor) is the actual
+/// authorization.
+#[tracing::instrument(skip_all, name = "rest::payment_request_create", fields(group_key = %group_key))]
+async fn payment_request_create(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::PaymentRequestCreateRequest {
+        user_id: signer_user_id(&body, &group_key),
+        amount_sats: body
+            .get("amount_sats")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_default(),
+        memo: body
+            .get("memo")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        expires_in_secs: body
+            .get("expires_in_secs")
+            .and_then(|v| v.as_i64())
+            .unwrap_or_default(),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    if let Err(status) = crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_PAYREQ_CREATE,
+        session.as_ref(),
+    ) {
+        return Err(status_to_response(status));
+    }
+    match reg
+        .dispatch(&group_key, move |reply| CosignerCommand::PaymentRequestCreate { req, reply })
+        .await
+    {
+        Ok(r) => Ok(Json(json!({
+            "intent": r.intent.as_ref().map(intent_json),
+        }))),
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+/// The payer's request inbox. Signed by the payer.
+#[tracing::instrument(skip_all, name = "rest::payment_request_list", fields(group_key = %group_key))]
+async fn payment_request_list(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::PaymentRequestListRequest {
+        user_id: signer_user_id(&body, &group_key),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    if let Err(status) = crate::cosigner::handlers::helpers::verify_auth(
+        &req.user_id,
+        &req.signature,
+        req.timestamp_ms,
+        crate::auth::message::OP_PAYREQ_LIST,
+        session.as_ref(),
+    ) {
+        return Err(status_to_response(status));
+    }
+    match reg
+        .dispatch(&group_key, move |reply| CosignerCommand::PaymentRequestList { req, reply })
+        .await
+    {
+        Ok(r) => {
+            let intents: Vec<Value> = r.intents.iter().map(intent_json).collect();
+            Ok(Json(json!({ "intents": intents })))
+        }
+        Err(status) => Err(status_to_response(status)),
+    }
+}
+
+/// The payer declines a pending request. Signed by the payer.
+#[tracing::instrument(skip_all, name = "rest::payment_request_decline", fields(group_key = %group_key))]
+async fn payment_request_decline(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    let req = wallet_proto::PaymentRequestDeclineRequest {
+        user_id: signer_user_id(&body, &group_key),
+        id: body
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        signature: hex_field(&body, "signature"),
+        timestamp_ms: i64_field(&body, "timestamp_ms"),
+    };
+    dispatch_json!(
+        reg,
+        group_key,
+        PaymentRequestDecline,
+        crate::auth::message::OP_PAYREQ_DECLINE,
+        session,
+        req
+    )
 }
 
 #[tracing::instrument(skip_all, name = "rest::evtxo_ack", fields(group_key = %group_key))]

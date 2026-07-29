@@ -57,6 +57,76 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
+  /// Auth signature for authorizing a contact to bill this wallet.
+  AuthSignature signForContactAdd() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactAdd,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for revoking a contact.
+  AuthSignature signForContactRemove() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactRemove,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for listing authorized contacts.
+  AuthSignature signForContactList() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactList,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for asking another wallet to pay us.
+  ///
+  /// Note the runtime prefers the session token when one is attached, and this call identifies
+  /// the requester by its GROUP key — which cannot be Schnorr-signed. So in practice the token
+  /// is what authenticates; this signature is sent for shape-compatibility.
+  AuthSignature signForPayreqCreate() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqCreate,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for listing this wallet's incoming payment requests.
+  AuthSignature signForPayreqList() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqList,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for declining a payment request.
+  AuthSignature signForPayreqDecline() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqDecline,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
   /// Auth signature for the SSE event subscription (`GET /u/{vk}/events`).
   AuthSignature signForEventsSubscribe() {
     final timestamp = currentTimestamp;

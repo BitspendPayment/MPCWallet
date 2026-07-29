@@ -28,6 +28,39 @@ class ArkScreen extends StatelessWidget {
         ),
         centerTitle: true,
         actions: [
+          // Request-to-pay lives with the Ark balance it spends from. The badge counts
+          // requests still awaiting a decision.
+          Stack(
+            alignment: Alignment.center,
+            children: [
+              IconButton(
+                key: const Key('arkRequestsBtn'),
+                icon: const Icon(Icons.call_received),
+                tooltip: 'Payment requests',
+                onPressed: () => context.push('/requests'),
+              ),
+              if (mpcService.pendingPaymentRequests.isNotEmpty)
+                Positioned(
+                  right: 8,
+                  top: 8,
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: const BoxDecoration(
+                        color: Colors.red, shape: BoxShape.circle),
+                    child: Text(
+                      '${mpcService.pendingPaymentRequests.length}',
+                      style: const TextStyle(color: Colors.white, fontSize: 10),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          IconButton(
+            key: const Key('arkContactsBtn'),
+            icon: const Icon(Icons.people_outline),
+            tooltip: 'Contacts',
+            onPressed: () => context.push('/contacts'),
+          ),
           IconButton(
             key: const Key('arkRefreshBtn'),
             icon: const Icon(Icons.refresh),

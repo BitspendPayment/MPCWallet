@@ -893,3 +893,222 @@ const EvtxoAckShareResponse$json = {
 final $typed_data.Uint8List evtxoAckShareResponseDescriptor = $convert.base64Decode(
     'ChVFdnR4b0Fja1NoYXJlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
 
+@$core.Deprecated('Use contactDescriptor instead')
+const Contact$json = {
+  '1': 'Contact',
+  '2': [
+    {'1': 'verifying_key', '3': 1, '4': 1, '5': 12, '10': 'verifyingKey'},
+    {'1': 'label', '3': 2, '4': 1, '5': 9, '10': 'label'},
+    {'1': 'added_at', '3': 3, '4': 1, '5': 3, '10': 'addedAt'},
+  ],
+};
+
+/// Descriptor for `Contact`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactDescriptor = $convert.base64Decode(
+    'CgdDb250YWN0EiMKDXZlcmlmeWluZ19rZXkYASABKAxSDHZlcmlmeWluZ0tleRIUCgVsYWJlbB'
+    'gCIAEoCVIFbGFiZWwSGQoIYWRkZWRfYXQYAyABKANSB2FkZGVkQXQ=');
+
+@$core.Deprecated('Use contactAddRequestDescriptor instead')
+const ContactAddRequest$json = {
+  '1': 'ContactAddRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'contact_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'contactVerifyingKey'},
+    {'1': 'label', '3': 3, '4': 1, '5': 9, '10': 'label'},
+    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactAddRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactAddRequestDescriptor = $convert.base64Decode(
+    'ChFDb250YWN0QWRkUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSMgoVY29udGFjdF'
+    '92ZXJpZnlpbmdfa2V5GAIgASgMUhNjb250YWN0VmVyaWZ5aW5nS2V5EhQKBWxhYmVsGAMgASgJ'
+    'UgVsYWJlbBIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBS'
+    'ABKANSC3RpbWVzdGFtcE1z');
+
+@$core.Deprecated('Use contactAddResponseDescriptor instead')
+const ContactAddResponse$json = {
+  '1': 'ContactAddResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `ContactAddResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactAddResponseDescriptor = $convert.base64Decode(
+    'ChJDb250YWN0QWRkUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contactRemoveRequestDescriptor instead')
+const ContactRemoveRequest$json = {
+  '1': 'ContactRemoveRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'contact_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'contactVerifyingKey'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactRemoveRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactRemoveRequestDescriptor = $convert.base64Decode(
+    'ChRDb250YWN0UmVtb3ZlUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSMgoVY29udG'
+    'FjdF92ZXJpZnlpbmdfa2V5GAIgASgMUhNjb250YWN0VmVyaWZ5aW5nS2V5EhwKCXNpZ25hdHVy'
+    'ZRgDIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgEIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use contactRemoveResponseDescriptor instead')
+const ContactRemoveResponse$json = {
+  '1': 'ContactRemoveResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `ContactRemoveResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactRemoveResponseDescriptor = $convert.base64Decode(
+    'ChVDb250YWN0UmVtb3ZlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contactListRequestDescriptor instead')
+const ContactListRequest$json = {
+  '1': 'ContactListRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactListRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactListRequestDescriptor = $convert.base64Decode(
+    'ChJDb250YWN0TGlzdFJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ25hdH'
+    'VyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use contactListResponseDescriptor instead')
+const ContactListResponse$json = {
+  '1': 'ContactListResponse',
+  '2': [
+    {'1': 'contacts', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.Contact', '10': 'contacts'},
+  ],
+};
+
+/// Descriptor for `ContactListResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactListResponseDescriptor = $convert.base64Decode(
+    'ChNDb250YWN0TGlzdFJlc3BvbnNlEi8KCGNvbnRhY3RzGAEgAygLMhMubXBjX3dhbGxldC5Db2'
+    '50YWN0Ughjb250YWN0cw==');
+
+@$core.Deprecated('Use paymentIntentDescriptor instead')
+const PaymentIntent$json = {
+  '1': 'PaymentIntent',
+  '2': [
+    {'1': 'id', '3': 1, '4': 1, '5': 9, '10': 'id'},
+    {'1': 'from_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'fromVerifyingKey'},
+    {'1': 'to_ark_address', '3': 3, '4': 1, '5': 9, '10': 'toArkAddress'},
+    {'1': 'amount_sats', '3': 4, '4': 1, '5': 4, '10': 'amountSats'},
+    {'1': 'memo', '3': 5, '4': 1, '5': 9, '10': 'memo'},
+    {'1': 'created_at', '3': 6, '4': 1, '5': 3, '10': 'createdAt'},
+    {'1': 'expires_at', '3': 7, '4': 1, '5': 3, '10': 'expiresAt'},
+    {'1': 'status', '3': 8, '4': 1, '5': 9, '10': 'status'},
+    {'1': 'ark_txid', '3': 9, '4': 1, '5': 9, '10': 'arkTxid'},
+  ],
+};
+
+/// Descriptor for `PaymentIntent`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentIntentDescriptor = $convert.base64Decode(
+    'Cg1QYXltZW50SW50ZW50Eg4KAmlkGAEgASgJUgJpZBIsChJmcm9tX3ZlcmlmeWluZ19rZXkYAi'
+    'ABKAxSEGZyb21WZXJpZnlpbmdLZXkSJAoOdG9fYXJrX2FkZHJlc3MYAyABKAlSDHRvQXJrQWRk'
+    'cmVzcxIfCgthbW91bnRfc2F0cxgEIAEoBFIKYW1vdW50U2F0cxISCgRtZW1vGAUgASgJUgRtZW'
+    '1vEh0KCmNyZWF0ZWRfYXQYBiABKANSCWNyZWF0ZWRBdBIdCgpleHBpcmVzX2F0GAcgASgDUgll'
+    'eHBpcmVzQXQSFgoGc3RhdHVzGAggASgJUgZzdGF0dXMSGQoIYXJrX3R4aWQYCSABKAlSB2Fya1'
+    'R4aWQ=');
+
+@$core.Deprecated('Use paymentRequestCreateRequestDescriptor instead')
+const PaymentRequestCreateRequest$json = {
+  '1': 'PaymentRequestCreateRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'amount_sats', '3': 2, '4': 1, '5': 4, '10': 'amountSats'},
+    {'1': 'memo', '3': 3, '4': 1, '5': 9, '10': 'memo'},
+    {'1': 'expires_in_secs', '3': 4, '4': 1, '5': 3, '10': 'expiresInSecs'},
+    {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 6, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestCreateRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestCreateRequestDescriptor = $convert.base64Decode(
+    'ChtQYXltZW50UmVxdWVzdENyZWF0ZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
+    '8KC2Ftb3VudF9zYXRzGAIgASgEUgphbW91bnRTYXRzEhIKBG1lbW8YAyABKAlSBG1lbW8SJgoP'
+    'ZXhwaXJlc19pbl9zZWNzGAQgASgDUg1leHBpcmVzSW5TZWNzEhwKCXNpZ25hdHVyZRgFIAEoDF'
+    'IJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgGIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use paymentRequestCreateResponseDescriptor instead')
+const PaymentRequestCreateResponse$json = {
+  '1': 'PaymentRequestCreateResponse',
+  '2': [
+    {'1': 'intent', '3': 1, '4': 1, '5': 11, '6': '.mpc_wallet.PaymentIntent', '10': 'intent'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestCreateResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestCreateResponseDescriptor = $convert.base64Decode(
+    'ChxQYXltZW50UmVxdWVzdENyZWF0ZVJlc3BvbnNlEjEKBmludGVudBgBIAEoCzIZLm1wY193YW'
+    'xsZXQuUGF5bWVudEludGVudFIGaW50ZW50');
+
+@$core.Deprecated('Use paymentRequestListRequestDescriptor instead')
+const PaymentRequestListRequest$json = {
+  '1': 'PaymentRequestListRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestListRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestListRequestDescriptor = $convert.base64Decode(
+    'ChlQYXltZW50UmVxdWVzdExpc3RSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
+    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
+    'dGFtcE1z');
+
+@$core.Deprecated('Use paymentRequestListResponseDescriptor instead')
+const PaymentRequestListResponse$json = {
+  '1': 'PaymentRequestListResponse',
+  '2': [
+    {'1': 'intents', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.PaymentIntent', '10': 'intents'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestListResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestListResponseDescriptor = $convert.base64Decode(
+    'ChpQYXltZW50UmVxdWVzdExpc3RSZXNwb25zZRIzCgdpbnRlbnRzGAEgAygLMhkubXBjX3dhbG'
+    'xldC5QYXltZW50SW50ZW50UgdpbnRlbnRz');
+
+@$core.Deprecated('Use paymentRequestDeclineRequestDescriptor instead')
+const PaymentRequestDeclineRequest$json = {
+  '1': 'PaymentRequestDeclineRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'id', '3': 2, '4': 1, '5': 9, '10': 'id'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestDeclineRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestDeclineRequestDescriptor = $convert.base64Decode(
+    'ChxQYXltZW50UmVxdWVzdERlY2xpbmVSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZB'
+    'IOCgJpZBgCIAEoCVICaWQSHAoJc2lnbmF0dXJlGAMgASgMUglzaWduYXR1cmUSIQoMdGltZXN0'
+    'YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcw==');
+
+@$core.Deprecated('Use paymentRequestDeclineResponseDescriptor instead')
+const PaymentRequestDeclineResponse$json = {
+  '1': 'PaymentRequestDeclineResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestDeclineResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestDeclineResponseDescriptor = $convert.base64Decode(
+    'Ch1QYXltZW50UmVxdWVzdERlY2xpbmVSZXNwb25zZRIOCgJvaxgBIAEoCFICb2s=');
+

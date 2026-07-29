@@ -45,6 +45,30 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/EvtxoAckShare',
       ($0.EvtxoAckShareRequest value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.EvtxoAckShareResponse.fromBuffer(value));
+  static final _$contactAdd = $grpc.ClientMethod<$0.ContactAddRequest, $0.ContactAddResponse>(
+      '/mpc_wallet.MPCWallet/ContactAdd',
+      ($0.ContactAddRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ContactAddResponse.fromBuffer(value));
+  static final _$contactRemove = $grpc.ClientMethod<$0.ContactRemoveRequest, $0.ContactRemoveResponse>(
+      '/mpc_wallet.MPCWallet/ContactRemove',
+      ($0.ContactRemoveRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ContactRemoveResponse.fromBuffer(value));
+  static final _$contactList = $grpc.ClientMethod<$0.ContactListRequest, $0.ContactListResponse>(
+      '/mpc_wallet.MPCWallet/ContactList',
+      ($0.ContactListRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ContactListResponse.fromBuffer(value));
+  static final _$paymentRequestCreate = $grpc.ClientMethod<$0.PaymentRequestCreateRequest, $0.PaymentRequestCreateResponse>(
+      '/mpc_wallet.MPCWallet/PaymentRequestCreate',
+      ($0.PaymentRequestCreateRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.PaymentRequestCreateResponse.fromBuffer(value));
+  static final _$paymentRequestList = $grpc.ClientMethod<$0.PaymentRequestListRequest, $0.PaymentRequestListResponse>(
+      '/mpc_wallet.MPCWallet/PaymentRequestList',
+      ($0.PaymentRequestListRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.PaymentRequestListResponse.fromBuffer(value));
+  static final _$paymentRequestDecline = $grpc.ClientMethod<$0.PaymentRequestDeclineRequest, $0.PaymentRequestDeclineResponse>(
+      '/mpc_wallet.MPCWallet/PaymentRequestDecline',
+      ($0.PaymentRequestDeclineRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.PaymentRequestDeclineResponse.fromBuffer(value));
   static final _$signStep1 = $grpc.ClientMethod<$0.SignStep1Request, $0.SignStep1Response>(
       '/mpc_wallet.MPCWallet/SignStep1',
       ($0.SignStep1Request value) => value.writeToBuffer(),
@@ -130,6 +154,30 @@ class MPCWalletClient extends $grpc.Client {
 
   $grpc.ResponseFuture<$0.EvtxoAckShareResponse> evtxoAckShare($0.EvtxoAckShareRequest request, {$grpc.CallOptions? options}) {
     return $createUnaryCall(_$evtxoAckShare, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ContactAddResponse> contactAdd($0.ContactAddRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$contactAdd, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ContactRemoveResponse> contactRemove($0.ContactRemoveRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$contactRemove, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.ContactListResponse> contactList($0.ContactListRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$contactList, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.PaymentRequestCreateResponse> paymentRequestCreate($0.PaymentRequestCreateRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$paymentRequestCreate, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.PaymentRequestListResponse> paymentRequestList($0.PaymentRequestListRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$paymentRequestList, request, options: options);
+  }
+
+  $grpc.ResponseFuture<$0.PaymentRequestDeclineResponse> paymentRequestDecline($0.PaymentRequestDeclineRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$paymentRequestDecline, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.SignStep1Response> signStep1($0.SignStep1Request request, {$grpc.CallOptions? options}) {
@@ -236,6 +284,48 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.EvtxoAckShareRequest.fromBuffer(value),
         ($0.EvtxoAckShareResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ContactAddRequest, $0.ContactAddResponse>(
+        'ContactAdd',
+        contactAdd_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.ContactAddRequest.fromBuffer(value),
+        ($0.ContactAddResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ContactRemoveRequest, $0.ContactRemoveResponse>(
+        'ContactRemove',
+        contactRemove_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.ContactRemoveRequest.fromBuffer(value),
+        ($0.ContactRemoveResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ContactListRequest, $0.ContactListResponse>(
+        'ContactList',
+        contactList_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.ContactListRequest.fromBuffer(value),
+        ($0.ContactListResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.PaymentRequestCreateRequest, $0.PaymentRequestCreateResponse>(
+        'PaymentRequestCreate',
+        paymentRequestCreate_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.PaymentRequestCreateRequest.fromBuffer(value),
+        ($0.PaymentRequestCreateResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.PaymentRequestListRequest, $0.PaymentRequestListResponse>(
+        'PaymentRequestList',
+        paymentRequestList_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.PaymentRequestListRequest.fromBuffer(value),
+        ($0.PaymentRequestListResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.PaymentRequestDeclineRequest, $0.PaymentRequestDeclineResponse>(
+        'PaymentRequestDecline',
+        paymentRequestDecline_Pre,
+        false,
+        false,
+        ($core.List<$core.int> value) => $0.PaymentRequestDeclineRequest.fromBuffer(value),
+        ($0.PaymentRequestDeclineResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.SignStep1Request, $0.SignStep1Response>(
         'SignStep1',
         signStep1_Pre,
@@ -360,6 +450,30 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return evtxoAckShare(call, await request);
   }
 
+  $async.Future<$0.ContactAddResponse> contactAdd_Pre($grpc.ServiceCall call, $async.Future<$0.ContactAddRequest> request) async {
+    return contactAdd(call, await request);
+  }
+
+  $async.Future<$0.ContactRemoveResponse> contactRemove_Pre($grpc.ServiceCall call, $async.Future<$0.ContactRemoveRequest> request) async {
+    return contactRemove(call, await request);
+  }
+
+  $async.Future<$0.ContactListResponse> contactList_Pre($grpc.ServiceCall call, $async.Future<$0.ContactListRequest> request) async {
+    return contactList(call, await request);
+  }
+
+  $async.Future<$0.PaymentRequestCreateResponse> paymentRequestCreate_Pre($grpc.ServiceCall call, $async.Future<$0.PaymentRequestCreateRequest> request) async {
+    return paymentRequestCreate(call, await request);
+  }
+
+  $async.Future<$0.PaymentRequestListResponse> paymentRequestList_Pre($grpc.ServiceCall call, $async.Future<$0.PaymentRequestListRequest> request) async {
+    return paymentRequestList(call, await request);
+  }
+
+  $async.Future<$0.PaymentRequestDeclineResponse> paymentRequestDecline_Pre($grpc.ServiceCall call, $async.Future<$0.PaymentRequestDeclineRequest> request) async {
+    return paymentRequestDecline(call, await request);
+  }
+
   $async.Future<$0.SignStep1Response> signStep1_Pre($grpc.ServiceCall call, $async.Future<$0.SignStep1Request> request) async {
     return signStep1(call, await request);
   }
@@ -422,6 +536,12 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
   $async.Future<$0.ContractCreateResponse> contractCreate($grpc.ServiceCall call, $0.ContractCreateRequest request);
   $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares($grpc.ServiceCall call, $0.EvtxoPendingSharesRequest request);
   $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare($grpc.ServiceCall call, $0.EvtxoAckShareRequest request);
+  $async.Future<$0.ContactAddResponse> contactAdd($grpc.ServiceCall call, $0.ContactAddRequest request);
+  $async.Future<$0.ContactRemoveResponse> contactRemove($grpc.ServiceCall call, $0.ContactRemoveRequest request);
+  $async.Future<$0.ContactListResponse> contactList($grpc.ServiceCall call, $0.ContactListRequest request);
+  $async.Future<$0.PaymentRequestCreateResponse> paymentRequestCreate($grpc.ServiceCall call, $0.PaymentRequestCreateRequest request);
+  $async.Future<$0.PaymentRequestListResponse> paymentRequestList($grpc.ServiceCall call, $0.PaymentRequestListRequest request);
+  $async.Future<$0.PaymentRequestDeclineResponse> paymentRequestDecline($grpc.ServiceCall call, $0.PaymentRequestDeclineRequest request);
   $async.Future<$0.SignStep1Response> signStep1($grpc.ServiceCall call, $0.SignStep1Request request);
   $async.Future<$0.SignStep2Response> signStep2($grpc.ServiceCall call, $0.SignStep2Request request);
   $async.Future<$0.GetArkInfoResponse> getArkInfo($grpc.ServiceCall call, $0.GetArkInfoRequest request);

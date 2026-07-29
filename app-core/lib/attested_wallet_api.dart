@@ -90,6 +90,13 @@ class AttestedWalletApi implements WalletApi {
   @override Future<SettleResponse> settle(SettleRequest r) => _inner.settle(r);
   @override Future<SettleDelegateResponse> settleDelegate(SettleDelegateRequest r) => _inner.settleDelegate(r);
   @override Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) => _inner.submitArkSend(r);
+  // Request-to-pay — plain delegation; the attestation guarantees apply to the transport.
+  @override Future<ContactAddResponse> contactAdd(ContactAddRequest r) => _inner.contactAdd(r);
+  @override Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) => _inner.contactRemove(r);
+  @override Future<ContactListResponse> contactList(ContactListRequest r) => _inner.contactList(r);
+  @override Future<PaymentRequestCreateResponse> createPaymentRequest(PaymentRequestCreateRequest r, String payerGroupKeyHex) => _inner.createPaymentRequest(r, payerGroupKeyHex);
+  @override Future<PaymentRequestListResponse> paymentRequestList(PaymentRequestListRequest r) => _inner.paymentRequestList(r);
+  @override Future<PaymentRequestDeclineResponse> paymentRequestDecline(PaymentRequestDeclineRequest r) => _inner.paymentRequestDecline(r);
   @override Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) => _inner.getServerInfo(r);
   @override Future<RegisterDeviceTokenResponse> registerDeviceToken(RegisterDeviceTokenRequest r) => _inner.registerDeviceToken(r);
 

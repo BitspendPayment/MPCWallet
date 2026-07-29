@@ -12,6 +12,8 @@ import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
 import 'screens/receive_screen.dart';
+import 'screens/contacts/contacts_screen.dart';
+import 'screens/payments/requests_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/splash_screen.dart';
 import 'screens/ark/ark_screen.dart';
@@ -126,6 +128,14 @@ GoRoute(
     GoRoute(
       path: '/receive',
       builder: (context, state) => const ReceiveScreen(),
+    ),
+    GoRoute(
+      path: '/contacts',
+      builder: (context, state) => const ContactsScreen(),
+    ),
+    GoRoute(
+      path: '/requests',
+      builder: (context, state) => const RequestsScreen(),
     ),
     GoRoute(
       path: '/spending/review',

@@ -109,12 +109,6 @@ software: regtest-up bitcoin-init adb-reverse runtime-build ffi-build ffi-androi
 
 # 3b) Start regtest + arkd for SOFTWARE signer (no USB device required) — Ark enabled
 software-ark: runtime-build ffi-build ffi-android
-	@echo "=== Tearing down any prior stack (volumes too, for fresh keys) ==="
-	-pkill -f "target/release/cosigner-runtime" || true
-	-pkill -f bob_proxy || true
-	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v 2>/dev/null || true
-	-sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
-	-sudo rm -rf /tmp/bob_ark 2>/dev/null || true
 	@echo "=== Starting regtest + arkd ==="
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
 	@echo "Waiting for services to stabilize (20s)..."
@@ -126,7 +120,7 @@ software-ark: runtime-build ffi-build ffi-android
 	@echo "=== Waiting 10s for NBXplorer to index initial blocks ==="
 	@sleep 10
 	@echo "=== Setting up Bob (ark-sample counter-party) ==="
-	$(MAKE) bob-up
+	$(MAKE) bob-up 
 	@echo "=== Setting up ADB reverse ==="
 	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001

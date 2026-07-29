@@ -45,6 +45,20 @@ abstract class WalletApi {
       SettleDelegateRequest request);
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest request);
 
+  // Request-to-pay. A party is identified by its GROUP key (the wallet's single public
+  // identity) — not by the share key it signs with, because the cosigner derives the payee's
+  // Ark address from it. `createPaymentRequest` is the one call addressed to ANOTHER wallet's
+  // actor: `request.userId` is OUR group key, and the target payer is passed separately.
+  Future<ContactAddResponse> contactAdd(ContactAddRequest request);
+  Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest request);
+  Future<ContactListResponse> contactList(ContactListRequest request);
+  Future<PaymentRequestCreateResponse> createPaymentRequest(
+      PaymentRequestCreateRequest request, String payerGroupKeyHex);
+  Future<PaymentRequestListResponse> paymentRequestList(
+      PaymentRequestListRequest request);
+  Future<PaymentRequestDeclineResponse> paymentRequestDecline(
+      PaymentRequestDeclineRequest request);
+
   // Deployment metadata. Unauthenticated.
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request);
 

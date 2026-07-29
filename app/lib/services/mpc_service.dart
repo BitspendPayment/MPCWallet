@@ -795,10 +795,92 @@ class MpcService extends ChangeNotifier {
   }
 
   Future<String> sendArk(String recipientArkAddress, int amountSats) async {
-    if (_client == null) throw StateError("Client not initialized");
-    final arkTxid = await _client!.sendVtxo(recipientArkAddress, amountSats);
+    // The same path the Send screen uses. `client.sendVtxo` is a second implementation that
+    // derived the VTXO owner key from the share id, which the ASP rejects — one proven path only.
+    final wallet = _arkWallet;
+    if (wallet == null || !arkAvailable) {
+      throw StateError('Ark is unavailable — cannot send.');
+    }
+    final unsigned = await wallet.createTransaction(
+      destination: recipientArkAddress,
+      amountSats: amountSats,
+    );
+    final signed = await wallet.signTransaction(unsigned);
+    final arkTxid = await wallet.submit(signed);
     await refreshVtxos();
     return arkTxid;
+  }
+
+  // --- Request-to-pay -------------------------------------------------------
+  //
+  // A party is identified by its GROUP key — what another wallet allowlists, and what a payer's
+  // cosigner derives our payee address from.
+
+  List<Contact> _contacts = [];
+  List<Contact> get contacts => List.unmodifiable(_contacts);
+
+  List<PaymentIntent> _paymentRequests = [];
+  List<PaymentIntent> get paymentRequests => List.unmodifiable(_paymentRequests);
+
+  /// Requests still awaiting a decision — what the inbox badge counts.
+  List<PaymentIntent> get pendingPaymentRequests =>
+      _paymentRequests.where((i) => i.status == 'pending').toList();
+
+  /// This wallet's shareable identity: give it to someone so they can allowlist you.
+  String? get myGroupKey => _client?.groupKeyHex;
+
+  Future<void> refreshContacts() async {
+    if (_client == null) return;
+    _contacts = await _client!.contactList();
+    notifyListeners();
+  }
+
+  Future<void> refreshPaymentRequests() async {
+    if (_client == null) return;
+    _paymentRequests = await _client!.paymentRequests();
+    notifyListeners();
+  }
+
+  /// Authorize someone to bill this wallet.
+  Future<void> addContact(String contactGroupKeyHex, String label) async {
+    if (_client == null) throw StateError('Client not initialized');
+    await _client!.contactAdd(contactGroupKeyHex.trim(), label.trim());
+    await refreshContacts();
+  }
+
+  /// Revoke a contact; the cosigner drops their pending requests too.
+  Future<void> removeContact(String contactGroupKeyHex) async {
+    if (_client == null) throw StateError('Client not initialized');
+    await _client!.contactRemove(contactGroupKeyHex);
+    await refreshContacts();
+    await refreshPaymentRequests();
+  }
+
+  /// Ask [payerGroupKeyHex] to pay us.
+  Future<PaymentIntent> requestPayment(
+    String payerGroupKeyHex,
+    int amountSats, {
+    String memo = '',
+  }) async {
+    if (_client == null) throw StateError('Client not initialized');
+    return _client!.requestPayment(payerGroupKeyHex.trim(), amountSats, memo: memo);
+  }
+
+  /// Pay a request. Amount and payee come from the STORED intent, never the UI — that is what
+  /// lets the cosigner match the settled send back to the request.
+  Future<String> approvePaymentRequest(PaymentIntent intent) async {
+    if (intent.status != 'pending') {
+      throw StateError('Request is ${intent.status}, not pending');
+    }
+    final txid = await sendArk(intent.toArkAddress, intent.amountSats.toInt());
+    await refreshPaymentRequests();
+    return txid;
+  }
+
+  Future<void> declinePaymentRequest(String id) async {
+    if (_client == null) throw StateError('Client not initialized');
+    await _client!.declinePaymentRequest(id);
+    await refreshPaymentRequests();
   }
 
   // --- Contracts (the Services tab, PEER model) -----------------------------

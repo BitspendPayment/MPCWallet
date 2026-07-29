@@ -15,7 +15,7 @@ use crate::cosigner::state::CosignerState;
 use crate::shared::SharedServices;
 use crate::wallet_proto::*;
 
-use super::helpers::get_user_xonly_pubkey;
+use super::helpers::{get_user_xonly_pubkey, save_user_vtxos};
 
 /// Fetch ASP info (sync wrapper). Caches on the ASP client itself.
 fn fetch_asp_info(
@@ -205,6 +205,65 @@ async fn run_indexer_subscription(
     tracing::info!("[{user_id_hex}] Indexer subscription stream ended");
 }
 
+/// Drop cached VTXOs the ASP says are already spent.
+///
+/// The cache is otherwise only maintained by the `IndexerUpdate` push subscription; if that misses
+/// an event it keeps listing spent VTXOs, they get picked as send inputs, and every send dies with
+/// `VTXO_ALREADY_SPENT` forever.
+///
+/// Deliberately narrow, because two wider versions broke the Ark e2e:
+///   * rebuilding the list from the ASP RESURRECTED just-spent VTXOs (the indexer lags a fresh
+///     send, so it still lists them as spendable) — undoing the local post-send update;
+///   * pruning against a SCRIPT query wiped the whole wallet when the derived scripts didn't match
+///     the ones the VTXOs actually sit under.
+/// So: query by the outpoints we already hold (no derivation to get wrong), and remove only on an
+/// explicit `is_spent`/`is_swept`/`is_unrolled`. Silence is never treated as evidence, and nothing
+/// is ever added.
+fn drop_spent_vtxos(state: &mut CosignerState, shared: &SharedServices, user_id_hex: &str) {
+    if state.vtxos.is_empty() {
+        return;
+    }
+    let outpoints: Vec<String> = state
+        .vtxos
+        .iter()
+        .map(|e| format!("{}:{}", e.txid, e.vout))
+        .collect();
+
+    let asp = shared.asp_client.clone();
+    let queried = Handle::current().block_on(async move {
+        let mut guard = asp.lock().await;
+        guard.get_vtxos_by_outpoints(&outpoints).await
+    });
+    let reported = match queried {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!("[{user_id_hex}] spent-VTXO check: indexer query failed: {e}");
+            return;
+        }
+    };
+
+    let spent: std::collections::HashSet<(String, u32)> = reported
+        .into_iter()
+        .filter(|v| v.is_spent || v.is_swept || v.is_unrolled)
+        .filter_map(|v| v.outpoint.map(|o| (o.txid, o.vout)))
+        .collect();
+    if spent.is_empty() {
+        return;
+    }
+
+    let before = state.vtxos.len();
+    state
+        .vtxos
+        .retain(|e| !spent.contains(&(e.txid.clone(), e.vout)));
+    if state.vtxos.len() != before {
+        tracing::info!(
+            "[{user_id_hex}] dropped {} spent VTXO(s) the stream had missed",
+            before - state.vtxos.len()
+        );
+        save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
+    }
+}
+
 fn indexer_to_vtxo(v: ark::client::proto::IndexerVtxo) -> ark::client::proto::Vtxo {
     ark::client::proto::Vtxo {
         outpoint: v.outpoint.map(|o| ark::client::proto::Outpoint {
@@ -329,6 +388,9 @@ impl CosignerActor {
 
             let owner_pk_hex =
                 get_user_xonly_pubkey(state, shared.persistence.as_ref(), &user_id_hex)?;
+
+            // Clients pick send inputs from this list, so spent entries must not survive it.
+            drop_spent_vtxos(state, shared, &user_id_hex);
 
             let mut vtxos = Vec::new();
             let mut total_balance: u64 = 0;

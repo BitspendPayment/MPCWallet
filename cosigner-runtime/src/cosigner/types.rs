@@ -62,6 +62,63 @@ pub struct ContractPairing {
     pub exit_delay: u32,
 }
 
+/// A party authorized to bill this wallet. One-way — the contact gives no consent. An
+/// AUTHORIZATION list, so it lives in the seal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Contact {
+    /// The contact's group verifying key, hex (33-byte compressed) — its whole identity.
+    pub vk_hex: String,
+    /// Local display name chosen by the owner.
+    pub label: String,
+    /// Unix seconds.
+    pub added_at: i64,
+}
+
+/// Lifecycle of a payment request held for the payer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IntentStatus {
+    Pending,
+    Fulfilled,
+    Declined,
+    Expired,
+}
+
+impl IntentStatus {
+    /// Wire form (also what the app renders).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IntentStatus::Pending => "pending",
+            IntentStatus::Fulfilled => "fulfilled",
+            IntentStatus::Declined => "declined",
+            IntentStatus::Expired => "expired",
+        }
+    }
+
+    /// Terminal states are kept only briefly (for the payer's history) then pruned.
+    pub fn is_terminal(&self) -> bool {
+        !matches!(self, IntentStatus::Pending)
+    }
+}
+
+/// A request-to-pay held for the payer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PaymentIntent {
+    /// Random 16-byte hex id.
+    pub id: String,
+    /// The requester's verifying key hex — was on the payer's allowlist at create time.
+    pub from_vk_hex: String,
+    /// DERIVED from `from_vk_hex`; never taken from the request body.
+    pub to_ark_address: String,
+    pub amount_sats: u64,
+    pub memo: String,
+    pub created_at: i64,
+    pub expires_at: i64,
+    pub status: IntentStatus,
+    /// Set when the payer's send settles.
+    #[serde(default)]
+    pub ark_txid: String,
+}
+
 /// The actor's durable state, serialized into the sealed snapshot blob. Excludes in-flight
 /// sessions (MuSig2 secret nonces must never persist).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +141,14 @@ pub struct SnapshotState {
     /// one is pending. Lets durable auto-settle survive actor eviction. Only ever
     /// `ReadyToSettle` (never a `Settling`-phase session — MuSig2 nonces must not persist).
     pub delegate_json: Option<String>,
+    /// Parties authorized to send this wallet payment requests. `default` so seals written
+    /// before request-to-pay restore cleanly.
+    #[serde(default)]
+    pub contacts: Vec<Contact>,
+    /// Request-to-pay records held for this wallet. Bounded by per-requester + global caps and
+    /// pruned on every mutation (the whole snapshot is re-serialized on each change).
+    #[serde(default)]
+    pub payment_intents: Vec<PaymentIntent>,
 }
 
 // ===========================================================================

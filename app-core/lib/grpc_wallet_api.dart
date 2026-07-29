@@ -71,6 +71,30 @@ class GrpcWalletApi implements WalletApi {
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) =>
       _stub.submitArkSend(r);
 
+  // Request-to-pay is REST-only: the runtime serves no gRPC (nothing binds MPCWallet), so these
+  // exist solely to satisfy the interface.
+  @override
+  Future<ContactAddResponse> contactAdd(ContactAddRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<ContactListResponse> contactList(ContactListRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestCreateResponse> createPaymentRequest(
+          PaymentRequestCreateRequest r, String payerGroupKeyHex) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestListResponse> paymentRequestList(
+          PaymentRequestListRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestDeclineResponse> paymentRequestDecline(
+          PaymentRequestDeclineRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+
   @override
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) =>
       _stub.getServerInfo(r);

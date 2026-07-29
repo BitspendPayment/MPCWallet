@@ -14,4 +14,5 @@ pub mod contract_gate;
 pub mod device_token;
 pub mod helpers;
 pub mod parsers;
+pub mod payment_request;
 pub mod vtxo_stream;

@@ -449,6 +449,60 @@ pub async fn run_cosigner(
                 .await;
                 continue;
             }
+            // Request-to-pay writes. Intercepted here (not `actor.dispatch`) because each mutates
+            // the actor's SEALED state and must therefore re-persist the snapshot.
+            CosignerCommand::ContactAdd { req, reply } => {
+                route_contact_add(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut actor,
+                    &mut actor_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            CosignerCommand::ContactRemove { req, reply } => {
+                route_contact_remove(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut actor,
+                    &mut actor_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            CosignerCommand::PaymentRequestCreate { req, reply } => {
+                route_payment_request_create(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut actor,
+                    &mut actor_policy_installed,
+                )
+                .await;
+                continue;
+            }
+            CosignerCommand::PaymentRequestDecline { req, reply } => {
+                route_payment_request_decline(
+                    req,
+                    reply,
+                    &state,
+                    &shared,
+                    &registry,
+                    &mut actor,
+                    &mut actor_policy_installed,
+                )
+                .await;
+                continue;
+            }
             other => other,
         };
 
@@ -492,6 +546,16 @@ fn reseat_actor(actor: &mut Option<CosignerActor>, installed: &mut bool) {
 const SEALED_STATE_TREE: &str = "sealed_state";
 
 /// Persist the actor's snapshot blob after a state mutation (best-effort).
+/// Re-seal an actor whose state changed outside a `route_*` fn.
+pub(crate) async fn persist_actor_snapshot_for(
+    actor: &mut CosignerActor,
+    group_key: &str,
+) {
+    // The actor holds its own `shared`, so callers don't have to thread it through.
+    let shared = actor.shared.clone();
+    persist_actor_snapshot(actor, &shared, group_key).await;
+}
+
 async fn persist_actor_snapshot(
     actor: &mut CosignerActor,
     shared: &SharedServices,
@@ -836,6 +900,226 @@ async fn route_add_contract(
     let _ = reply.send(Ok(()));
 }
 
+// ---------------------------------------------------------------------------
+// Request-to-pay. Each mutates the actor's SEALED state, so each re-persists the snapshot.
+// ---------------------------------------------------------------------------
+
+/// Authorize a party to bill this wallet. Signed by the owner (auth ran at the REST boundary).
+#[allow(clippy::too_many_arguments)]
+async fn route_contact_add(
+    req: crate::wallet_proto::ContactAddRequest,
+    reply: oneshot::Sender<Result<crate::wallet_proto::ContactAddResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    actor: &mut Option<CosignerActor>,
+    actor_policy_installed: &mut bool,
+) {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+    // Normalise to the contact's GROUP key so the allowlist compares canonically, whichever of a
+    // wallet's ids the caller used.
+    let vk_hex = handlers::helpers::group_key_of(
+        shared.persistence.as_ref(),
+        &hex::encode(&req.contact_verifying_key),
+    );
+    match actor
+        .as_mut()
+        .unwrap()
+        .add_contact(vk_hex, req.label, now_secs())
+    {
+        Ok(()) => {
+            persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
+            let _ = reply.send(Ok(crate::wallet_proto::ContactAddResponse { ok: true }));
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::invalid_argument(e)));
+        }
+    }
+}
+
+/// Revoke a contact. Also drops that contact's pending requests — revoking must actually stop the
+/// billing, not merely prevent new ones.
+#[allow(clippy::too_many_arguments)]
+async fn route_contact_remove(
+    req: crate::wallet_proto::ContactRemoveRequest,
+    reply: oneshot::Sender<Result<crate::wallet_proto::ContactRemoveResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    actor: &mut Option<CosignerActor>,
+    actor_policy_installed: &mut bool,
+) {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+    let vk_hex = handlers::helpers::group_key_of(
+        shared.persistence.as_ref(),
+        &hex::encode(&req.contact_verifying_key),
+    );
+    match actor.as_mut().unwrap().remove_contact(&vk_hex) {
+        Ok(()) => {
+            persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
+            let _ = reply.send(Ok(crate::wallet_proto::ContactRemoveResponse { ok: true }));
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::not_found(e)));
+        }
+    }
+}
+
+/// Cross-user: `req.user_id` is the REQUESTER, this actor is the PAYER. `verify_auth` proves key
+/// possession but does NOT bind the signer to this actor, so the allowlist is the only
+/// authorization — checked before any state is touched.
+#[allow(clippy::too_many_arguments)]
+async fn route_payment_request_create(
+    req: crate::wallet_proto::PaymentRequestCreateRequest,
+    reply: oneshot::Sender<Result<crate::wallet_proto::PaymentRequestCreateResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    actor: &mut Option<CosignerActor>,
+    actor_policy_installed: &mut bool,
+) {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+    // Resolve whichever id the requester used to its GROUP key: the canonical allowlist identity,
+    // and the key the payee address MUST derive from — a share key yields an address the requester
+    // cannot spend, while the payment still appears to succeed.
+    let from_vk_hex = handlers::helpers::group_key_of(
+        shared.persistence.as_ref(),
+        &hex::encode(&req.user_id),
+    );
+
+    // Authorization gate — before anything else.
+    if !actor.as_ref().unwrap().is_contact(&from_vk_hex) {
+        let _ = reply.send(Err(Status::permission_denied(
+            "not an authorized contact of this wallet",
+        )));
+        return;
+    }
+
+    // Derive the payee address from the allowlisted key; never trust a supplied one, or a contact
+    // could redirect the payment. x-only = compressed key minus its parity byte.
+    if from_vk_hex.len() != 66 {
+        let _ = reply.send(Err(Status::invalid_argument(
+            "requester key must be a 33-byte compressed pubkey",
+        )));
+        return;
+    }
+    let owner_xonly = from_vk_hex[2..].to_string();
+    let info = {
+        let asp_arc = shared.asp_client.clone();
+        let mut asp = asp_arc.lock().await;
+        match asp.get_info().await {
+            Ok(i) => i,
+            Err(e) => {
+                let _ = reply.send(Err(Status::unavailable(format!("ASP GetInfo: {e}"))));
+                return;
+            }
+        }
+    };
+    let network = match ark::client::parse_network(&info.network) {
+        Ok(n) => n,
+        Err(e) => {
+            let _ = reply.send(Err(Status::internal(e)));
+            return;
+        }
+    };
+    let to_ark_address = match ark::client::ark_address(
+        &owner_xonly,
+        &info.signer_pubkey,
+        info.unilateral_exit_delay as u32,
+        network,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            let _ = reply.send(Err(Status::internal(format!("derive ark address: {e}"))));
+            return;
+        }
+    };
+
+    let intent = match actor.as_mut().unwrap().create_payment_intent(
+        from_vk_hex,
+        to_ark_address,
+        req.amount_sats,
+        req.memo,
+        req.expires_in_secs,
+        now_secs(),
+    ) {
+        Ok(i) => i,
+        Err(e) => {
+            let _ = reply.send(Err(Status::invalid_argument(e)));
+            return;
+        }
+    };
+    persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
+
+    // Best-effort nudge on two channels; the sealed intent is the durable record, so a failed
+    // notification must never fail the request.
+    shared.events.publish(
+        &group_key,
+        crate::events::CosignerEvent::PaymentRequest {
+            id: intent.id.clone(),
+            from_vk_hex: intent.from_vk_hex.clone(),
+            amount_sats: intent.amount_sats,
+        },
+    );
+    if let Some(fcm) = shared.fcm.clone() {
+        let persistence = shared.persistence.clone();
+        let payer = group_key.clone();
+        let amount = intent.amount_sats;
+        let id = intent.id.clone();
+        tokio::spawn(async move {
+            let tokens = handlers::helpers::load_user_device_tokens(persistence.as_ref(), &payer);
+            push_payment_request(&fcm, &payer, &tokens, &id, amount).await;
+        });
+    }
+
+    let _ = reply.send(Ok(crate::wallet_proto::PaymentRequestCreateResponse {
+        intent: Some(handlers::payment_request::intent_to_proto(
+            &intent,
+            now_secs(),
+        )),
+    }));
+}
+
+/// The payer declines a pending request.
+#[allow(clippy::too_many_arguments)]
+async fn route_payment_request_decline(
+    req: crate::wallet_proto::PaymentRequestDeclineRequest,
+    reply: oneshot::Sender<Result<crate::wallet_proto::PaymentRequestDeclineResponse, Status>>,
+    state: &Arc<Mutex<CosignerState>>,
+    shared: &Arc<SharedServices>,
+    registry: &Arc<CosignerRegistry>,
+    actor: &mut Option<CosignerActor>,
+    actor_policy_installed: &mut bool,
+) {
+    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    let group_key = state.lock().cosigner_id.clone();
+    match actor.as_mut().unwrap().decline_intent(&req.id) {
+        Ok(()) => {
+            persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
+            let _ =
+                reply.send(Ok(crate::wallet_proto::PaymentRequestDeclineResponse { ok: true }));
+        }
+        Err(e) => {
+            let _ = reply.send(Err(Status::failed_precondition(e)));
+        }
+    }
+}
+
 /// Ensure the per-actor actor is spawned and its policy installed. On error, returns a
 /// `Status` for the caller to reply with (the actor is reseated on install failure).
 async fn ensure_actor(
@@ -1000,6 +1284,8 @@ async fn route_send_vtxo(
         };
         match actor.as_mut().unwrap().send_vtxo_step2(wire).await {
             Ok(submitted) => {
+                // Kept because `submitted.ark_txid` is moved into `apply_send_result` below.
+                let sent_txid = submitted.ark_txid.clone();
                 // Mirror the send into the actor's owned history (it owns the data for the
                 // sealed snapshot); the host projection is still updated for live queries.
                 let entry = ArkTxEntry {
@@ -1019,6 +1305,15 @@ async fn route_send_vtxo(
                     )
                 };
                 actor.as_mut().unwrap().append_history(entry);
+                // Mark any request this send satisfies as paid, matched on the STORED intent's
+                // destination + amount so the seal stays the authority.
+                if let Some(id) = actor.as_mut().unwrap().fulfil_matching_intent(
+                    &req.recipient_ark_address,
+                    req.amount,
+                    &sent_txid,
+                ) {
+                    tracing::info!("payment request {id} fulfilled by {sent_txid}");
+                }
                 // Phase 4: the send mutated actor VTXOs + history — persist the snapshot.
                 let group_key = state.lock().cosigner_id.clone();
                 persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
@@ -1403,6 +1698,37 @@ pub async fn boarding_watch_sweep(
         }
         if changed || seen.len() != present.len() {
             handlers::helpers::save_user_boarding_seen(persistence.as_ref(), &user_id_hex, &seen);
+        }
+    }
+}
+
+/// Notify the payer that an allowlisted contact has asked them to pay. Best-effort — the intent is
+/// already sealed, and the app also polls on resume.
+pub async fn push_payment_request(
+    fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
+    payer_vk_hex: &str,
+    tokens: &[DeviceToken],
+    intent_id: &str,
+    amount_sats: u64,
+) {
+    if tokens.is_empty() {
+        return;
+    }
+    let mut data = std::collections::HashMap::new();
+    data.insert("type".to_string(), "payment_request".to_string());
+    data.insert("user_id".to_string(), payer_vk_hex.to_string());
+    data.insert("id".to_string(), intent_id.to_string());
+    data.insert("amount_sats".to_string(), amount_sats.to_string());
+    let body = format!("{amount_sats} sats — tap to review");
+    for token in tokens {
+        if let Err(e) = fcm
+            .send_notification(&token.fcm_token, "Payment requested", &body, &data)
+            .await
+        {
+            tracing::warn!(
+                "[{payer_vk_hex}] payment-request push to {} failed: {e}",
+                token.platform
+            );
         }
     }
 }

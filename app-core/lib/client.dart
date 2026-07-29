@@ -48,6 +48,19 @@ class MpcClient {
     return compressedHex.length == 66 ? compressedHex.substring(2) : compressedHex;
   }
 
+  /// The FROST group verifying key, COMPRESSED (66 hex) — the wallet's public IDENTITY. Neither
+  /// [userId] (a share key) nor [groupXOnlyPubKey] (same key, parity stripped, for taproot).
+  String? get groupKeyHex {
+    final pkp = _normalPolicy?.publicKeyPackage;
+    if (pkp == null) return null;
+    return hex.encode(threshold.elemSerializeCompressed(pkp.verifyingKey.E));
+  }
+
+  List<int>? get groupKeyBytes {
+    final h = groupKeyHex;
+    return h == null ? null : hex.decode(h);
+  }
+
   final int _maxSigners;
   final int _minSigners;
 
@@ -947,9 +960,12 @@ class MpcClient {
     // 3. Get change address (our own Ark address)
     final changeAddr = await getArkAddress();
 
-    // 4. Get owner x-only pubkey (strip 02/03 prefix from userId)
-    final userIdHex = hex.encode(_userId!);
-    final ownerPk = userIdHex.length == 66 ? userIdHex.substring(2) : userIdHex;
+    // 4. Owner x-only pubkey. VTXOs are locked to the GROUP key (a FROST aggregate verifies under
+    //    it), NOT `_userId` — the share key builds a taptree the ASP rejects as INVALID_PSBT_INPUT.
+    final ownerPk = groupXOnlyPubKey;
+    if (ownerPk == null) {
+      throw StateError('Group key unavailable — cannot build an Ark send.');
+    }
 
     // Use exit_delay from first VTXO (all should be same type)
     // VTXOs from server don't carry exit_delay, so use unilateral_exit_delay
@@ -1241,6 +1257,95 @@ class MpcClient {
       ..platform = platform
       ..appVersion = appVersion;
     await _stub.registerDeviceToken(req);
+  }
+
+
+  // ---------------------------------------------------------------------------
+  // Request-to-pay
+  // ---------------------------------------------------------------------------
+  //
+  // These use [userId] like every other call, so the URL id, body `user_id` and the session
+  // token's `sub` agree (the runtime checks the token first). The cosigner resolves that id to the
+  // wallet's GROUP key itself — the key a payee address must derive from.
+
+  List<int> _idOrThrow() {
+    final id = _userId;
+    if (id == null) {
+      throw StateError('User id unavailable — complete DKG before using payment requests.');
+    }
+    return id;
+  }
+
+  /// Authorize [contactGroupKeyHex] to send this wallet payment requests.
+  Future<void> contactAdd(String contactGroupKeyHex, String label) async {
+    final auth = _authSig((h) => h.signForContactAdd());
+    await _stub.contactAdd(ContactAddRequest()
+      ..userId = _idOrThrow()
+      ..contactVerifyingKey = hex.decode(contactGroupKeyHex)
+      ..label = label
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
+
+  /// Revoke a contact. Their pending requests are dropped too.
+  Future<void> contactRemove(String contactGroupKeyHex) async {
+    final auth = _authSig((h) => h.signForContactRemove());
+    await _stub.contactRemove(ContactRemoveRequest()
+      ..userId = _idOrThrow()
+      ..contactVerifyingKey = hex.decode(contactGroupKeyHex)
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
+
+  Future<List<Contact>> contactList() async {
+    final auth = _authSig((h) => h.signForContactList());
+    final resp = await _stub.contactList(ContactListRequest()
+      ..userId = _idOrThrow()
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+    return resp.contacts;
+  }
+
+  /// Ask [payerGroupKeyHex] to pay us. Addressed to THEIR actor while identifying US; their
+  /// allowlist is the authorization. The payee address is derived by their cosigner from our
+  /// group key — we never supply it.
+  Future<PaymentIntent> requestPayment(
+    String payerGroupKeyHex,
+    int amountSats, {
+    String memo = '',
+    int expiresInSecs = 0,
+  }) async {
+    final auth = _authSig((h) => h.signForPayreqCreate());
+    final resp = await _stub.createPaymentRequest(
+      PaymentRequestCreateRequest()
+        ..userId = _idOrThrow()
+        ..amountSats = Int64(amountSats)
+        ..memo = memo
+        ..expiresInSecs = Int64(expiresInSecs)
+        ..signature = auth.signature
+        ..timestampMs = auth.timestampMs,
+      payerGroupKeyHex,
+    );
+    return resp.intent;
+  }
+
+  /// Payment requests addressed to this wallet, newest first.
+  Future<List<PaymentIntent>> paymentRequests() async {
+    final auth = _authSig((h) => h.signForPayreqList());
+    final resp = await _stub.paymentRequestList(PaymentRequestListRequest()
+      ..userId = _idOrThrow()
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+    return resp.intents;
+  }
+
+  Future<void> declinePaymentRequest(String id) async {
+    final auth = _authSig((h) => h.signForPayreqDecline());
+    await _stub.paymentRequestDecline(PaymentRequestDeclineRequest()
+      ..userId = _idOrThrow()
+      ..id = id
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
   }
 
 }

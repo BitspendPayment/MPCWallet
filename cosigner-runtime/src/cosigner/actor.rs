@@ -19,8 +19,9 @@ use crate::cosigner::state::CosignerState;
 
 use crate::cosigner::types::{
     ApplyDelegateSigs, ArkTxEntry, BoardingSettleOutcome, BoardingSettleSubmitted, Commitment,
-    ContractPairing, ContractRefreshed, PublicPolicy, SendVtxoStep1, SendVtxoSubmitted,
-    SettleSubmitted, SignStep1, SignStep1Out, SignStep2, SignStep2Out, SnapshotState, VtxoInput,
+    Contact, ContractPairing, ContractRefreshed, IntentStatus, PaymentIntent, PublicPolicy,
+    SendVtxoStep1, SendVtxoSubmitted, SettleSubmitted, SignStep1, SignStep1Out, SignStep2,
+    SignStep2Out, SnapshotState, VtxoInput,
 };
 
 use ark::client::batch::{DelegateSettleSession, PersistedDelegate};
@@ -39,6 +40,27 @@ use threshold::signing::{self, SignatureShare};
 use crate::shared::SharedServices;
 
 const THRESHOLD_COUNT: usize = 2;
+
+// Request-to-pay bounds. Contacts + intents live in the sealed snapshot, which is re-serialized
+// in full on every mutation — so an allowlisted peer must not be able to grow it without limit.
+const MAX_CONTACTS: usize = 256;
+const MAX_LABEL_LEN: usize = 64;
+const MAX_MEMO_LEN: usize = 140;
+const MAX_PENDING_INTENTS: usize = 50;
+const MAX_PENDING_INTENTS_PER_CONTACT: usize = 3;
+const DEFAULT_INTENT_TTL_SECS: i64 = 24 * 60 * 60;
+const MAX_INTENT_TTL_SECS: i64 = 7 * 24 * 60 * 60;
+/// How long a declined/fulfilled/expired intent lingers so the payer can still see it.
+const TERMINAL_INTENT_RETENTION_SECS: i64 = 24 * 60 * 60;
+
+/// Clamp a peer-supplied string to `max` CHARACTERS (not bytes — never split a UTF-8 sequence).
+fn truncate(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        s
+    } else {
+        s.chars().take(max).collect()
+    }
+}
 
 /// An installed signing policy. The cosigner's own key share + the group public key, plus the
 /// client's FROST identifier (the other half of the 2-of-2).
@@ -85,6 +107,10 @@ pub struct CosignerActor {
     vtxos: Vec<VtxoInput>,
     /// The owned Ark transaction history (display log; non-secret).
     history: Vec<ArkTxEntry>,
+    /// Parties authorized to bill this wallet — the only authorization for an incoming request.
+    contacts: Vec<Contact>,
+    /// Request-to-pay records held for the payer (bounded; see `prune_intents`).
+    payment_intents: Vec<PaymentIntent>,
     /// Global services (contract gate + ASP url). Held so `command()` is a drop-in for the old
     /// `GuestInstance::command` — no per-call-site `shared` threading.
     pub(crate) shared: Arc<SharedServices>,
@@ -117,6 +143,8 @@ impl CosignerActor {
             ark_cosigner_secret_hex: None,
             vtxos: Vec::new(),
             history: Vec::new(),
+            contacts: Vec::new(),
+            payment_intents: Vec::new(),
             shared,
             state,
         }
@@ -145,6 +173,8 @@ impl CosignerActor {
                 .as_ref()
                 .and_then(|s| s.to_persisted().ok())
                 .and_then(|p| serde_json::to_string(&p).ok()),
+            contacts: self.contacts.clone(),
+            payment_intents: self.payment_intents.clone(),
         };
         serde_json::to_vec(&snap).map_err(|e| format!("snapshot serialize: {e}"))
     }
@@ -172,6 +202,8 @@ impl CosignerActor {
         self.ark_cosigner_secret_hex = snap.ark_cosigner_secret_hex.map(Zeroizing::new);
         self.vtxos = snap.vtxos;
         self.history = snap.history;
+        self.contacts = snap.contacts;
+        self.payment_intents = snap.payment_intents;
         // Restore a pending ReadyToSettle delegate (needs the cosigner secret to re-derive its kp).
         self.delegate_session = match (snap.delegate_json, self.ark_secret()) {
             (Some(dj), Some(secret)) => {
@@ -213,6 +245,216 @@ impl CosignerActor {
         p.contracts_json = contracts_json;
         Ok(())
     }
+
+    // -----------------------------------------------------------------------
+    // Request-to-pay: contacts (allowlist) + the payer's payment-request inbox
+    // -----------------------------------------------------------------------
+
+    /// Parties authorized to bill this wallet.
+    pub(crate) fn contacts(&self) -> &[Contact] {
+        &self.contacts
+    }
+
+    /// Allowlist membership — the only authorization for an incoming payment request.
+    pub(crate) fn is_contact(&self, vk_hex: &str) -> bool {
+        self.contacts.iter().any(|c| c.vk_hex == vk_hex)
+    }
+
+    /// Authorize `vk_hex` to send this wallet payment requests (idempotent — re-adding relabels).
+    pub(crate) fn add_contact(
+        &mut self,
+        vk_hex: String,
+        label: String,
+        now: i64,
+    ) -> Result<(), String> {
+        if hex::decode(&vk_hex).map(|b| b.len()) != Ok(33) {
+            return Err("contact verifying key must be 33 bytes (hex)".into());
+        }
+        if let Some(existing) = self.contacts.iter_mut().find(|c| c.vk_hex == vk_hex) {
+            existing.label = truncate(label, MAX_LABEL_LEN);
+            return Ok(());
+        }
+        if self.contacts.len() >= MAX_CONTACTS {
+            return Err(format!("contact list full (max {MAX_CONTACTS})"));
+        }
+        self.contacts.push(Contact {
+            vk_hex,
+            label: truncate(label, MAX_LABEL_LEN),
+            added_at: now,
+        });
+        Ok(())
+    }
+
+    /// Revoke authorization; their pending requests are dropped too.
+    pub(crate) fn remove_contact(&mut self, vk_hex: &str) -> Result<(), String> {
+        let before = self.contacts.len();
+        self.contacts.retain(|c| c.vk_hex != vk_hex);
+        if self.contacts.len() == before {
+            return Err("not a contact".into());
+        }
+        self.payment_intents
+            .retain(|i| !(i.from_vk_hex == vk_hex && i.status == IntentStatus::Pending));
+        Ok(())
+    }
+
+    pub(crate) fn payment_intents(&self) -> &[PaymentIntent] {
+        &self.payment_intents
+    }
+
+    /// Record a request-to-pay. `to_ark_address` must have been DERIVED from `from_vk_hex`, and
+    /// the caller must have checked `is_contact` first.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn create_payment_intent(
+        &mut self,
+        from_vk_hex: String,
+        to_ark_address: String,
+        amount_sats: u64,
+        memo: String,
+        expires_in_secs: i64,
+        now: i64,
+    ) -> Result<PaymentIntent, String> {
+        if !self.is_contact(&from_vk_hex) {
+            return Err("requester is not an authorized contact".into());
+        }
+        if amount_sats == 0 {
+            return Err("amount must be greater than zero".into());
+        }
+        let _ = self.prune_intents(now);
+
+        let pending = |i: &PaymentIntent| i.status == IntentStatus::Pending;
+        if self.payment_intents.iter().filter(|i| pending(i)).count() >= MAX_PENDING_INTENTS {
+            return Err("payment request inbox is full".into());
+        }
+        let from_count = self
+            .payment_intents
+            .iter()
+            .filter(|i| pending(i) && i.from_vk_hex == from_vk_hex)
+            .count();
+        if from_count >= MAX_PENDING_INTENTS_PER_CONTACT {
+            return Err(format!(
+                "too many pending requests from this contact (max {MAX_PENDING_INTENTS_PER_CONTACT})"
+            ));
+        }
+
+        let ttl = if expires_in_secs <= 0 {
+            DEFAULT_INTENT_TTL_SECS
+        } else {
+            expires_in_secs.min(MAX_INTENT_TTL_SECS)
+        };
+        let expires_at = now + ttl;
+        let id = {
+            let mut b = [0u8; 16];
+            rand::RngCore::fill_bytes(&mut OsRng, &mut b);
+            hex::encode(b)
+        };
+        let intent = PaymentIntent {
+            id,
+            from_vk_hex,
+            to_ark_address,
+            amount_sats,
+            memo: truncate(memo, MAX_MEMO_LEN),
+            created_at: now,
+            expires_at,
+            status: IntentStatus::Pending,
+            ark_txid: String::new(),
+        };
+        self.payment_intents.push(intent.clone());
+        Ok(intent)
+    }
+
+    /// Payer declines. Only a pending intent can be declined.
+    pub(crate) fn decline_intent(&mut self, id: &str) -> Result<(), String> {
+        let intent = self
+            .payment_intents
+            .iter_mut()
+            .find(|i| i.id == id)
+            .ok_or("no such payment request")?;
+        if intent.status != IntentStatus::Pending {
+            return Err(format!("request already {}", intent.status.as_str()));
+        }
+        intent.status = IntentStatus::Declined;
+        Ok(())
+    }
+
+    /// Mark an intent paid once the payer's Ark send has settled.
+    pub(crate) fn fulfil_intent(&mut self, id: &str, ark_txid: &str) -> Result<(), String> {
+        let intent = self
+            .payment_intents
+            .iter_mut()
+            .find(|i| i.id == id)
+            .ok_or("no such payment request")?;
+        if intent.status != IntentStatus::Pending {
+            return Err(format!("request already {}", intent.status.as_str()));
+        }
+        intent.status = IntentStatus::Fulfilled;
+        intent.ark_txid = ark_txid.to_string();
+        Ok(())
+    }
+
+    /// Mark a pending request paid after one of the payer's sends settles, matched against the
+    /// STORED intent's destination + amount.
+    pub(crate) fn fulfil_matching_intent(
+        &mut self,
+        to_ark_address: &str,
+        amount_sats: u64,
+        ark_txid: &str,
+    ) -> Option<String> {
+        let id = self
+            .payment_intents
+            .iter()
+            .filter(|i| {
+                i.status == IntentStatus::Pending
+                    && i.to_ark_address == to_ark_address
+                    && i.amount_sats == amount_sats
+            })
+            // Oldest first, so repeated identical requests settle in order.
+            .min_by_key(|i| i.created_at)
+            .map(|i| i.id.clone())?;
+        self.fulfil_intent(&id, ark_txid).ok()?;
+        Some(id)
+    }
+
+    /// Fulfil a pending request from a settled tx's OUTPUTS — the client-built send path never
+    /// says which request it pays, so recognise it by what the tx actually pays. Matching the
+    /// stored intent (not a client claim) keeps the seal the authority.
+    pub(crate) fn fulfil_intent_from_outputs(
+        &mut self,
+        outputs: &[(String, u64)],
+        ark_txid: &str,
+    ) -> Option<String> {
+        let id = self
+            .payment_intents
+            .iter()
+            .filter(|i| i.status == IntentStatus::Pending)
+            .find(|i| {
+                let Ok(spk) = ark::client::ark_address_script_pubkey_hex(&i.to_ark_address) else {
+                    return false;
+                };
+                outputs
+                    .iter()
+                    .any(|(out_spk, amount)| *out_spk == spk && *amount == i.amount_sats)
+            })
+            .map(|i| i.id.clone())?;
+        self.fulfil_intent(&id, ark_txid).ok()?;
+        Some(id)
+    }
+
+    /// Expire stale pending intents and drop old terminal ones; keeps the sealed list bounded.
+    pub(crate) fn prune_intents(&mut self, now: i64) -> bool {
+        let mut changed = false;
+        for intent in self.payment_intents.iter_mut() {
+            if intent.status == IntentStatus::Pending && now >= intent.expires_at {
+                intent.status = IntentStatus::Expired;
+                changed = true;
+            }
+        }
+        let before = self.payment_intents.len();
+        self.payment_intents.retain(|i| {
+            !i.status.is_terminal() || now - i.expires_at < TERMINAL_INTENT_RETENTION_SECS
+        });
+        changed || self.payment_intents.len() != before
+    }
+
 
     /// The wallet's group x-only pubkey (hex) — the VTXO owner key, from the installed policy's PKP.
     pub fn owner_pk_hex(&self) -> Result<String, String> {
@@ -334,8 +576,24 @@ impl CosignerActor {
         })
     }
 
+    /// Whether `user_id` (a compressed pubkey, hex) may drive a signing ceremony on this actor.
+    fn is_authorized_signer(&self, user_id: &[u8]) -> bool {
+        let Some(policy) = self.policy.as_ref() else {
+            return false;
+        };
+        let pkp = &policy.public_key_package;
+        pkp.verifying_shares
+            .values()
+            .any(|share| point::serialize_compressed(share) == user_id)
+            || point::serialize_compressed(&pkp.verifying_key.point) == user_id
+    }
+
     pub fn sign_step1(&mut self, req: SignStep1) -> Result<SignStep1Out, String> {
-        // Auth (OP_SIGN_STEP1) ran at the REST boundary.
+        // Authentication (OP_SIGN_STEP1) ran at the REST boundary; AUTHORIZATION is ours. Reject
+        // before touching `self.ceremony`, or a stranger's rejected call still wipes a live one.
+        if !self.is_authorized_signer(&req.user_id) {
+            return Err("signer is not authorized for this wallet".into());
+        }
         let policy = self.policy.as_ref().ok_or("no policy installed")?;
         let user_identifier = policy
             .user_signing_identifier
@@ -411,7 +669,11 @@ impl CosignerActor {
     }
 
     pub fn sign_step2(&mut self, req: SignStep2) -> Result<SignStep2Out, String> {
-        // Auth (OP_SIGN_STEP2) ran at the REST boundary.
+        // Same gate as step 1: step 2 consumes the single-use nonce, so an unauthorized caller
+        // could otherwise burn it and strand the real signer.
+        if !self.is_authorized_signer(&req.user_id) {
+            return Err("signer is not authorized for this wallet".into());
+        }
         // Plan A: enforce the bound contract (native `ContractHost`) over the full tx BEFORE
         // producing the cosigner's share — on Deny we refuse. No-op for non-contract spends.
         let full_tx = self.ceremony.full_transaction.clone();
@@ -1349,11 +1611,39 @@ impl CosignerActor {
                 let _ = reply.send(Err(Status::unimplemented("RedeemVtxo not implemented")));
             }
             CosignerCommand::SubmitArkSend { req, reply } => {
-                let _ = reply.send(self.submit_ark_send(req).await);
+                // The client-built send path. If the tx pays an outstanding request, mark it
+                // fulfilled — recognised from the tx's own outputs, so the sealed intent stays
+                // the authority (the client never says which request it is paying).
+                match self.submit_ark_send(req).await {
+                    Ok((resp, paid_outputs)) => {
+                        if let Some(id) =
+                            self.fulfil_intent_from_outputs(&paid_outputs, &resp.ark_txid)
+                        {
+                            tracing::info!("payment request {id} fulfilled by {}", resp.ark_txid);
+                            let group_key = self.state.lock().cosigner_id.clone();
+                            crate::cosigner::registry::persist_actor_snapshot_for(
+                                self,
+                                &group_key,
+                            )
+                            .await;
+                        }
+                        let _ = reply.send(Ok(resp));
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(e));
+                    }
+                }
             }
             // -------- Push registration --------
             CosignerCommand::RegisterDeviceToken { req, reply } => {
                 let _ = reply.send(self.register_device_token(req).await);
+            }
+            // -------- Request-to-pay (reads; the mutating paths are registry route_* fns) --------
+            CosignerCommand::ContactList { req, reply } => {
+                let _ = reply.send(self.contact_list(req).await);
+            }
+            CosignerCommand::PaymentRequestList { req, reply } => {
+                let _ = reply.send(self.payment_request_list(req).await);
             }
             // -------- Peer-contract share inbox --------
             CosignerCommand::EvtxoPendingShares { req, reply } => {

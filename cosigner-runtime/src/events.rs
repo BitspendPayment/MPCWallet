@@ -23,6 +23,13 @@ pub enum CosignerEvent {
         spk_hex: String,
         contract_id_hex: String,
     },
+    /// An allowlisted contact asked this user to pay. The durable record is the intent sealed in
+    /// the user's sealed state; this is just the live nudge.
+    PaymentRequest {
+        id: String,
+        from_vk_hex: String,
+        amount_sats: u64,
+    },
 }
 
 impl CosignerEvent {
@@ -30,6 +37,7 @@ impl CosignerEvent {
     pub fn kind(&self) -> &'static str {
         match self {
             CosignerEvent::ContractShare { .. } => "contract_share",
+            CosignerEvent::PaymentRequest { .. } => "payment_request",
         }
     }
 
@@ -43,6 +51,17 @@ impl CosignerEvent {
                 "type": "contract_share",
                 "evtxo_script_pubkey": spk_hex,
                 "contract_id": contract_id_hex,
+            })
+            .to_string(),
+            CosignerEvent::PaymentRequest {
+                id,
+                from_vk_hex,
+                amount_sats,
+            } => json!({
+                "type": "payment_request",
+                "id": id,
+                "from": from_vk_hex,
+                "amount_sats": amount_sats,
             })
             .to_string(),
         }

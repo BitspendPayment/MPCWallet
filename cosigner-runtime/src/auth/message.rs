@@ -22,6 +22,15 @@ pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
 pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
 pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
 pub const OP_EVENTS_SUBSCRIBE: &str = "EVENTS_SUBSCRIBE";
+// Request-to-pay. All are signed by the wallet that owns the actor EXCEPT `OP_PAYREQ_CREATE`,
+// which is signed by the REQUESTER and routed to the PAYER's actor — the payer's contact
+// allowlist is what authorizes it.
+pub const OP_CONTACT_ADD: &str = "CONTACT_ADD";
+pub const OP_CONTACT_REMOVE: &str = "CONTACT_REMOVE";
+pub const OP_CONTACT_LIST: &str = "CONTACT_LIST";
+pub const OP_PAYREQ_CREATE: &str = "PAYREQ_CREATE";
+pub const OP_PAYREQ_LIST: &str = "PAYREQ_LIST";
+pub const OP_PAYREQ_DECLINE: &str = "PAYREQ_DECLINE";
 
 /// Build the auth message bytes that should have been signed.
 /// Returns SHA-256 hash of the canonical message (matches Dart client's AuthMessage.messageBytes).
