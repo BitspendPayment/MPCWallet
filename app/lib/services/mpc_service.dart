@@ -15,6 +15,7 @@ import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:app_core/enclave/manifest.dart' as manifest;
 
 import '../passkey/passkey_authenticator.dart';
+import 'server_host.dart' as server_host;
 
 class MpcService extends ChangeNotifier {
   MpcClient? _client;
@@ -134,9 +135,6 @@ class MpcService extends ChangeNotifier {
 
   // Hardcoded for now, could be configurable
   String _host = '10.0.2.2'; // Default, will be overwritten by persistence
-  // 7074 is the server binary's default REST port and what the enclave
-  // production deployment listens on. The Makefile mirrors this for dev.
-  static const int _port = 7074;
 
   /// GitHub repo for fetching deployment manifest (PCR0).
   /// Set to empty to disable attestation (uses plain REST).
@@ -147,15 +145,9 @@ class MpcService extends ChangeNotifier {
   String? _expectedPcr0;
 
   /// Base URL for the server.
-  /// Uses HTTPS (port 443) for remote hosts (enclave).
+  /// Uses HTTPS (port 443) for remote hosts.
   /// Uses HTTP (port 7074) for local addresses (dev).
-  String get _baseUrl {
-    final isLocal = _host == '127.0.0.1' ||
-        _host == 'localhost' ||
-        _host == '10.0.2.2' ||
-        _host.startsWith('192.168.');
-    return isLocal ? 'http://$_host:$_port' : 'https://$_host';
-  }
+  String get _baseUrl => server_host.baseUrlFor(_host);
 
   /// Cached attestation status for immediate UI access.
   AttestationStatus? _lastAttestationStatus;
@@ -311,13 +303,10 @@ class MpcService extends ChangeNotifier {
     await _identityBox!.put('serverHost', host);
   }
 
-  /// Whether the current host requires attestation.
-  bool get _requiresAttestation {
-    return !(_host == '127.0.0.1' ||
-        _host == 'localhost' ||
-        _host == '10.0.2.2' ||
-        _host.startsWith('192.168.'));
-  }
+  /// Whether the current host requires attestation. See `server_host.dart` —
+  /// required by default, waived only for local dev and the explicitly listed
+  /// non-enclave deployments (mutinynet today; never mainnet).
+  bool get _requiresAttestation => server_host.requiresAttestation(_host);
 
   /// Create an MpcClient with the appropriate transport.
   /// Local hosts use plain REST. Remote hosts MUST use attested transport —

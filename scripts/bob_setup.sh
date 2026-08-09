@@ -2,7 +2,7 @@
 #
 # Set up "Bob" — an external `ark-client-sample` wallet (from ~/rust-sdk) used
 # as the counter-party in the Flutter integration test. Run after
-# `make software-ark` (or equivalent) has brought up arkd + electrs/Esplora +
+# `make up` (or equivalent) has brought up arkd + electrs/Esplora +
 # bitcoind.
 #
 #   1. Builds ark-client-sample if needed.

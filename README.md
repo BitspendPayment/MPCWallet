@@ -125,8 +125,7 @@ rustup target add aarch64-linux-android          # FFI for Android arm64
 ```bash
 make regtest-up        # bitcoind + electrs in Docker
 make bitcoin-init      # mine blocks
-make e2e               # full E2E: builds ffi + cosigner-runtime + signer-server, runs the Dart harness
-make e2e-ark           # Ark E2E (regtest + arkd)
+make e2e               # Ark E2E: builds ffi + cosigner-runtime, starts regtest + arkd, runs the Dart harness
 ```
 
 The local cosigner runtime runs as a plain Rust binary (no enclave, no attestation) — the per-user native-actor isolation still applies. Useful for fast iteration.
@@ -154,8 +153,7 @@ cd app && flutter run
 ```bash
 make threshold-test               # threshold library unit tests
 make ffi-test                     # merged FFI tests
-make e2e                          # full E2E (regtest + cosigner runtime + Dart e2e)
-make e2e-ark                      # Ark E2E
+make e2e                          # Ark E2E (regtest + arkd + cosigner runtime + Dart harness)
 make crypto-bench                 # cryptography benchmarks (Criterion)
 make stress-test                  # multi-user E2E stress test
 ```
@@ -182,4 +180,9 @@ make stress-test                  # multi-user E2E stress test
 
 ## License
 
-Part of the Bitspend Payment ecosystem.
+[MIT](LICENSE). Part of the Bitspend Payment ecosystem.
+
+Third-party code keeps its own licensing and is not covered by the above:
+`third_party/rust-sdk` is a submodule ([arkade-os/rust-sdk](https://github.com/arkade-os/rust-sdk),
+MIT, see its own `LICENSE`), and the vendored crates under `cosigner-runtime/vendor/`
+remain under the licences of their respective upstreams.

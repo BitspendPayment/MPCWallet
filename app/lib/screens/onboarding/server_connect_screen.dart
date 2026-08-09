@@ -62,7 +62,8 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
               keyName: 'serverPresetMutiny',
               icon: Icons.shield_outlined,
               title: 'Mutiny',
-              subtitle: 'Production enclave at mutiny.vtxos.network',
+              subtitle: 'Mutinynet (signet) at mutiny.vtxos.network — test coins, '
+                  'not enclave-attested',
               busy: _selecting == _mutinyHost,
               disabled: _selecting != null && _selecting != _mutinyHost,
               onTap: () => _pick(_mutinyHost),

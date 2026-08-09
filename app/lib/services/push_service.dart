@@ -21,6 +21,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../firebase_options.dart';
 import 'mpc_service.dart';
+import 'server_host.dart' as server_host;
 
 class PushService {
   static bool _initialized = false;
@@ -232,17 +233,6 @@ class PushService {
   }
 }
 
-/// Build the server base URL with the same rules `MpcService._baseUrl` uses.
-/// Local hosts get http://host:7074; remote (enclave) hosts get https://host.
-String _baseUrlFor(String host) {
-  const port = 7074;
-  final isLocal = host == '127.0.0.1' ||
-      host == 'localhost' ||
-      host == '10.0.2.2' ||
-      host.startsWith('192.168.');
-  return isLocal ? 'http://$host:$port' : 'https://$host';
-}
-
 /// Construct a fresh REST client, restore identity from Hive, run
 /// `settleDelegate(storeOnly: true)`. Used by both the real background
 /// handler and the test-only entry point.
@@ -266,7 +256,7 @@ Future<void> _runBackgroundDelegate({Duration? timeout}) async {
     return;
   }
   final client = MpcClient.rest(
-    _baseUrlFor(host),
+    server_host.baseUrlFor(host),
     storageId: storageId,
   );
   try {

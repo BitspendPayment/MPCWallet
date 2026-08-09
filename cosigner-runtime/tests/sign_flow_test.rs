@@ -4,7 +4,7 @@
 //! (seed on one registry, sign on a fresh one so the actor restores its keys from the sealed
 //! snapshot — exercising `to_snapshot`/`restore_snapshot` and the `SnapshotState` roundtrip).
 //!
-//! Needs Redis (persistence). The ASP channel is lazy and never used on the signing path.
+//! Persistence is in-process SQLite. The ASP channel is lazy and never used on the signing path.
 
 mod common;
 

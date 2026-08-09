@@ -3,10 +3,11 @@
 
 //! Shared setup for the integration tests. Builds `SharedServices` against the local dev stack.
 //!
-//! Redis is required (persistence backend); the ASP channel is created lazily, so a reachable
-//! arkd is NOT needed for paths that never issue an ASP RPC (FROST signing, policy seal, DKG
-//! onboarding bookkeeping). `try_shared` returns `None` — with a skip notice — only when Redis
-//! is unreachable, so these tests skip cleanly when run off-stack.
+//! Persistence is an in-process SQLite store, so there is no external dependency to reach and each
+//! `try_shared` call gets its own isolated database. The ASP channel is created lazily, so a
+//! reachable arkd is NOT needed for paths that never issue an ASP RPC (FROST signing, policy seal,
+//! DKG onboarding bookkeeping) — which is every test using this helper. `try_shared` returns
+//! `None` only if the ASP URL itself is malformed.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -16,7 +17,7 @@ use rand::rngs::OsRng;
 use cosigner_runtime::auth::session::SessionAuthority;
 use cosigner_runtime::cosigner::command::CosignerCommand;
 use cosigner_runtime::cosigner::registry::CosignerRegistry;
-use cosigner_runtime::resp_store::RespStore;
+use cosigner_runtime::kv_store::SqliteStore;
 use cosigner_runtime::shared::SharedServices;
 
 use threshold::dkg::{self, Round1Package, Round2Package};
@@ -25,19 +26,11 @@ use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::random;
 
 pub async fn try_shared() -> Option<Arc<SharedServices>> {
-    // Default matches the dev stack in `docker-compose.ark.yml` (`--requirepass testpass`; the
-    // username is ignored — connect as the `default` user). Override with `REDIS_URL`.
-    let redis_url = std::env::var("REDIS_URL")
-        .unwrap_or_else(|_| "redis://:testpass@127.0.0.1:6379".to_string());
     let asp_url = std::env::var("ASP_URL").unwrap_or_else(|_| "http://127.0.0.1:7070".to_string());
 
-    let store = match RespStore::connect(&redis_url).await {
-        Ok(s) => Arc::new(s),
-        Err(e) => {
-            eprintln!("skip: Redis unreachable at {redis_url}: {e:?}");
-            return None;
-        }
-    };
+    // `:memory:` — a fresh, private store per caller. Tests no longer share one namespace, so a
+    // leftover key from a failed run can't leak into the next one.
+    let store = Arc::new(SqliteStore::open(":memory:").expect("open in-memory store"));
     let asp = match ark::client::AspClient::connect_lazy(&asp_url) {
         Ok(a) => a,
         Err(e) => {

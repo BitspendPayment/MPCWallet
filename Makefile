@@ -2,11 +2,9 @@
 #  MPC Wallet — Makefile
 #
 #  Primary commands:
-#    make e2e            Run E2E test (no Ark)
-#    make e2e-ark        Run Ark E2E test
-#    make software       Start regtest (software 2-of-2 signer, no Ark)
-#    make software-ark   Start regtest + arkd (software 2-of-2 signer, Ark)
-#    make down           Stop everything
+#    make e2e     Run the Ark E2E suite (regtest + arkd, built and torn up fresh)
+#    make up      Start regtest + arkd + the cosigner in the foreground
+#    make down    Stop everything
 #
 #  Release (Firebase App Distribution):
 #    make release                       Build arm64 release APK + push to testers
@@ -17,26 +15,26 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark e2e-evtxo-arkd e2e-restore software software-ark hardware hardware-ark down \
-	bob-up bob-down \
-	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
+.PHONY: e2e up down \
+	bob-up bob-down bob-send \
+	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-x86_64 ffi-android-all \
 	contracts-build runtime-build \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	runtime-run runtime-stop \
-	arkd-up arkd-down arkd-init redis-up \
+	arkd-up arkd-down arkd-init db-reset \
 	proto threshold-test \
-	flutter flutter-run ark-newaddress crypto-bench \
+	flutter flutter-32 flutter-x86 ark-newaddress crypto-bench \
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
-	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down \
+	e2e-test e2e-ark-test regtest regtest-ark regtest-down \
 	integration-test integration-test-ci integration-test-ci-ark \
 	release release-apk release-apk-fat release-testers-add release-testers-remove
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 
 export DATA_DIR=/tmp/mpc_wallet_stress
-# The cosigner-runtime's single RESP/Redis KV backend (password-only auth; username ignored).
-export REDIS_URL=redis://:testpass@127.0.0.1:6379
+# The cosigner-runtime's single embedded SQLite KV backend — a file on local disk.
+export SQLITE_PATH=/tmp/mpc_cosigner/cosigner.db
 
 NDK_VERSION ?= 27.0.12077973
 NDK_HOME     = $(HOME)/Android/Sdk/ndk/$(NDK_VERSION)
@@ -66,49 +64,13 @@ VERSION_FLAGS = $(if $(VERSION),--build-name=$(VERSION)) $(if $(BUILD_NUMBER),--
 #  PRIMARY COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 1) Run E2E test (no Ark) — builds server, runs test, cleans up
-e2e: ffi-build runtime-build redis-up
-	@echo "Running E2E test..."
-	cd e2e && dart test test/full_system_test.dart
-
-# 2) Run Ark E2E test — starts regtest + arkd, builds everything, tests, cleans up
-e2e-ark: runtime-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build redis-up
+# Run the Ark E2E suite — starts regtest + arkd, builds everything, tests, cleans up
+e2e: runtime-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build db-reset
 	@echo "Running Ark E2E test..."
 	cd e2e && dart test test/ark_e2e_test.dart
 
-# Full eVTXO-through-arkd E2E (peer contracts + Phase 2 templates): Bob publishes a typed contract
-# TEMPLATE; Alice creates a contract from it with per-instance config; the cosigner composes it and
-# Bob INDEPENDENTLY spends it through arkd (arkd co-signs the server leg; the cosigner gates +
-# co-signs the V leg, refusing over-limit / bad-arg). Same stack as e2e-ark + the example contracts.
-e2e-evtxo-arkd: runtime-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build contracts-build redis-up
-	@echo "Running eVTXO-through-arkd E2E test..."
-	cd e2e && dart test test/evtxo_arkd_e2e_test.dart
-
-# Plan A 1B gate: prove the cosigner restores its FROST share from the SEAL alone after a runtime
-# restart (the plaintext key is no longer persisted). Needs only the runtime + ffi.
-e2e-restore: runtime-stop ffi-build runtime-build redis-up
-	@echo "Running restore-from-seal E2E test..."
-	cd e2e && dart test test/restore_from_seal_e2e_test.dart
-
-# 3) Start regtest — server in foreground. The wallet is a software 2-of-2
-#    {wallet, cosigner}; the phone signs in-app via the merged FFI.
-software: regtest-up bitcoin-init adb-reverse runtime-build ffi-build ffi-android
-	@echo ""
-	@echo "==> Software 2-of-2 signer mode."
-	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
-	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
-	@echo ""
-	@bash -c 'set -m; \
-		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
-		MINE_PID=$$!; \
-		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
-		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--port 7074'
-
-# 3b) Start regtest + arkd for SOFTWARE signer (no USB device required) — Ark enabled
-software-ark: runtime-build ffi-build ffi-android
+# Start regtest + arkd with the software 2-of-2 signer, cosigner in the foreground
+up: runtime-build ffi-build ffi-android
 	@echo "=== Starting regtest + arkd ==="
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
 	@echo "Waiting for services to stabilize (20s)..."
@@ -145,12 +107,7 @@ software-ark: runtime-build ffi-build ffi-android
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
 			--port 7074'
 
-# The hardware signer was removed; `hardware`/`hardware-ark` now alias the
-# software targets so existing muscle memory keeps working.
-hardware: software
-hardware-ark: software-ark
-
-# 5) Stop everything (server, mine loop, Docker)
+# Stop everything (cosigner, mine loop, Docker)
 down:
 	@echo "Stopping all services..."
 	-pkill -f "target/release/cosigner-runtime" || true
@@ -302,15 +259,14 @@ arkd-up:
 	@echo "Waiting for arkd to start (30s)..."
 	@sleep 30
 
-# Bring up the cosigner-runtime's RESP/Redis KV backend (host-exposed, password auth) and FLUSH it
-# for a clean test run. Idempotent — safe whether or not arkd-up already started it. The flush is
-# per-target (NOT on runtime restart), so the `sealed_state` snapshot survives the ark_e2e restart.
-redis-up:
-	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d cosigner-redis
-	@echo "Waiting for cosigner-redis..."
-	@until docker exec mpc_cosigner_redis redis-cli -a testpass ping 2>/dev/null | grep -q PONG; do sleep 1; done
-	@docker exec mpc_cosigner_redis redis-cli -a testpass FLUSHALL >/dev/null
-	@echo "cosigner-redis ready (flushed)"
+# Reset the cosigner-runtime's SQLite KV file for a clean test run. The reset is per-target
+# (NOT on runtime restart), so the `sealed_state` snapshot survives the ark_e2e restart — the
+# same guarantee the old FLUSHALL-on-redis-up gave. `-wal`/`-shm` are SQLite's sidecar files;
+# leaving them behind next to a deleted DB would resurrect stale pages.
+db-reset:
+	@rm -f $(SQLITE_PATH) $(SQLITE_PATH)-wal $(SQLITE_PATH)-shm
+	@mkdir -p $(dir $(SQLITE_PATH))
+	@echo "cosigner SQLite reset ($(SQLITE_PATH))"
 
 arkd-down:
 	@echo "Stopping arkd services..."
@@ -402,7 +358,7 @@ e2e-mutinynet-ark: ffi-build runtime-build
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # Run integration tests against an emulator that's already running, with
-# services already started elsewhere (e.g. `make software` in a separate
+# services already started elsewhere (e.g. `make up` in a separate
 # terminal). Default for local dev.
 integration-test:
 	cd app && \
@@ -446,13 +402,10 @@ integration-test-ci-ark: runtime-stop arkd-up bitcoin-init arkd-init \
 # ═══════════════════════════════════════════════════════════════════════════════
 
 e2e-test: e2e
-e2e-ark-test: e2e-ark
+e2e-ark-test: e2e
 regtest: regtest-up bitcoin-init runtime-run
 regtest-ark: runtime-stop arkd-up bitcoin-init arkd-init
 regtest-down: down
-regtest-hardware: hardware
-regtest-hardware-ark: hardware-ark
-regtest-hardware-ark-down: down
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  RELEASE — Firebase App Distribution

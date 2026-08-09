@@ -4,7 +4,7 @@
 //! written to a plaintext `policies` tree), which is what lets later cold spawns restore keys
 //! without the host keeping a plaintext signing key.
 //!
-//! Integration test: needs Redis (persistence). The ASP channel is lazy and never used here.
+//! Integration test: persistence is in-process SQLite. The ASP channel is lazy and never used here.
 
 mod common;
 
@@ -48,6 +48,6 @@ async fn seed_policy_installs_and_seals_without_plaintext() {
         "SeedPolicy must not require a plaintext policy in the `policies` tree"
     );
 
-    // Clean up the dev-Redis key this test wrote.
+    // Drop the key this test wrote (the in-memory store dies with the test anyway).
     let _ = shared.persistence.delete("sealed_state", &group_key);
 }

@@ -1654,7 +1654,7 @@ pub(crate) async fn push_vtxo_received(
 /// — the wallet still scans + signs the settle. Best-effort; dedup persists.
 pub async fn boarding_watch_sweep(
     esplora: &crate::esplora::EsploraClient,
-    persistence: &std::sync::Arc<dyn crate::resp_store::KvStore>,
+    persistence: &std::sync::Arc<dyn crate::kv_store::KvStore>,
     fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
 ) {
     let watches = match persistence.get_all("boarding_watches") {

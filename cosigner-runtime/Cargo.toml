@@ -46,9 +46,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 
-# Persistence — single RESP (Redis) KV backend. In the enclave the password is the runtime token;
-# the server only checks the password (username ignored → default user).
-redis = { version = "0.27", features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+# Persistence — single embedded SQLite KV backend. `bundled` compiles SQLite from source so the
+# build needs no system libsqlite3 (matters for the Nix/enclave build and for CI images).
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Bitcoin
 bitcoin = { version = "0.32", features = ["serde"] }

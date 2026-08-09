@@ -64,21 +64,9 @@ services:
       retries: 30
     restart: unless-stopped
 
-  # The cosigner-runtime's RESP/Redis KV backend (host-exposed, password auth). The runtime is a
-  # host process, so this is published to 127.0.0.1:6379. Password-only auth mirrors the enclave
-  # (where the password is the runtime token; the username is ignored → default user).
-  cosigner-redis:
-    image: redis:7-alpine
-    container_name: mpc_cosigner_redis
-    command: ["redis-server", "--requirepass", "testpass"]
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "testpass", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-    restart: unless-stopped
+  # NOTE: the `redis` service above belongs to arkd. The cosigner-runtime no longer has a
+  # service here — its KV backend is an embedded SQLite file (`SQLITE_PATH`, see the Makefile's
+  # `db-reset` target), so there is nothing to start or wait on.
 
   # arkd wallet service
   arkd-wallet:

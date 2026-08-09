@@ -4,10 +4,10 @@ use std::env;
 /// Mirrors the Dart `ServerConfig` from `server/lib/config.dart`.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    /// RESP (Redis) connection URL for the single KV backend, e.g.
-    /// `redis://:<password>@host:6379` (`rediss://…` for TLS). The server only checks the password
-    /// (username ignored → `default` user). In the enclave the password is the runtime token.
-    pub redis_url: String,
+    /// Filesystem path to the SQLite database backing the single KV store, e.g.
+    /// `/var/lib/cosigner/state.db`. Parent directories are created at open. `:memory:` gives an
+    /// ephemeral store (tests). Env `SQLITE_PATH`.
+    pub sqlite_path: String,
     /// ASP (Ark Service Provider) gRPC URL, e.g. "http://localhost:7070".
     /// When empty, Ark RPCs return UNAVAILABLE.
     pub asp_url: String,
@@ -66,7 +66,10 @@ impl ServerConfig {
     /// Supports Docker secrets via `_FILE` suffix pattern.
     pub fn from_environment() -> Self {
         Self {
-            redis_url: redis_url_from_env(),
+            sqlite_path: env::var("SQLITE_PATH")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| DEFAULT_SQLITE_PATH.to_string()),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             esplora_url: env::var("ESPLORA_URL").unwrap_or_default(),
@@ -98,33 +101,6 @@ impl ServerConfig {
     }
 }
 
-/// Build the RESP (Redis) URL. `REDIS_URL` wins; otherwise compose
-/// `redis[s]://:<password>@<host>:<port>` (default user — the server only checks the password) with
-/// the password being `REDIS_PASSWORD`, else the enclave's `ENCLAVE_RUNTIME_TOKEN`. The password is
-/// hex (enclave token) or test-controlled, so it needs no URL-encoding.
-fn redis_url_from_env() -> String {
-    if let Ok(url) = env::var("REDIS_URL") {
-        if !url.is_empty() {
-            return url;
-        }
-    }
-    let host = env::var("REDIS_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("REDIS_PORT").unwrap_or_else(|_| "6379".to_string());
-    let scheme = if matches!(env::var("REDIS_TLS").as_deref(), Ok("1") | Ok("true")) {
-        "rediss"
-    } else {
-        "redis"
-    };
-    let password = env::var("REDIS_PASSWORD")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            env::var("ENCLAVE_RUNTIME_TOKEN")
-                .ok()
-                .filter(|s| !s.is_empty())
-        });
-    match password {
-        Some(pw) => format!("{scheme}://:{pw}@{host}:{port}"),
-        None => format!("{scheme}://{host}:{port}"),
-    }
-}
+/// Where the KV database lives when `SQLITE_PATH` is unset. A relative path so a bare `cargo run`
+/// works without root; deployments point this at the mounted data volume.
+const DEFAULT_SQLITE_PATH: &str = "data/cosigner.db";

@@ -40,6 +40,9 @@ Future<String> mintSessionToken(String subHex, List<int> seed) async {
   return '$signingInput.${b64u(sig.bytes)}';
 }
 
+String _hex(List<int> b) =>
+    b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+
 /// Helper to call the arkd admin REST API.
 class ArkdAdmin {
   final String adminUrl;
@@ -134,6 +137,9 @@ Future<Process> startCosignerRuntime(
     // intent is stored drives the batch.
     'AUTO_SETTLE_SAFETY_MARGIN_SECS': '9999999999',
     'HOME': dataDir.path,
+    // Per-run SQLite KV file. Same dir across restarts, so state survives a runtime
+    // bounce the way the shared Redis instance used to.
+    'SQLITE_PATH': '${dataDir.path}/cosigner.db',
     ...extraEnv,
   };
   final proc = await Process.start(
@@ -702,6 +708,12 @@ void main() {
     // Runs here rather than standalone because it needs a FUNDED payer, which
     // this test already has. Covers the half a mocked test cannot: the payment
     // actually settles and the cosigner marks the request fulfilled.
+    //
+    // Absorbed the former standalone `payment_request_e2e_test.dart`, which was
+    // wired into neither the Makefile nor CI and so never ran. Its unique
+    // coverage — group-key canonicalisation of the allowlist and of the intent's
+    // requester, the memo, the decline path, and the post-revoke gate — is folded
+    // in below; the rest it asserted was already covered here.
     // ---------------------------------------------------------------------
     print('11. Request-to-pay: Bob bills Alice, Alice pays');
 
@@ -721,16 +733,25 @@ void main() {
     );
     print('   Un-allowlisted request refused');
 
+    // Bob is added by the id he addresses the API with, but the cosigner canonicalises
+    // it to his GROUP key before storing. Pinning that keeps the allowlist comparable
+    // no matter which of a wallet's ids a caller happens to use.
+    final bobGroupKey = bob.groupKeyHex!;
     await alice.contactAdd(bob.userId!, 'Bob');
     final aliceContacts = await alice.contactList();
     expect(aliceContacts, hasLength(1));
-    print('   Alice allowlisted Bob');
+    expect(aliceContacts.map((c) => _hex(c.verifyingKey)), contains(bobGroupKey),
+        reason: 'the contact must be stored as the group key, not the id passed in');
+    print('   Alice allowlisted Bob (stored canonically as his group key)');
 
     final requestAmount = 15000;
     final intent =
         await bob.requestPayment(alice.userId!, requestAmount, memo: 'invoice 1');
     expect(intent.status, 'pending');
     expect(intent.amountSats.toInt(), requestAmount);
+    expect(intent.memo, 'invoice 1');
+    expect(_hex(intent.fromVerifyingKey), bobGroupKey,
+        reason: 'the requester must be recorded by group key, not by share key');
     // The payee address is derived by Alice's cosigner from Bob's group key — never
     // supplied by Bob. A wrongly-derived one would send funds Bob cannot spend.
     expect(intent.toArkAddress, bobArkAddress,
@@ -773,13 +794,30 @@ void main() {
         reason: 'Bob must receive the requested amount');
     print('   Bob received it: balance=$bobAfterPay');
 
-    // Revoking must also drop that contact's pending requests.
+    // Declining is the other terminal state. Unlike a revoked request it must STAY in
+    // the inbox, marked declined — the payer refused it, they didn't un-know about it.
+    final unwanted =
+        await bob.requestPayment(alice.userId!, 777, memo: 'not today');
+    await alice.declinePaymentRequest(unwanted.id);
+    final afterDecline = await alice.paymentRequests();
+    expect(afterDecline.firstWhere((i) => i.id == unwanted.id).status, 'declined',
+        reason: 'a declined request must remain visible with declined status');
+    print('   Alice declined a request');
+
+    // Revoking must also drop that contact's pending requests — otherwise revocation
+    // would stop new requests but leave the old ones sitting in the inbox.
     final second =
         await bob.requestPayment(alice.userId!, 500, memo: 'will be revoked');
     await alice.contactRemove(bob.userId!);
     final afterRevoke = await alice.paymentRequests();
     expect(afterRevoke.where((i) => i.id == second.id), isEmpty,
         reason: 'revoking a contact must discard their pending requests');
+    // ...and the gate is shut for new ones too, not just the queued one.
+    await expectLater(
+      bob.requestPayment(alice.userId!, 100, memo: 'after revoke'),
+      throwsA(isA<Exception>()),
+      reason: 'a revoked contact must not be able to create a request',
+    );
     print('   Revoke closed the gate and dropped the pending request');
 
     print('Full Ark E2E flow complete!');
@@ -1079,6 +1117,59 @@ void main() {
             'getArkAddress should succeed once the user actor is rehydrated post-restart');
 
     print('Restart-survival test complete!');
+  }, timeout: Timeout(Duration(minutes: 4)));
+
+  // Plan A 1B gate — absorbed from the former `restore_from_seal_e2e_test.dart`.
+  //
+  // The restart test above proves DATA rehydrates (VTXOs, history) and that a
+  // derivation like getArkAddress still works — but it never signs, and neither
+  // does the stale-VTXO restart test. The delegate-survives-restart test does
+  // settle post-restart, which exercises the restored `ark_cosigner_secret`, not
+  // the FROST share. So nothing here covered the specific claim below.
+  //
+  // That claim: with the plaintext FROST key gone from `policies`, the cosigner's
+  // signing share exists ONLY inside the sealed snapshot. A cold-spawned actor
+  // must reconstruct it from the seal alone. Because the persisted key field is
+  // blank, a broken restore cannot be masked by a plaintext fallback — the sign
+  // simply fails.
+  //
+  // Moving it here also fixes it: standalone it ran under a `make e2e-restore` target,
+  // which starts no arkd and sets no ASP_URL, so the runtime exited at boot with
+  // "ASP_URL is required" and the test could never have passed. Here the shared
+  // runtime from setUpAll is already pointed at arkd.
+  test('Ark: cosigner FROST-signs from the sealed snapshot after a restart',
+      () async {
+    print('1. DKG a fresh wallet');
+    final sealed = createClient(storageId: 'seal_restore');
+    await sealed.doDkg();
+    print('   user=${sealed.userId?.substring(0, 12)}');
+
+    // Baseline while the actor is warm: proves the happy path and that the guest
+    // actually sealed its state before we kill anything.
+    final warmMsg = Uint8List.fromList(List.generate(32, (i) => i + 1));
+    await sealed.sign(warmMsg, applyTweak: false); // throws on an invalid aggregate
+    print('2. Warm sign OK');
+
+    print('3. Kill cosigner-runtime');
+    final oldProcess = serverProcess!;
+    serverProcess = null;
+    oldProcess.kill(ProcessSignal.sigterm);
+    // Wait for real exit so the SQLite file is released before the restart.
+    await oldProcess.exitCode;
+
+    print('4. Restart against the same data dir — every actor is now cold');
+    serverProcess = await startCosignerRuntime(
+      serverPort,
+      serverTempDir,
+      extraEnv: cosignerExtraEnv,
+    );
+
+    // The cold-spawned actor has to restore its share from the seal to produce a
+    // valid signature share here. A different message than the warm one, so a
+    // cached/replayed signature cannot make this pass.
+    final coldMsg = Uint8List.fromList(List.generate(32, (i) => 0xA0 + i));
+    await sealed.sign(coldMsg, applyTweak: false);
+    print('5. COLD sign OK — share restored from the seal alone');
   }, timeout: Timeout(Duration(minutes: 4)));
 
   // FCM push delivery: the cosigner-runtime is configured (via setUpAll) to
@@ -1864,11 +1955,18 @@ void main() {
           'expires_at': v.expiresAt.toInt(),
         });
     final poisoned = jsonEncode([...spentOutpoints, ...surviving]);
-    final setResult = await Process.run('docker', [
-      'exec', 'mpc_cosigner_redis', 'redis-cli', '-a', 'testpass', '--no-auth-warning',
-      'SET', 'vtxo_store:$groupKey', poisoned,
+    // Write straight into the runtime's SQLite KV, the way this used to SET the Redis key.
+    // Single quotes are the only metacharacter inside a SQL string literal; JSON escaping
+    // leaves none in practice, but double them so a stray one can't break out.
+    final sqlValue = poisoned.replaceAll("'", "''");
+    final setResult = await Process.run('sqlite3', [
+      '${serverTempDir.path}/cosigner.db',
+      "INSERT INTO kv (tree, key, value) VALUES ('vtxo_store', '$groupKey', '$sqlValue') "
+          "ON CONFLICT (tree, key) DO UPDATE SET value = excluded.value;",
     ]);
-    expect(setResult.exitCode, 0, reason: 'failed to poison the cache: ${setResult.stderr}');
+    expect(setResult.exitCode, 0,
+        reason: 'failed to poison the cache (needs the `sqlite3` CLI on PATH): '
+            '${setResult.stderr}');
 
     // 4. Restart so the actor cold-spawns and rehydrates from the poisoned cache.
     print('4. Restart the cosigner so the actor rehydrates from it');

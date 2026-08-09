@@ -83,6 +83,9 @@ void main() {
         'ELECTRUM_PORT': '50001',
         'BITCOIN_NETWORK': 'signet',
         'HOME': serverTempDir.path,
+        // Per-run SQLite KV file. Same dir across restarts, so state survives a runtime
+        // bounce the way the shared Redis instance used to.
+        'SQLITE_PATH': '${serverTempDir.path}/cosigner.db',
       },
     );
 

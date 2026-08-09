@@ -14,7 +14,7 @@ use tonic::Status;
 use crate::cosigner::actor::CosignerActor;
 use crate::cosigner::handlers::parsers;
 use crate::cosigner::registry::run_blocking;
-use crate::resp_store::KvStore;
+use crate::kv_store::KvStore;
 use crate::wallet_proto::{
     EvtxoAckShareRequest, EvtxoAckShareResponse, EvtxoPendingSharesRequest,
     EvtxoPendingSharesResponse, PendingContractShare,

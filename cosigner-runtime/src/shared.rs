@@ -8,7 +8,7 @@ use crate::auth::session::SessionAuthority;
 use crate::contract::ContractHost;
 use crate::events::EventBus;
 use crate::fcm_client::FcmClient;
-use crate::resp_store::KvStore;
+use crate::kv_store::KvStore;
 use crate::webauthn_server::WebauthnServer;
 
 pub struct SharedServices {

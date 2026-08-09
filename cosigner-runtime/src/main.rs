@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    config, contract, cosigner, esplora, fcm_client, onboarding, resp_store, rest_api, shared,
+    config, contract, cosigner, esplora, fcm_client, onboarding, kv_store, rest_api, shared,
     telemetry, vtxo_stream, webauthn_server,
 };
 
@@ -42,11 +42,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    // Persistence: the single RESP (Redis) KV backend. In the enclave the AUTH password is the
-    // runtime token; the server only checks the password (username ignored → default user).
-    tracing::info!("Persistence: RESP/Redis KV backend");
-    let persistence: Arc<dyn resp_store::KvStore> =
-        Arc::new(resp_store::RespStore::connect(&cfg.redis_url).await?);
+    // Persistence: the single embedded SQLite KV backend, a file on the local data volume.
+    tracing::info!("Persistence: SQLite KV backend at {}", cfg.sqlite_path);
+    let persistence: Arc<dyn kv_store::KvStore> =
+        Arc::new(kv_store::SqliteStore::open(&cfg.sqlite_path)?);
 
     // ASP connection — REQUIRED. The cosigner is an Ark wallet co-signer; it cannot serve without
     // an ASP, so a missing URL or a failed connect is a hard startup error, not a soft fallback.

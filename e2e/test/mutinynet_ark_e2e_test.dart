@@ -87,6 +87,9 @@ void main() {
         'BITCOIN_NETWORK': 'signet',
         'ASP_URL': _aspUrl,
         'HOME': serverTempDir.path,
+        // Per-run SQLite KV file. Same dir across restarts, so state survives a runtime
+        // bounce the way the shared Redis instance used to.
+        'SQLITE_PATH': '${serverTempDir.path}/cosigner.db',
       },
     );
 

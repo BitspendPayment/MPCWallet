@@ -20,7 +20,7 @@ use dashmap::DashMap;
 use webauthn_rs::prelude::*;
 
 use crate::auth::session::{SessionAuthority, SessionClaims};
-use crate::resp_store::KvStore;
+use crate::kv_store::KvStore;
 
 /// KV tree holding each user's passkey credentials (`Vec<Passkey>` JSON, keyed by group-key hex).
 const CRED_TREE: &str = "passkey_credentials";
@@ -298,7 +298,7 @@ fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resp_store::PersistenceError;
+    use crate::kv_store::PersistenceError;
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex;
     use webauthn_authenticator_rs::softpasskey::SoftPasskey;
@@ -307,7 +307,7 @@ mod tests {
     /// A throwaway 32-byte Ed25519 seed for minting/verifying test session tokens.
     const SEED_HEX: &str = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20";
 
-    /// Tiny in-memory `KvStore` for the test (no Redis). Stores `"{tree}/{key}" -> value`.
+    /// Tiny in-memory `KvStore` for the test (no SQLite). Stores `"{tree}/{key}" -> value`.
     #[derive(Default)]
     struct MemStore(StdMutex<HashMap<String, String>>);
     impl KvStore for MemStore {

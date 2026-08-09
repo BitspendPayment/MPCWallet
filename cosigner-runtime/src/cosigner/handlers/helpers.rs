@@ -8,7 +8,7 @@ use tonic::Status;
 use crate::auth::message::{build_auth_message, MAX_TIMESTAMP_DRIFT_MS};
 use crate::auth::session::SessionClaims;
 use crate::cosigner::state::CosignerState;
-use crate::resp_store::KvStore;
+use crate::kv_store::KvStore;
 
 /// Per-user auth check. A valid upstream session token bound to this user (`session`, already
 /// signature+exp-verified at the REST boundary) authenticates the request; otherwise we fall back

@@ -10,7 +10,7 @@ pub mod esplora;
 pub mod events;
 pub mod fcm_client;
 pub mod onboarding;
-pub mod resp_store;
+pub mod kv_store;
 pub mod rest_api;
 pub mod shared;
 pub mod telemetry;

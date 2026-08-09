@@ -9,7 +9,7 @@
 //! stranger and their inbox — and it must survive a cold spawn.
 //!
 //! Drives the registry directly, so it covers AUTHORIZATION (in the actor), not AUTHENTICATION
-//! (the Schnorr check at the REST boundary). Needs Redis.
+//! (the Schnorr check at the REST boundary). Persistence is in-process SQLite.
 
 mod common;
 

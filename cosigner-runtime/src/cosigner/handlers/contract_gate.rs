@@ -15,7 +15,7 @@ use tonic::Status;
 
 use crate::bitcoin::tx_parser;
 use crate::contract::{crypto_host, ContractHost, Verdict};
-use crate::resp_store::{KvStore, PersistenceError};
+use crate::kv_store::{KvStore, PersistenceError};
 use crate::shared::SharedServices;
 
 /// Persistence tree: contract scriptPubKey (hex) -> contract_id (hex).
@@ -175,7 +175,7 @@ fn decode_id(hex_str: &str) -> Option<[u8; 32]> {
 mod tests {
     use super::*;
     use crate::contract::InMemoryRegistry;
-    use crate::resp_store::PersistenceError;
+    use crate::kv_store::PersistenceError;
     use std::collections::HashMap;
     use std::sync::Mutex;
 

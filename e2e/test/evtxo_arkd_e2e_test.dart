@@ -32,7 +32,7 @@ import 'package:test/test.dart';
 ///      → ark_txid returned, Carol credited.
 ///    - over-limit / bad-arg: the cosigner withholds its share → throws at sign.
 ///
-/// Prereqs (mirrors `make e2e-ark`): bitcoind + arkd +
+/// Prereqs (mirrors `make e2e`): bitcoind + arkd +
 /// cosigner.wasm/cosigner-runtime/ffi/contracts built. The contract wasm is handed to
 /// the cosigner at eVTXO creation.
 
@@ -105,6 +105,9 @@ Future<Process> startCosignerRuntime(
     // next 60s tick.
     'AUTO_SETTLE_SAFETY_MARGIN_SECS': '9999999999',
     'HOME': dataDir.path,
+    // Per-run SQLite KV file. Same dir across restarts, so state survives a runtime
+    // bounce the way the shared Redis instance used to.
+    'SQLITE_PATH': '${dataDir.path}/cosigner.db',
     ...extraEnv,
   };
   final proc = await Process.start(
