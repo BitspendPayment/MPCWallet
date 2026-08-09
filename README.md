@@ -245,45 +245,69 @@ Treat Ark here as cheap, fast custody-minimised payments — not as anonymity.
 
 **Status: designed, not implemented. This is the first thing grant funding buys.**
 
-We are naming it rather than leaving it implicit: as shipped, a permanent cosigner outage freezes
-Ark balances. The fix we have chosen is **pre-signed exit transactions held by the phone**.
+As shipped, a permanent cosigner outage freezes Ark balances — see above. The fix is a **third
+taptree leaf spendable by a recovery key the phone controls alone**, after a long CSV delay:
 
-At each settlement — the moment the cosigner is provably alive and already co-signing — it also
-co-signs one extra transaction per VTXO: a spend through the **exit leaf**, paying to the wallet's
-own on-chain single-key address, carrying the `nSequence` the CSV requires. The phone stores it
-alongside the VTXO tree branch it would need to broadcast. Nothing is published while things are
-healthy. If the cosigner never comes back, the phone broadcasts the branch, waits out the exit
-delay, and broadcasts the pre-signed spend. No cosigner, no ASP, no operator.
+```
+forfeit  leaf:  <asp_pk>       OP_CHECKSIGVERIFY <group_pk>    OP_CHECKSIG   # cooperative, today
+exit     leaf:  <exit_delay>   OP_CSV OP_DROP    <group_pk>    OP_CHECKSIG   # today (still 2-of-2)
+recovery leaf:  <recov_delay>  OP_CSV OP_DROP    <recovery_pk> OP_CHECKSIG   # new
+```
 
-Why this one, over the alternatives we considered:
+Three things make this cheap rather than speculative, and all three already exist in this
+repository:
 
-- **A time-locked escape leaf** (a third taptree leaf spendable by the phone's key alone after a
-  long delay) is cleaner — no per-VTXO bookkeeping, no staleness. But it changes the VTXO script
-  away from `Vtxo::new_default`, so it needs the ASP to accept a non-standard taptree, and it
-  hands a stolen phone the full balance once the delay elapses. It is the better *protocol*
-  answer and the wrong *deployable-now* answer; we would want it upstream in Ark, not as a local
-  fork.
-- **A published cosigner-share recovery procedure** is the weakest option and we rejected it. A
-  share recoverable by the user is recoverable by whoever else obtains the same material, which
-  dismantles the 2-of-2 the whole design rests on — and it depends on us still being around to
-  publish it, which is precisely the failure being defended against.
+**The recovery key already exists and needs no new custody.** `recovery_pk` is the wallet's
+on-chain single key — the DKG dealer secret, which the phone already holds and already backs up
+because it secures the on-chain balance ([`client.dart:93-98`](app-core/lib/client.dart#L93-L98)).
+No new secret, no new backup surface, no extra thing to lose.
 
-Pre-signed exits need no protocol change, no ASP cooperation, and no trust in us at exit time.
-They work against the stock Ark taptree and the ASP we already use.
+**The cosigner already knows it.** That key's public point *is* the DKG `walletVk`, which the
+wallet sends during onboarding and the cosigner already persists as `wallet_vk`
+([`state.rs:192`](cosigner-runtime/src/cosigner/state.rs#L192)). Both sides can derive the same
+three-leaf address today with no new protocol message.
 
-The honest costs, since they are the reason this is work and not a footnote:
+**The ASP does not need to know or approve.** An Ark address is just `(server_key, vtxo_tap_key)`;
+the taptree is committed inside the output key, and arkd mints and co-signs against the
+cooperative path without inspecting the rest. That is not a hope — this project already ships
+contract eVTXOs built exactly this way. [`evtxo_tree`](crates/ark/src/lib.rs#L181-L193) takes the
+cooperative key and the exit-leaf key as **separate parameters**:
 
-- An exit transaction is valid only for the exact VTXO it spends, so it must be reissued on every
-  settle, send, and receive. The wallet already re-settles on a timer, so the trigger exists; the
-  bookkeeping does not.
-- VTXOs received *after* the cosigner goes down have no exit transaction and stay frozen. This
-  shrinks the exposure window; it does not close it.
-- The phone must also retain the tree branch data, and back it up with the wallet, or the exit
-  transaction has nothing to spend.
+```rust
+let cooperative = TapLeaf::new(contract_cooperative_script(commit, server_pk, evtxo_pk));
+let exit        = TapLeaf::new(evtxo_exit_script(exit_delay, owner_pk));   // different key
+```
 
-Scope to close it: mint-on-settle in the cosigner, storage plus backup in the client, an
-exit-broadcast flow in the app, and a regtest E2E that kills the cosigner permanently and drains
-a wallet to on-chain with the ASP also stopped.
+`ContractPolicy.owner_pk` is literally documented as "user-supplied exit-leaf owner x-only key",
+and the whole path is e2e-verified spending through arkd on regtest. The recovery leaf is the same
+construction with the recovery key in that slot.
+
+The gap is narrow: plain wallet VTXOs still go through `Vtxo::new_default`, which reuses one
+`owner` for both leaves. eVTXOs got the better construction; ordinary VTXOs did not.
+
+The honest costs:
+
+- **A stolen phone gets the balance once `recov_delay` elapses.** Today a thief with the phone
+  cannot touch Ark funds without the cosigner. `recov_delay` must therefore be long — months, not
+  days — so the leaf only fires on genuine abandonment, and it must comfortably exceed the ASP's
+  own exit delay so the ASP's forfeit assumptions are never undercut.
+- **It is forward-only.** Changing the taptree changes the address, so existing VTXOs keep the
+  old script until they are re-settled. Boarding outputs need the same treatment.
+- **It depends on ASPs continuing not to constrain taptrees.** If arkade later requires
+  registering or validating VTXO scripts, this needs their buy-in.
+
+That last risk is why the fallback stays documented rather than discarded: **pre-signed exit
+transactions**. At each settlement the cosigner also co-signs a spend of the current VTXO through
+the *existing* exit leaf, paying to the wallet's on-chain address; the phone stores it and can
+broadcast it unaided. It needs no script change at all, so it works even against an ASP that
+rejects non-default taptrees — at the cost of per-VTXO bookkeeping, reissue on every
+settle/send/receive, and no protection for VTXOs received after the outage begins. We would build
+it only if the recovery leaf turns out to be blocked.
+
+Scope to close it: extend the taptree builder in `crates/ark` to the three-leaf form, thread
+`wallet_vk` through as the recovery key on both sides, add an exit-broadcast flow in the app, and
+a regtest E2E that permanently kills the cosigner *and* the ASP and still drains a wallet
+on-chain.
 
 ## References
 
