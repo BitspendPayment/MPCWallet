@@ -169,6 +169,122 @@ make stress-test                  # multi-user E2E stress test
 - **MPC requests are authenticated** with Schnorr signatures (or a passkey-minted session token) over timestamped messages, within a replay window.
 - **The on-chain single-key path is wallet-alone.** It works without the cosigner or ASP (offline mode); it is not part of the 2-of-2.
 
+The same 2-of-2 that stops the cosigner signing alone also stops *you* signing alone, which is
+why Ark balances depend on the cosigner being reachable. See
+[Trust assumptions & failure modes](#trust-assumptions--failure-modes) and
+[Emergency exit](#emergency-exit) before relying on this with real money.
+
+## Trust assumptions & failure modes
+
+The security summary above is what holds when everything works. This is what breaks, and who
+you have to trust for it not to.
+
+### The one that matters: the Ark owner key is 2-of-2
+
+Every VTXO and every boarding output is owned by the **FROST group key**, not by the phone's own
+key ([`bitcoin.dart`](app-core/lib/bitcoin.dart#L191-L194) — *"the FROST group key stays the Ark
+owner key (boarding + VTXO)"*). The stock Ark taptree gives a VTXO two spend paths:
+
+```
+forfeit leaf:  <asp_pk> OP_CHECKSIGVERIFY <owner_pk> OP_CHECKSIG
+exit leaf:     <delay>  OP_CSV OP_DROP    <owner_pk> OP_CHECKSIG
+```
+
+(`Vtxo::new_default` → `multisig_script` + `csv_sig_script`, `ark-core/src/{vtxo,script}.rs`.)
+
+Both name `owner_pk`, and here `owner_pk` is the group key. **The exit leaf's timelock controls
+*when* you may leave, not *who* may leave.** So if the cosigner is permanently gone, the phone
+holds one of two required shares and cannot produce a group-key signature at all — the unilateral
+exit path that normally protects Ark users does not protect you. Ark funds and in-flight boarding
+outputs are frozen, permanently. Waiting does not fix it.
+
+**What survives regardless:** the on-chain single-key layer. Its key is the phone's own DKG dealer
+secret, spending a plain BIP-341 key-path taproot address, and the cosigner is never involved.
+Offline mode already routes there when Ark is unreachable. On-chain balance is genuinely
+self-custodial today; Ark balance is not.
+
+### AWS
+
+The cosigner runs on AWS. In production it is a Nitro Enclave whose KMS secrets are PCR0-locked,
+which is what stops *us* from extracting your share — and is also why an account termination,
+a destroyed KMS key, or a lost data volume is unrecoverable **by anyone, including us**. The
+sealing that makes the operator untrusted for confidentiality makes AWS trusted for availability.
+That is a deliberate trade, and it is the whole reason the section below exists.
+
+The mutinynet deployment ([infrastructure/mutinynet/](infrastructure/mutinynet/)) is *not*
+enclave-backed — it runs the cosigner on a plain EC2 host with its shares in plaintext SQLite on
+EBS. It is signet-only for that reason, and the app enforces the split by refusing unattested
+transport for every host except that one.
+
+### The ASP
+
+Liveness for anything Ark: sends, settlements, receiving. If the ASP is down you fall back to
+on-chain. If the ASP is *malicious* it cannot steal — the forfeit leaf needs your signature too —
+but it can refuse service, and refusing service is what makes unilateral exit necessary, which
+loops back to the 2-of-2 problem above. We depend on a third-party ASP
+(`https://mutinynet.arkade.sh` today); we do not run it.
+
+### What Ark's privacy does *not* give you
+
+Ark keeps VTXOs off-chain. That is a scalability property, and it is routinely mistaken for a
+privacy one. It is not CoinJoin and it is not a mixnet:
+
+- **The ASP sees everything** — every VTXO, every amount, and the sender/recipient pairing inside
+  every round. It is a full observer of your transaction graph, by construction.
+- **So does our cosigner.** It persists `vtxo_store`, `ark_tx_history`, `ark_script_to_user`,
+  `boarding_watches`, and your request-to-pay contacts. Enclave sealing keeps that from the
+  *operator*; it does not make the data not exist, and a future compelled-access or
+  implementation-flaw scenario is about that data.
+- **Exiting is public and linking.** A unilateral exit publishes your branch of the VTXO tree
+  on-chain, tying those outputs together for anyone watching.
+- **Boarding and exit are on-chain events** with ordinary on-chain traceability.
+
+Treat Ark here as cheap, fast custody-minimised payments — not as anonymity.
+
+## Emergency exit
+
+**Status: designed, not implemented. This is the first thing grant funding buys.**
+
+We are naming it rather than leaving it implicit: as shipped, a permanent cosigner outage freezes
+Ark balances. The fix we have chosen is **pre-signed exit transactions held by the phone**.
+
+At each settlement — the moment the cosigner is provably alive and already co-signing — it also
+co-signs one extra transaction per VTXO: a spend through the **exit leaf**, paying to the wallet's
+own on-chain single-key address, carrying the `nSequence` the CSV requires. The phone stores it
+alongside the VTXO tree branch it would need to broadcast. Nothing is published while things are
+healthy. If the cosigner never comes back, the phone broadcasts the branch, waits out the exit
+delay, and broadcasts the pre-signed spend. No cosigner, no ASP, no operator.
+
+Why this one, over the alternatives we considered:
+
+- **A time-locked escape leaf** (a third taptree leaf spendable by the phone's key alone after a
+  long delay) is cleaner — no per-VTXO bookkeeping, no staleness. But it changes the VTXO script
+  away from `Vtxo::new_default`, so it needs the ASP to accept a non-standard taptree, and it
+  hands a stolen phone the full balance once the delay elapses. It is the better *protocol*
+  answer and the wrong *deployable-now* answer; we would want it upstream in Ark, not as a local
+  fork.
+- **A published cosigner-share recovery procedure** is the weakest option and we rejected it. A
+  share recoverable by the user is recoverable by whoever else obtains the same material, which
+  dismantles the 2-of-2 the whole design rests on — and it depends on us still being around to
+  publish it, which is precisely the failure being defended against.
+
+Pre-signed exits need no protocol change, no ASP cooperation, and no trust in us at exit time.
+They work against the stock Ark taptree and the ASP we already use.
+
+The honest costs, since they are the reason this is work and not a footnote:
+
+- An exit transaction is valid only for the exact VTXO it spends, so it must be reissued on every
+  settle, send, and receive. The wallet already re-settles on a timer, so the trigger exists; the
+  bookkeeping does not.
+- VTXOs received *after* the cosigner goes down have no exit transaction and stay frozen. This
+  shrinks the exposure window; it does not close it.
+- The phone must also retain the tree branch data, and back it up with the wallet, or the exit
+  transaction has nothing to spend.
+
+Scope to close it: mint-on-settle in the cosigner, storage plus backup in the client, an
+exit-broadcast flow in the app, and a regtest E2E that kills the cosigner permanently and drains
+a wallet to on-chain with the ASP also stopped.
+
 ## References
 
 - [FROST: Flexible Round-Optimized Schnorr Threshold Signatures](https://eprint.iacr.org/2020/852)
@@ -180,7 +296,9 @@ make stress-test                  # multi-user E2E stress test
 
 ## License
 
-[MIT](LICENSE). Part of the Bitspend Payment ecosystem.
+[MIT](LICENSE) — use it, fork it, run your own cosigner. Nothing here is licensed in a way that
+lets us strand you: the client, the cosigner runtime, the threshold library, and the deployment
+stack are all in this repository.
 
 Third-party code keeps its own licensing and is not covered by the above:
 `third_party/rust-sdk` is a submodule ([arkade-os/rust-sdk](https://github.com/arkade-os/rust-sdk),
