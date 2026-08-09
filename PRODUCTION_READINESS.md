@@ -2,7 +2,7 @@
 
 ## Context
 
-The MPC Wallet has working cryptography (FROST 2-of-3, Ark integration, MutinyNet support) but significant gaps in security, reliability, and operations. This document captures every finding from a deep codebase audit, prioritized by severity.
+The MPC Wallet has working cryptography (FROST 2-of-2, Ark integration, MutinyNet support) but significant gaps in security, reliability, and operations. This document captures every finding from a deep codebase audit, prioritized by severity.
 
 ---
 

@@ -40,10 +40,10 @@ The idea behind this wallet is straightforward: **what if a cosigner could
 handle the Batch Swap on the user's behalf while they're offline?**
 
 I'm building a **FROST (Flexible Round-Optimized Schnorr Threshold
-Signatures)** based wallet with a 2-of-3 threshold split between the user's
-device, a **cosigner running as a WASM component inside a secure enclave**,
-and a recovery key. Any two of the three shares can produce a valid BIP-340
-Schnorr signature — but no single party can sign alone.
+Signatures)** based wallet with a 2-of-2 threshold split between the user's
+device and a **cosigner running inside a secure enclave**. Both shares are
+required to produce a valid BIP-340 Schnorr signature — neither party can sign
+alone.
 
 When a VTXO approaches expiry, the cosigner — which is always online — would:
 
@@ -58,33 +58,47 @@ The user's funds roll forward. No app open. No interaction. No swept VTXOs.
 ## Why This Isn't Custodial
 
 This is the thing I keep coming back to — the cosigner **cannot unilaterally
-move funds**. It holds one share of a 2-of-3 threshold key. Spending requires
-any two of the three shares. The security model breaks down like this:
+move funds**. It holds one share of a 2-of-2 threshold key. Spending requires
+both shares. The security model breaks down like this:
 
 | Scenario | Outcome |
 |---|---|
 | User online, cosigner online | Normal collaborative signing — payments, batch swaps |
 | User offline, cosigner online | Cosigner refreshes VTXOs autonomously — funds safe |
-| User online, cosigner offline | User performs unilateral exit via CSV timelock |
-| Both offline | Unilateral exit remains available until VTXO expiry |
+| User online, cosigner **temporarily** offline | On-chain layer keeps working (wallet-alone, offline mode); Ark operations wait |
+| Cosigner **permanently** gone | ⚠️ Ark balances are stranded today — see below |
 
-The cosigner is sandboxed in **per-user WASM isolation** (Wasmtime). Each
-user gets their own memory-isolated instance — no shared state, no cross-user
-leakage.
+**The honest caveat.** Ark's unilateral exit does not currently rescue this
+wallet. The stock VTXO taptree keys *both* the cooperative leaf and the exit
+leaf to the same owner — here the 2-of-2 group key — so the CSV timelock
+governs *when* you may exit, not *who* may exit. With the cosigner gone the
+phone holds one of two required shares and cannot sign either path. The
+on-chain single-key layer is unaffected and remains fully self-custodial.
+
+The fix is a third taptree leaf spendable by a recovery key the phone already
+holds, after a long delay. It is designed, not yet implemented, and the
+mechanism plus its costs are written up in
+[README.md → Emergency exit](README.md#emergency-exit). We would rather state
+this plainly than let a reviewer discover it.
+
+The cosigner runs as a **native per-user actor** — each user gets a dedicated
+task owning its own keys and state, with serial command processing and no
+shared mutable state. (WASM/Wasmtime is retained only for sandboxing contract
+components, not for the cosigner itself.)
 
 ## Where Things Stand
 
 The cryptographic foundation is working. Here's what's built so far:
 
 **Done:**
-- FROST 2-of-3 DKG (3-round key generation) and threshold signing
-- WASM cosigner component running in per-user sandboxed isolation
+- FROST 2-of-2 DKG (3-round key generation) and threshold signing
+- Native per-user actor isolation in the cosigner runtime
 - Authenticated gRPC transport with Schnorr-signed requests and replay
   protection
 - Taproot key tweaking and BIP-340 signature support
 
 **Still working on:**
-- Ark taproot primitives — BIP-341 complian t VTXO taptree construction with
+- Ark taproot primitives — BIP-341 compliant VTXO taptree construction with
   forfeit leaf + CSV exit leaf
 - Forfeit and exit spend info derivation (scripts + control blocks)
 - P2TR script pubkey derivation using NUMS internal key
@@ -114,7 +128,7 @@ The cryptographic foundation is working. Here's what's built so far:
 │              Server (Secure Enclave)                  │
 │                                                       │
 │  ┌────────────────────────────────────────────────┐  │
-│  │         WASM Sandbox (per-user instance)        │  │
+│  │      Native actor (per-user instance)           │  │
 │  │                                                  │  │
 │  │  ┌──────────────────────────────────────────┐   │  │
 │  │  │  Cosigner (FROST Key Share)               │   │  │
