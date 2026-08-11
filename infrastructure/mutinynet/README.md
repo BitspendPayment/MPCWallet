@@ -25,8 +25,8 @@ stack instead of this one, not unpicking toggles inside one shared tree.
 |---|---|
 | VPC + public subnet + IGW | `10.20.0.0/16`, single AZ |
 | Security group | inbound 80 (ACME + redirect) and 443 only; runtime's 7074 stays on loopback |
-| EC2 instance | `t3.medium` Amazon Linux 2023, no SSH — shell is SSM Session Manager |
-| EBS data volume | 20 GiB gp3, encrypted, `prevent_destroy` |
+| EC2 instance | `t3.small` (2 GiB) Amazon Linux 2023, 8 GiB root, no SSH — shell is SSM Session Manager |
+| EBS data volume | 4 GiB gp3, encrypted, `prevent_destroy` |
 | Elastic IP + Route53 A record | `mutiny.vtxos.network` |
 | S3 assets bucket | holds the deployed runtime binary |
 | SSM parameters | `/mutinynet/cosigner/env/*` — the runtime's environment |
@@ -41,15 +41,69 @@ Everything that must survive an instance replacement lives on the data volume:
 Caddy's storage is there deliberately. Let's Encrypt rate-limits duplicate
 certificates to 5/week, which a handful of instance replacements would exhaust.
 
+### Sizing
+
+Roughly $16/month. All three are variables, so none of this needs a code change:
+
+- **`t3.small` (2 GiB).** What runs here is a Rust binary — no VM, no JVM — whose KV is SQLite on
+  disk rather than in memory, whose idle actors evict via `ACTOR_IDLE_THRESHOLD_SECS`, and which
+  never compiles: the release binary is built on your machine and pushed via S3 + SSM. This is
+  reasoned from the workload, not measured under load, so if memory ever bites, go back up with
+  `tofu apply -var instance_type=t3.medium` — an apply, not a migration.
+- **4 GiB data volume.** It holds `state.db` and Caddy's certs, nothing else.
+- **8 GiB root, and don't go lower.** EBS refuses a root volume smaller than the AMI's snapshot and
+  AL2023 ships an 8 GiB one, so 4 fails the apply with `InvalidBlockDeviceMapping`. Nothing
+  persistent lives on root anyway.
+
 ## Prerequisites
 
-- OpenTofu ≥ 1.6, AWS credentials for account `639920118099`
+- OpenTofu ≥ 1.6, and the **`mpc-deployer`** AWS profile — account `639920118099`,
+  which owns the `vtxos.network` Route53 zone. It is pinned via `aws_profile` in
+  `deployment.auto.tfvars`, so no `AWS_PROFILE=` prefix is needed; the provider's
+  `allowed_account_ids` fails the plan if the resolved account is wrong.
 - `aws` CLI on PATH (the in-place redeploy shells out to `aws ssm send-command`)
 - A release build of the runtime:
 
 ```bash
 cd cosigner-runtime && cargo build --release
 ```
+
+## Configuration
+
+Two files, split by whether the value is a secret. Both are `*.auto.tfvars`, so
+tofu loads them automatically — there is no `-var-file` to remember.
+
+| file | holds | in git |
+|---|---|---|
+| `tofu/deployment.auto.tfvars` | hostname, sizing, ASP/Esplora URLs, WebAuthn RP, `env_overrides` | **yes** — this is the readable description of the deployment |
+| `tofu/secrets.auto.tfvars.json` | `secret_env` → SSM `SecureString` | **no** — gitignored |
+
+[`deployment.auto.tfvars`](tofu/deployment.auto.tfvars) is the host-mode
+counterpart to `../mutiny/enclave.yaml`: one file stating the whole deployment,
+including values that merely match a variable default, so nothing has to be
+reconstructed from defaults scattered across `main.tf`. It also supplies
+`account`, the only variable without a default — without it tofu prompts on
+every apply.
+
+Runtime environment reaches the instance in three layers, last winning:
+
+```
+local.base_env (modules/host/main.tf)   typed vars — ASP_URL, ESPLORA_URL, WEBAUTH_*, SQLITE_PATH, PORT
+  + var.env_overrides                   deployment.auto.tfvars     → SSM String
+  + var.secret_env                      secrets.auto.tfvars.json   → SSM SecureString
+```
+
+Keys in `env_overrides` need no declaration anywhere: the runtime overlays every
+parameter under its SSM prefix onto its process env at boot. Adding one is an
+SSM write and a restart, never a rebuild.
+
+**Don't rename the secrets file.** Auto-loading is name-dependent — a file called
+`secrets.tfvars.json` is silently ignored, with no error. `secret_env` then falls
+back to its `{}` default, the `for_each` on `aws_ssm_parameter.secret_env` goes
+empty, and an apply would plan to *delete* the SecureStrings. `prevent_destroy`
+is set on that resource so this fails the plan instead of quietly bricking every
+passkey wallet — but the file still has to be present and correctly named for an
+apply to succeed at all.
 
 ## Secrets
 
@@ -182,9 +236,14 @@ sudo sqlite3 /mnt/data/cosigner/state.db "SELECT tree, count(*) FROM kv GROUP BY
 
 ## Teardown
 
-`tofu destroy` will **fail** on the data volume — `prevent_destroy` is set,
-because destroying it makes every wallet on this deployment permanently
-unspendable (2-of-2 needs both halves, and the server's half is only there).
+`tofu destroy` will **fail** on two resources, both with `prevent_destroy` set:
+
+- **the data volume** — destroying it makes every wallet on this deployment
+  permanently unspendable (2-of-2 needs both halves, and the server's half is
+  only there);
+- **the SecureString parameters** — see the guard described under
+  [Configuration](#configuration). Losing `WEBAUTH_TOKEN_SECRET` is recoverable,
+  but it takes every passkey-gated wallet offline until it is restored.
 
 To tear down deliberately:
 
@@ -194,7 +253,8 @@ aws ec2 create-snapshot --region us-east-1 \
   --volume-id "$(tofu output -raw data_volume_id)" \
   --description "mutinynet cosigner state before teardown"
 
-# 2. Remove the lifecycle block from modules/host/main.tf, then:
+# 2. Remove BOTH lifecycle blocks from modules/host/main.tf
+#    (aws_ebs_volume.data and aws_ssm_parameter.secret_env), then:
 tofu destroy
 ```
 

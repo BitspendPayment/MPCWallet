@@ -95,7 +95,10 @@ if [[ ! -x /usr/local/bin/caddy ]]; then
   rm -f "/tmp/$${TARBALL}" /tmp/caddy
 fi
 
-# Bind 80/443 without running as root.
+# Bind 80/443 without running as root. Belt and braces with the unit's
+# AmbientCapabilities: NoNewPrivileges=true makes the kernel IGNORE file
+# capabilities, so this setcap alone leaves Caddy crash-looping on
+# "bind: permission denied". The ambient capability is what actually works.
 setcap cap_net_bind_service=+ep /usr/local/bin/caddy
 
 # NOTE: this host does NOT serve /.well-known/assetlinks.json. The WebAuthn RP
@@ -131,6 +134,14 @@ ExecStart=/usr/local/bin/caddy run --config /etc/Caddyfile --adapter caddyfile
 ExecReload=/usr/local/bin/caddy reload --config /etc/Caddyfile --adapter caddyfile --force
 Restart=on-failure
 RestartSec=5s
+
+# Required to bind 80/443 as the unprivileged `caddy` user. File capabilities
+# (the setcap above) are ignored under NoNewPrivileges=true; ambient caps are
+# set by systemd before execve and survive it, so they are what grants the
+# privilege. Without this Caddy crash-loops on "bind: permission denied".
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
@@ -197,7 +208,7 @@ User=cosigner
 Group=cosigner
 EnvironmentFile=/etc/cosigner/env
 ExecStart=/usr/local/bin/cosigner-runtime --port $${APP_PORT}
-Restart=alwayswhat the hell is all this assert link codebase, I think we already have vtxos.com that  delivers the needed asertlink for regtest, or you reckon now that that we are using vtxos.netwrok, It has to come from vtxos.network ?
+Restart=always
 RestartSec=5s
 NoNewPrivileges=true
 PrivateTmp=true

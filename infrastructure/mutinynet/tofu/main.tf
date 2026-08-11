@@ -23,7 +23,15 @@ terraform {
 }
 
 provider "aws" {
-  region = var.region
+  region  = var.region
+  profile = var.aws_profile != "" ? var.aws_profile : null
+
+  # Belt and braces with aws_profile above. The default profile on a dev machine
+  # is easily a different account, and nothing else here would notice: the stack
+  # would be created there while the instance's IAM statements stay scoped to
+  # var.account, so the role gets denied ssm:GetParametersByPath and the service
+  # boots with an empty /etc/cosigner/env. Fail at plan time instead.
+  allowed_account_ids = [var.account]
 
   default_tags {
     tags = {
@@ -38,13 +46,15 @@ provider "aws" {
 module "host" {
   source = "./modules/host"
 
-  region     = var.region
-  account    = var.account
-  deployment = var.deployment
-  app_name   = var.app_name
+  region      = var.region
+  account     = var.account
+  aws_profile = var.aws_profile
+  deployment  = var.deployment
+  app_name    = var.app_name
 
   instance_type    = var.instance_type
   data_volume_size = var.data_volume_size
+  root_volume_size = var.root_volume_size
 
   fqdn            = var.fqdn
   acme_email      = var.acme_email
@@ -82,6 +92,22 @@ variable "account" {
   type        = string
 }
 
+variable "aws_profile" {
+  description = <<-EOT
+    Named AWS profile to deploy with. Must resolve to `account` — the provider's
+    allowed_account_ids check enforces it.
+
+    Set because the default profile on the dev machine is a different account.
+    Also passed to the module, so the in-place redeploy's `aws ssm send-command`
+    (a local-exec, which does not inherit provider credentials) targets the same
+    account as everything else.
+
+    Empty means fall back to ambient credentials — AWS_PROFILE, instance role, CI.
+  EOT
+  type        = string
+  default     = "mpc-deployer"
+}
+
 variable "deployment" {
   description = "Deployment prefix; first segment of the SSM namespace."
   type        = string
@@ -97,13 +123,19 @@ variable "app_name" {
 variable "instance_type" {
   description = "EC2 instance type."
   type        = string
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "data_volume_size" {
-  description = "Persistent data volume size, in GiB."
+  description = "Persistent data volume size, in GiB. Holds only state.db and Caddy's ACME certs."
   type        = number
-  default     = 20
+  default     = 4
+}
+
+variable "root_volume_size" {
+  description = "Root volume size, in GiB. 8 is the floor: EBS refuses a root smaller than the AL2023 AMI snapshot."
+  type        = number
+  default     = 8
 }
 
 variable "fqdn" {

@@ -275,7 +275,15 @@ resource "aws_s3_object" "runtime" {
 
   # Re-uploads whenever the local build changes; also the trigger for the
   # in-place redeploy below.
-  etag = filemd5(var.binary_path)
+  #
+  # source_hash, NOT etag. The binary is ~49 MB, so the provider uploads it in
+  # parts and S3 returns "<hash-of-part-hashes>-<part-count>", which is not the
+  # file's MD5. With `etag = filemd5(...)` terraform plans the MD5, gets the
+  # multipart form back, and aborts with "Provider produced inconsistent final
+  # plan" — identically on every retry, since the mismatch is recomputed each
+  # time. source_hash triggers the same re-upload without being checked against
+  # what S3 returns.
+  source_hash = filemd5(var.binary_path)
 }
 
 # =============================================================================
@@ -318,6 +326,26 @@ resource "aws_ssm_parameter" "secret_env" {
   value = replace(replace(var.secret_env[each.value], "\r", ""), "\n", "")
 
   tier = length(var.secret_env[each.value]) > 4096 ? "Advanced" : "Standard"
+
+  # Guard against a silent delete. `secret_env` defaults to {}, so an apply run
+  # without secrets.auto.tfvars.json — renamed, or a second operator once state
+  # is shared — makes this for_each empty and plans a DESTROY. That deletes
+  # WEBAUTH_TOKEN_SECRET, and the next boot rewrites /etc/cosigner/env without
+  # it (cosigner-env.sh replaces the file wholesale), leaving the runtime on
+  # "Session-token auth DISABLED" — which rejects every passkey-gated wallet,
+  # since those authenticate by session token with an empty Schnorr signature.
+  #
+  # Nothing else here fails that way: the String parameters are driven by
+  # base_env, which is code and cannot go missing. Only the secrets can
+  # evaporate, and only from a routine `tofu apply` — the same command the
+  # README gives for shipping a new binary, where a stray "1 to destroy" is
+  # easy to scroll past.
+  #
+  # So fail the plan loudly instead. To remove a key deliberately (dropping
+  # FCM, say), delete this block first — same convention as the data volume.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # =============================================================================
@@ -366,7 +394,7 @@ resource "aws_instance" "host" {
   iam_instance_profile   = aws_iam_instance_profile.instance.name
 
   root_block_device {
-    volume_size           = 20
+    volume_size           = var.root_volume_size
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = true
@@ -428,13 +456,25 @@ resource "aws_route53_record" "app" {
 # restart the unit.
 resource "terraform_data" "redeploy" {
   triggers_replace = {
-    binary_etag = aws_s3_object.runtime.etag
+    # Same reason as source_hash above: the object's etag is the multipart form
+    # for a binary this size, so key the redeploy off the local file's hash.
+    binary_hash = aws_s3_object.runtime.source_hash
     instance_id = aws_instance.host.id
   }
 
   depends_on = [aws_volume_attachment.data]
 
   provisioner "local-exec" {
+    # A local-exec does not inherit the provider's credentials — it gets the
+    # ambient environment. Without this the send-command would run under the
+    # default profile, in an account where this instance ID does not exist.
+    environment = var.aws_profile != "" ? { AWS_PROFILE = var.aws_profile } : {}
+
+    # local-exec defaults to ["/bin/sh", "-c"], and /bin/sh is dash on Debian
+    # and Ubuntu — which has no `pipefail`, so the script below aborts with
+    # "Illegal option -o pipefail" before it runs anything.
+    interpreter = ["/bin/bash", "-c"]
+
     command = <<-EOT
       set -euo pipefail
       aws ssm send-command \

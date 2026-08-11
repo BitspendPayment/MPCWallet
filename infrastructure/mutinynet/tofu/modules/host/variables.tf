@@ -8,6 +8,12 @@ variable "account" {
   type        = string
 }
 
+variable "aws_profile" {
+  description = "Named AWS profile for the in-place redeploy's `aws ssm send-command`. That runs as a local-exec, which does NOT inherit the provider's credentials, so without this it would use the ambient default profile — a different account, where the instance ID does not exist. Empty means use ambient credentials."
+  type        = string
+  default     = ""
+}
+
 variable "deployment" {
   description = "Deployment prefix (e.g. \"mutinynet\"). First path segment of the SSM parameter namespace."
   type        = string
@@ -21,7 +27,11 @@ variable "app_name" {
 variable "instance_type" {
   description = "EC2 instance type. No enclave here, so this only needs to fit the runtime's per-user actors."
   type        = string
-  default     = "t3.medium"
+  # 2 GiB is sized for what actually runs here: a Rust binary (no VM/JVM) whose KV is SQLite ON
+  # DISK, whose idle actors evict via ACTOR_IDLE_THRESHOLD_SECS, and which never compiles — the
+  # release binary is built elsewhere and pushed via S3 + SSM. Raise it back to t3.medium if
+  # memory ever bites; it is a variable precisely so that costs an apply, not a migration.
+  default = "t3.small"
 }
 
 variable "fqdn" {
@@ -82,9 +92,18 @@ variable "data_mount" {
 }
 
 variable "data_volume_size" {
-  description = "Size of the persistent data volume, in GiB."
+  description = "Size of the persistent data volume, in GiB. Holds only state.db and Caddy's ACME certs."
   type        = number
-  default     = 20
+  default     = 4
+}
+
+variable "root_volume_size" {
+  description = "Size of the root volume, in GiB. 8 is the floor — see below."
+  type        = number
+  # Do NOT lower this. EBS refuses a root volume smaller than the AMI's snapshot, and AL2023
+  # ships an 8 GiB one, so 4 fails the apply with InvalidBlockDeviceMapping. Nothing persistent
+  # lives here anyway — state.db and the certs are on the data volume.
+  default = 8
 }
 
 variable "webauthn_rp_name" {
