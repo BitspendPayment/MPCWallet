@@ -41,6 +41,23 @@ use bitcoin::{
 #[cfg(feature = "client")]
 use crate::client::asp_client::AspClient;
 use crate::client::proto;
+
+/// Whether `event`'s batch actually contains our intent.
+///
+/// A public ASP batches many clients together, and `BatchStarted` is broadcast
+/// regardless of whose intents made it into that batch. Confirming
+/// unconditionally makes us join a batch we were never registered in, and the
+/// ASP then aborts it with "not enough intent confirmations received" — its
+/// real participants never confirmed. On a single-tenant regtest ASP every
+/// batch is ours, which is why this only ever fails against a shared server.
+///
+/// The hash is `sha256(intent_id)` lowercase-hex, matching arkd and the
+/// reference client in `third_party/rust-sdk/ark-client/src/batch.rs`.
+pub fn batch_includes_intent(event: &proto::BatchStartedEvent, intent_id: &str) -> bool {
+    let hash = sha256::Hash::hash(intent_id.as_bytes());
+    let hash_hex: String = hash.as_byte_array().iter().map(|b| format!("{b:02x}")).collect();
+    event.intent_id_hashes.iter().any(|h| h == &hash_hex)
+}
 #[cfg(feature = "client")]
 use crate::client::proto::get_event_stream_response::Event;
 
@@ -745,6 +762,18 @@ impl SettleSession {
         asp: &mut AspClient,
         event: proto::BatchStartedEvent,
     ) -> Result<(), String> {
+        let intent_id = self
+            .intent_id
+            .as_ref()
+            .ok_or("no intent_id to confirm")?
+            .clone();
+
+        // Not our batch: leave batch_id/expiry untouched and keep waiting. Adopting a
+        // foreign batch id here is what later mis-routes tree signing.
+        if !batch_includes_intent(&event, &intent_id) {
+            return Ok(());
+        }
+
         self.batch_id = Some(event.id.clone());
 
         if event.batch_expiry > 0 {
@@ -753,13 +782,6 @@ impl SettleSession {
                     .map_err(|e| format!("parse batch_expiry: {e}"))?,
             );
         }
-
-        // Confirm our registration.
-        let intent_id = self
-            .intent_id
-            .as_ref()
-            .ok_or("no intent_id to confirm")?
-            .clone();
 
         asp.confirm_registration(intent_id)
             .await
@@ -2018,6 +2040,10 @@ impl DelegateSettleSession {
             match event {
                 Event::BatchStarted(e) => {
                     eprintln!("delegate: BatchStarted id={}", e.id);
+                    // Only join batches our intent is actually in — see batch_includes_intent.
+                    if !batch_includes_intent(&e, &intent_id) {
+                        continue;
+                    }
                     self.batch_id = Some(e.id.clone());
                     if e.batch_expiry > 0 {
                         self.batch_expiry = Some(
@@ -2358,4 +2384,52 @@ fn hex_decode_32(hex: &str) -> Result<[u8; 32], String> {
             .map_err(|e| format!("hex decode error at byte {i}: {e}"))?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod batch_intent_tests {
+    use super::*;
+
+    fn event(hashes: &[&str]) -> proto::BatchStartedEvent {
+        proto::BatchStartedEvent {
+            id: "batch-1".to_string(),
+            intent_id_hashes: hashes.iter().map(|s| s.to_string()).collect(),
+            batch_expiry: 0,
+        }
+    }
+
+    /// Pinned against `sha256sum`, so a change in hashing shows up here rather
+    /// than as an aborted batch on a live ASP.
+    const TEST_INTENT: &str = "test-intent";
+    const TEST_INTENT_HASH: &str =
+        "c65c50e6ddaf679c703ebc2705b82498136a5e9e5fcc2ebd50376b1935689768";
+
+    #[test]
+    fn matches_sha256_hex_of_the_intent_id() {
+        assert!(batch_includes_intent(&event(&[TEST_INTENT_HASH]), TEST_INTENT));
+    }
+
+    #[test]
+    fn finds_our_intent_among_other_participants() {
+        let e = event(&["00".repeat(32).as_str(), TEST_INTENT_HASH, "ff".repeat(32).as_str()]);
+        assert!(batch_includes_intent(&e, TEST_INTENT));
+    }
+
+    #[test]
+    fn rejects_a_batch_we_are_not_in() {
+        // The case that aborted boarding on mutinynet: a batch of other people's
+        // intents, which we used to confirm into unconditionally.
+        assert!(!batch_includes_intent(&event(&["00".repeat(32).as_str()]), TEST_INTENT));
+    }
+
+    #[test]
+    fn rejects_an_empty_batch() {
+        assert!(!batch_includes_intent(&event(&[]), TEST_INTENT));
+    }
+
+    #[test]
+    fn does_not_match_the_raw_intent_id() {
+        // arkd sends hashes, never the ids themselves.
+        assert!(!batch_includes_intent(&event(&[TEST_INTENT]), TEST_INTENT));
+    }
 }

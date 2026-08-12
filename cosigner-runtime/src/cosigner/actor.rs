@@ -976,6 +976,12 @@ impl CosignerActor {
             let Some(event) = resp.event else { continue };
             match event {
                 Event::BatchStarted(e) => {
+                    // A public ASP broadcasts BatchStarted for batches we are not in.
+                    // Confirming into one of those aborts it for its real participants
+                    // ("not enough intent confirmations received") and never settles ours.
+                    if !ark::client::batch::batch_includes_intent(&e, &intent_id) {
+                        continue;
+                    }
                     if let Err(e) = self
                         .delegate_session_mut()
                         .ok_or_else(|| "no delegate session".to_string())
@@ -1109,6 +1115,11 @@ impl CosignerActor {
             let inflight = self.boarding_settle.as_mut().unwrap();
             match event {
                 Event::BatchStarted(e) => {
+                    // Same filter as the delegate path: only join a batch that lists our
+                    // intent, or the ASP aborts it and boarding never settles.
+                    if !ark::client::batch::batch_includes_intent(&e, &intent_id) {
+                        continue;
+                    }
                     if let Err(e) = inflight.session.on_batch_started(e) {
                         return Err(e);
                     }
