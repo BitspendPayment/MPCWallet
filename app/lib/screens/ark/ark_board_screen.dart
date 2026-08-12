@@ -108,6 +108,8 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
     final mpcService = context.watch<MpcService>();
     final balance = mpcService.boardingBalance;
     final hasFunds = balance > 0;
+    final pending = mpcService.boardingPendingBalance;
+    final hasPending = pending > 0;
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -181,16 +183,32 @@ class _ArkBoardScreenState extends State<ArkBoardScreen> {
                             Text(
                               hasFunds
                                   ? 'Funds detected: ${NumberFormat("#,##0").format(balance)} sats'
-                                  : 'No funds detected yet',
+                                  : hasPending
+                                      ? 'Waiting for confirmation'
+                                      : 'No funds detected yet',
                               style: GoogleFonts.inter(
                                 color: hasFunds
                                     ? Colors.greenAccent
-                                    : Colors.white54,
+                                    : hasPending
+                                        ? Colors.orangeAccent
+                                        : Colors.white54,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 14,
                               ),
                             ),
-                            if (!hasFunds)
+                            // A mempool deposit cannot be boarded — the ASP
+                            // rejects the intent if any input is unconfirmed —
+                            // so say so rather than showing "no funds".
+                            if (hasPending)
+                              Text(
+                                '${NumberFormat("#,##0").format(pending)} sats seen, not yet mined',
+                                style: GoogleFonts.inter(
+                                  color: Colors.orangeAccent.withValues(
+                                      alpha: 0.7),
+                                  fontSize: 11,
+                                ),
+                              ),
+                            if (!hasFunds && !hasPending)
                               Text(
                                 'Checking every 5 seconds...',
                                 style: GoogleFonts.inter(

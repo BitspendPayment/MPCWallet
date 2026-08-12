@@ -71,10 +71,16 @@ class MpcService extends ChangeNotifier {
   List<ArkTransactionSummary> _arkTransactions = [];
   List<ArkTransactionSummary> get arkTransactions => _arkTransactions;
 
+  /// Confirmed deposits — the only ones [boardFunds] can settle.
   int _boardingBalance = 0;
   int get boardingBalance => _boardingBalance;
   int _boardingUtxoCount = 0;
   int get boardingUtxoCount => _boardingUtxoCount;
+
+  /// Deposits still in the mempool. Not boardable yet, but shown so a fresh
+  /// deposit doesn't look like it never arrived.
+  int _boardingPendingBalance = 0;
+  int get boardingPendingBalance => _boardingPendingBalance;
   bool _arkAvailable = false;
   bool get arkAvailable => _arkAvailable;
 
@@ -765,6 +771,12 @@ class MpcService extends ChangeNotifier {
       final utxos = await _wallet!.scanBoarding(boardingAddress);
       _boardingBalance = utxos.fold<int>(0, (s, u) => s + u.amountSats.toInt());
       _boardingUtxoCount = utxos.length;
+      // Tracked separately because only confirmed deposits are boardable — the
+      // ASP rejects the intent outright if any input is still in the mempool.
+      // Without this a fresh deposit reads as "nothing arrived".
+      final pending = await _wallet!.scanBoardingPending(boardingAddress);
+      _boardingPendingBalance =
+          pending.fold<int>(0, (s, u) => s + u.amountSats.toInt());
     } catch (e) {
       debugPrint("Refresh boarding balance failed: $e");
     }

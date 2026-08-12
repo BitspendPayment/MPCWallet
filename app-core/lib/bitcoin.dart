@@ -63,6 +63,46 @@ BitcoinNetwork parseBitcoinNetwork(String network) {
 
 bool isRegtestNetwork(String network) => network == 'regtest';
 
+/// An Electrum server to scan and broadcast against.
+class ElectrumEndpoint {
+  final String host;
+  final int port;
+
+  const ElectrumEndpoint(this.host, this.port);
+}
+
+/// The Electrum server for [network].
+///
+/// [MpcBitcoinWallet] keeps its OWN chain view — boarding scans, broadcast and
+/// history all go through Electrum, and the cosigner has no Bitcoin-node
+/// dependency. So the chain source has to follow the network the cosigner
+/// reports, not the build: a fixed loopback default silently finds zero UTXOs
+/// against a remote deployment, and boarding then looks like it did nothing at
+/// all — no error, just an empty wallet.
+///
+/// Unknown networks throw rather than falling back, on the same reasoning as
+/// [parseBitcoinNetwork]: scanning the wrong chain is worse than not starting.
+/// `mainnet` is deliberately absent — nothing serves it yet, and it needs a
+/// chosen server rather than an inherited default.
+ElectrumEndpoint defaultElectrumEndpoint(String network) {
+  switch (network) {
+    case 'regtest':
+      // Alongside the cosigner on the workstation. A physical phone reaches it
+      // over `adb reverse`, the emulator via its 10.0.2.2 host alias.
+      return const ElectrumEndpoint('127.0.0.1', 50001);
+    case 'signet':
+    case 'mutinynet':
+      // 50001 is plaintext; 50002 is the TLS port, which ElectrumClient cannot
+      // speak yet (it uses a raw Socket). That leaks the boarding address and
+      // UTXO set to the network path — acceptable for signet, not for real coins.
+      return const ElectrumEndpoint('electrum.mutinynet.com', 50001);
+    default:
+      throw ArgumentError(
+          'defaultElectrumEndpoint: no Electrum server configured for network '
+          '"$network" — pass electrumHost/electrumPort explicitly');
+  }
+}
+
 class UnsignedTransaction {
   final BtcTransaction btcTransaction;
   final List<List<int>> sighashes;
@@ -140,13 +180,19 @@ class MpcBitcoinWallet {
       {this.networkName = 'regtest',
       String? storageId,
       bool useIdentity2 = false,
-      String electrumHost = '127.0.0.1',
-      int electrumPort = 50001})
+      String? electrumHost,
+      int? electrumPort})
       : store = WalletStore(
           boxName: storageId ?? 'mpc_wallet_state_default',
           network: parseBitcoinNetwork(networkName),
         ),
-        electrum = ElectrumClient(electrumHost, electrumPort);
+        // Defaults derive from the network rather than being fixed at regtest
+        // loopback, so choosing a server also chooses its chain source. Explicit
+        // values still win. See [defaultElectrumEndpoint].
+        electrum = ElectrumClient(
+          electrumHost ?? defaultElectrumEndpoint(networkName).host,
+          electrumPort ?? defaultElectrumEndpoint(networkName).port,
+        );
 
   Future<void> init() async {
     await store.init();
@@ -485,10 +531,30 @@ class MpcBitcoinWallet {
   /// Scans the boarding address on-chain and returns the deposits to settle.
   /// The wallet is the only component with a chain view, so it polls + supplies
   /// these to the cosigner's `settle()`.
+  ///
+  /// **Confirmed deposits only.** The ASP validates every boarding input and
+  /// rejects the whole intent if one is still in the mempool:
+  /// `INVALID_PSBT_INPUT (5): failed to validate boarding input: tx <id> not
+  /// confirmed`. Because one unconfirmed deposit fails the entire settle, an
+  /// unfiltered scan makes boarding impossible until every deposit confirms.
+  /// Use [scanBoardingPending] to show what is still waiting.
   Future<List<BoardingUtxo>> scanBoarding(String boardingAddress) async {
+    return _scanBoarding(boardingAddress, confirmed: true);
+  }
+
+  /// Deposits seen on-chain but not yet confirmed, so the UI can say "waiting
+  /// for a confirmation" instead of showing nothing at all.
+  Future<List<BoardingUtxo>> scanBoardingPending(String boardingAddress) async {
+    return _scanBoarding(boardingAddress, confirmed: false);
+  }
+
+  Future<List<BoardingUtxo>> _scanBoarding(String boardingAddress,
+      {required bool confirmed}) async {
     final addr = _parseP2trDestination(boardingAddress);
     final utxos = await electrum.listUnspent(addr);
+    // Electrum reports height 0 for a mempool output; anything greater is mined.
     return utxos
+        .where((u) => confirmed ? u.height > 0 : u.height <= 0)
         .map((u) => BoardingUtxo()
           ..txid = u.txHash
           ..vout = u.vout
