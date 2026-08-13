@@ -27,7 +27,7 @@
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
 	e2e-test e2e-ark-test regtest regtest-ark regtest-down \
-	integration-test integration-test-ci integration-test-ci-ark \
+	cli cli-build \
 	release release-apk release-apk-fat release-testers-add release-testers-remove
 
 # ── Variables ─────────────────────────────────────────────────────────────────
@@ -354,48 +354,28 @@ e2e-mutinynet-ark: ffi-build runtime-build
 	cd e2e && dart test test/mutinynet_ark_e2e_test.dart --timeout 900s
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FLUTTER INTEGRATION TESTS — UI on Android emulator against real backend
+#  CLI — regtest REPL wallet
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Run integration tests against an emulator that's already running, with
-# services already started elsewhere (e.g. `make up` in a separate
-# terminal). Default for local dev.
-integration-test:
-	cd app && \
-		flutter test integration_test/app_test.dart
+# Interactive wallet REPL for driving a running stack by hand: onboard, fund,
+# board, send, contacts and payment requests. Point it at whatever cosigner is
+# up — `make regtest-ark` locally, or a deployment.
+#
+# REGTEST ONLY. The keystore (~/.merlin-cli/wallets.json) holds PLAINTEXT
+# signing secrets.
+#
+#   make cli                      # against the local runtime on :7074
+#   make cli URL=https://mutiny.vtxos.network
+CLI_URL ?= http://127.0.0.1:7074
+URL     ?= $(CLI_URL)
 
-# Full headless lifecycle (no Ark): boots regtest, builds FFI for x86_64
-# emulator, starts runtime, runs tests, tears down.
-integration-test-ci: runtime-stop regtest-up bitcoin-init adb-reverse \
-	ffi-android-x86_64 runtime-build runtime-run
-	@echo "Running integration tests..."
-	-adb reverse tcp:18443 tcp:18443
-	cd app && flutter pub get && \
-		flutter test integration_test/app_test.dart
-	$(MAKE) runtime-stop
+cli:
+	@echo "merlin CLI → $(URL)  (regtest only: keystore secrets are plaintext)"
+	cd cli && COSIGNER_URL=$(URL) cargo run --release
 
-# Integration tests with the Ark stack running. The Ark test is gated on ASP
-# availability so it skips itself if arkd isn't reachable; running through
-# this target makes sure it isn't.
-integration-test-ci-ark: runtime-stop arkd-up bitcoin-init arkd-init \
-	bob-up ffi-android-x86_64 runtime-build
-	@echo "Running Ark integration test..."
-	-adb reverse tcp:7074 tcp:7074
-	-adb reverse tcp:50001 tcp:50001
-	-adb reverse tcp:18443 tcp:18443
-	-adb reverse tcp:7090 tcp:7090
-	export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
-		ASP_URL=http://127.0.0.1:7070 && \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--port 7074 &
-	@sleep 5
-	cd app && flutter pub get && \
-		flutter test integration_test/app_test.dart
-	$(MAKE) runtime-stop
-	$(MAKE) arkd-down
-	$(MAKE) bob-down
-
+# Compile without running — what CI would check.
+cli-build:
+	cd cli && cargo build --release
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LEGACY ALIASES (old names still work)
