@@ -38,6 +38,10 @@ class AuthMessage {
   // which is sent by the REQUESTER to the PAYER's actor and identifies the requester by its
   // GROUP key (authenticated with that wallet's session token, since a group key cannot be
   // Schnorr-signed).
+  /// Attaching a passkey to this wallet. Signed with the wallet's own key — the
+  /// cosigner will not accept a session token here, since a token is what a
+  /// passkey mints.
+  static const String opPasskeyRegister = 'PASSKEY_REGISTER';
   static const String opContactAdd = 'CONTACT_ADD';
   static const String opContactRemove = 'CONTACT_REMOVE';
   static const String opContactList = 'CONTACT_LIST';

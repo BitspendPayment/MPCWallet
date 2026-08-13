@@ -486,7 +486,7 @@ void main() {
     final boardingUtxos = await pollBoardingUtxos(boardingAddress, 1);
     expect(boardingUtxos, isNotEmpty);
     try {
-      final commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
+      final commitmentTxid = await settleBoarding(alice, boardingUtxos);
       settling = false;
       miningTimer.cancel();
       print('   Settled! commitment_txid=$commitmentTxid');
@@ -879,7 +879,7 @@ void main() {
     expect(boardingUtxos, isNotEmpty);
     String commitmentTxid;
     try {
-      commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
+      commitmentTxid = await settleBoarding(alice, boardingUtxos);
     } finally {
       settling = false;
       miningTimer.cancel();
@@ -945,7 +945,7 @@ void main() {
       } catch (_) {}
     });
     try {
-      final commitment = await alice.settle(boardingUtxos: boardingUtxos);
+      final commitment = await settleBoarding(alice, boardingUtxos);
       expect(commitment, isNotEmpty);
       print('   Settled commitment=$commitment');
     } finally {
@@ -1055,7 +1055,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
+    final commitment = await settleBoarding(alice, boardingUtxos);
     expect(commitment, isNotEmpty);
     stillMining = false;
     miningTimer.cancel();
@@ -1228,7 +1228,7 @@ void main() {
       } catch (_) {}
     });
 
-    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
+    final commitment = await settleBoarding(alice, boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('4. Alice sends to Bob (triggers receive on Bob → push fires)');
@@ -1396,7 +1396,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
+    final commitment = await settleBoarding(alice, boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('3. Wait for expires_at backfill');
@@ -1532,7 +1532,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    final commitment = await alice.settle(boardingUtxos: boardingUtxos);
+    final commitment = await settleBoarding(alice, boardingUtxos);
     expect(commitment, isNotEmpty);
 
     print('3. Wait for expires_at backfill, then store delegate intent');
@@ -1671,7 +1671,7 @@ void main() {
         expect(utxos, isNotEmpty,
             reason: '$label boarding UTXO should index within 30s');
         mineNow = true; // settle needs the ASP scheduler forming batches
-        final commitment = await c.settle(boardingUtxos: utxos);
+        final commitment = await settleBoarding(c, utxos);
         mineNow = false;
         expect(commitment, isNotEmpty,
             reason: '$label settle should return a commitment txid');
@@ -1914,7 +1914,7 @@ void main() {
         await btc.generateToAddress(1, await btc.getNewAddress());
       } catch (_) {}
     });
-    await alice.settle(boardingUtxos: boardingUtxos);
+    await settleBoarding(alice, boardingUtxos);
     mining = false;
     miner.cancel();
 
@@ -1998,5 +1998,178 @@ void main() {
     print('   Change VTXO retained: balance=${afterHeal.totalBalance}');
 
     print('Stale spent-VTXO self-heal complete!');
+  }, timeout: Timeout(Duration(minutes: 10)));
+
+  // A send must spend a VTXO set whose members carry DIFFERENT exit delays.
+  //
+  // The exit delay is part of a VTXO's taproot tree and therefore of its
+  // scriptPubKey, and a wallet legitimately holds a mix: a boarding-settled VTXO
+  // and a received one are recorded with different delays. `build_send` used to
+  // take `vtxos.first().exit_delay` and reuse that one input's spend script,
+  // control block and scriptPubKey for EVERY input, so the non-first input got a
+  // wrong prevout and the ASP rejected the send.
+  //
+  // The send path always spends the whole VTXO set (registry.rs hands the actor
+  // every entry), so simply holding two differently-delayed VTXOs and sending is
+  // enough to exercise it.
+  test('Ark: send spends a mixed-exit-delay VTXO set (boarded + received)',
+      () async {
+    print('1. Alice + Bob DKG');
+    final alice = createClient(storageId: 'mixed_delay_alice');
+    final bob = createClient(storageId: 'mixed_delay_bob');
+    await alice.doDkg();
+    await bob.doDkg();
+
+    // Keep batches flowing for the whole test (ARKD_SCHEDULER_TYPE=block).
+    bool mining = true;
+    final miner = Timer.periodic(Duration(seconds: 3), (t) async {
+      if (!mining) {
+        t.cancel();
+        return;
+      }
+      try {
+        await btc.generateToAddress(1, await btc.getNewAddress());
+      } catch (_) {}
+    });
+
+    try {
+      print('2. Alice boards — first VTXO');
+      final aliceBoarding = await alice.getBoardingAddress();
+      await btc.sendToAddress(aliceBoarding, 0.002);
+      await btc.generateToAddress(1, await btc.getNewAddress());
+      final aliceUtxos = await pollBoardingUtxos(aliceBoarding, 200000);
+      expect(aliceUtxos, isNotEmpty, reason: 'Alice boarding deposit not seen');
+      await settleBoarding(alice, aliceUtxos);
+
+      print('3. Bob boards, then pays Alice — second VTXO, different delay');
+      final bobBoarding = await bob.getBoardingAddress();
+      await btc.sendToAddress(bobBoarding, 0.003);
+      await btc.generateToAddress(1, await btc.getNewAddress());
+      final bobUtxos = await pollBoardingUtxos(bobBoarding, 300000);
+      expect(bobUtxos, isNotEmpty, reason: 'Bob boarding deposit not seen');
+      await settleBoarding(bob, bobUtxos);
+
+      final aliceArkAddr = await alice.getArkAddress();
+      final bobWallet = MpcArkWallet(bob);
+      final bobPay = await bobWallet.createTransaction(
+        destination: aliceArkAddr,
+        amountSats: 150000,
+      );
+      await bobWallet.submit(await bobWallet.signTransaction(bobPay));
+
+      print('4. Wait for Alice to hold both VTXOs');
+      var aliceVtxos = (await alice.listVtxos()).vtxos;
+      for (int i = 0; i < 30 && aliceVtxos.length < 2; i++) {
+        await Future.delayed(Duration(seconds: 2));
+        aliceVtxos = (await alice.listVtxos()).vtxos;
+      }
+      expect(aliceVtxos.length, greaterThanOrEqualTo(2),
+          reason: 'Alice needs a boarded AND a received VTXO for this test');
+
+      final delays = aliceVtxos.map((v) => v.exitDelay).toSet();
+      for (final v in aliceVtxos) {
+        print('   vtxo ${v.txid.substring(0, 12)}.. '
+            'amount=${v.amount} exit_delay=${v.exitDelay}');
+      }
+      // The whole point: if arkd were configured with equal delays the send
+      // below would pass even with the bug present, so assert the mix is real.
+      expect(delays.length, greaterThan(1),
+          reason: 'VTXO set must carry DIFFERENT exit delays, otherwise this '
+              'test cannot detect the shared-spend-info bug '
+              '(check ARKD_UNILATERAL_EXIT_DELAY vs ARKD_BOARDING_EXIT_DELAY)');
+      print('   Mixed delays confirmed: $delays');
+
+      print('5. Alice sends — spends BOTH inputs');
+      final bobArkAddr = await bob.getArkAddress();
+      final aliceWallet = MpcArkWallet(alice);
+      final unsigned = await aliceWallet.createTransaction(
+        destination: bobArkAddr,
+        amountSats: 120000,
+      );
+      final txid =
+          await aliceWallet.submit(await aliceWallet.signTransaction(unsigned));
+      expect(txid, isNotEmpty,
+          reason: 'a send across mixed exit delays must be accepted by the ASP '
+              '— a shared spend script yields a wrong prevout and is rejected');
+      print('   Sent across mixed delays: $txid');
+
+      print('6. Bob received it');
+      int bobBalance = 0;
+      for (int i = 0; i < 30; i++) {
+        final r = await bob.listVtxos();
+        bobBalance = r.totalBalance.toInt();
+        if (bobBalance >= 120000) break;
+        await Future.delayed(Duration(seconds: 2));
+      }
+      expect(bobBalance, greaterThanOrEqualTo(120000),
+          reason: 'Bob should have received the mixed-input send');
+      print('   Bob balance: $bobBalance');
+
+      // ---- Reverse ordering: hold a VTXO first, THEN board, then send. ----
+      //
+      // The old code took `vtxos.first().exit_delay`, so which VTXO happens to
+      // sit first decides which input gets the wrong spend script. Round 1 above
+      // had the boarded VTXO first (change/received second); here the send's
+      // change VTXO (unilateral delay) is already present and the boarded one
+      // arrives after it — the opposite order. Proving both makes the fix
+      // order-independent rather than accidentally right for one arrangement.
+      print('7. Alice boards AGAIN, on top of her existing change VTXO');
+      final changeVtxos = (await alice.listVtxos()).vtxos;
+      expect(changeVtxos, isNotEmpty,
+          reason: 'Alice should hold change from the send in step 5');
+      print('   Existing (change) vtxo exit_delay='
+          '${changeVtxos.first.exitDelay} amount=${changeVtxos.first.amount}');
+
+      final aliceBoarding2 = await alice.getBoardingAddress();
+      await btc.sendToAddress(aliceBoarding2, 0.002);
+      await btc.generateToAddress(1, await btc.getNewAddress());
+      final aliceUtxos2 = await pollBoardingUtxos(aliceBoarding2, 200000);
+      expect(aliceUtxos2, isNotEmpty,
+          reason: 'second Alice boarding deposit not seen');
+      await settleBoarding(alice, aliceUtxos2);
+
+      var mixed2 = (await alice.listVtxos()).vtxos;
+      for (int i = 0; i < 30 && mixed2.length < 2; i++) {
+        await Future.delayed(Duration(seconds: 2));
+        mixed2 = (await alice.listVtxos()).vtxos;
+      }
+      for (final v in mixed2) {
+        print('   vtxo ${v.txid.substring(0, 12)}.. '
+            'amount=${v.amount} exit_delay=${v.exitDelay}');
+      }
+      final delays2 = mixed2.map((v) => v.exitDelay).toSet();
+      expect(delays2.length, greaterThan(1),
+          reason: 'reverse-order set must ALSO carry different exit delays');
+      print('   Mixed delays confirmed (reverse order): $delays2');
+
+      print('8. Alice sends again — first input is now the OTHER delay');
+      final aliceWallet2 = MpcArkWallet(alice);
+      final unsigned2 = await aliceWallet2.createTransaction(
+        destination: bobArkAddr,
+        amountSats: 100000,
+      );
+      final txid2 = await aliceWallet2
+          .submit(await aliceWallet2.signTransaction(unsigned2));
+      expect(txid2, isNotEmpty,
+          reason: 'a mixed-delay send must succeed regardless of which delay '
+              'the first input carries');
+      print('   Sent across mixed delays (reverse order): $txid2');
+
+      final wantBob = bobBalance + 100000;
+      int bobBalance2 = 0;
+      for (int i = 0; i < 30; i++) {
+        bobBalance2 = (await bob.listVtxos()).totalBalance.toInt();
+        if (bobBalance2 >= wantBob) break;
+        await Future.delayed(Duration(seconds: 2));
+      }
+      expect(bobBalance2, greaterThanOrEqualTo(wantBob),
+          reason: 'Bob should have received the reverse-order mixed send too');
+      print('   Bob balance after both mixed sends: $bobBalance2');
+    } finally {
+      mining = false;
+      miner.cancel();
+    }
+
+    print('Mixed exit-delay send complete!');
   }, timeout: Timeout(Duration(minutes: 10)));
 }

@@ -22,6 +22,10 @@ pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
 pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
 pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
 pub const OP_EVENTS_SUBSCRIBE: &str = "EVENTS_SUBSCRIBE";
+/// Attaching a passkey to a wallet. Signed with the wallet's own signing key —
+/// NOT satisfiable by a session token, which would be circular (a token is what
+/// a passkey mints) and would let a stolen token add an attacker's authenticator.
+pub const OP_PASSKEY_REGISTER: &str = "PASSKEY_REGISTER";
 // Request-to-pay. All are signed by the wallet that owns the actor EXCEPT `OP_PAYREQ_CREATE`,
 // which is signed by the REQUESTER and routed to the PAYER's actor — the payer's contact
 // allowlist is what authorizes it.

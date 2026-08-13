@@ -10,6 +10,7 @@ import 'package:protocol/protocol.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/bitcoin.dart';
 import 'package:app_core/client.dart';
+import 'package:app_core/rest_wallet_api.dart' show WalletAuthException;
 import 'package:app_core/services_registry.dart';
 import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:app_core/enclave/manifest.dart' as manifest;
@@ -400,7 +401,14 @@ class MpcService extends ChangeNotifier {
       seed = await auth.seedSource(userId).deriveSeed();
     } on StateError catch (e) {
       if (!e.toString().contains('/assert/begin')) rethrow;
-      await auth.register(userId);
+      // Signed with the wallet key while the share is still un-gated — the
+      // cosigner will not attach an authenticator without that proof.
+      final sig = client.signForPasskeyRegister();
+      await auth.register(
+        userId,
+        signatureHex: hex.encode(sig.signature),
+        timestampMs: sig.timestampMs.toInt(),
+      );
       seed = await _deriveSeedAfterRegister(auth, userId);
     }
     await client.gateShare(seed);
@@ -597,17 +605,28 @@ class MpcService extends ChangeNotifier {
   /// delegate flow fired.
   bool get hasActiveDelegate => _serverHasActiveDelegate;
 
+  /// Whether the last [refreshVtxos] failure was our credentials being refused
+  /// rather than the ASP being unreachable. The poll loop must not treat the
+  /// former as an outage.
+  bool _lastVtxoFailureWasAuth = false;
+
   /// Refresh VTXO balance/state. Returns true if the ASP call succeeded — the
   /// poll loop uses this to detect an ASP outage and flip into offline mode.
   Future<bool> refreshVtxos() async {
     if (_client == null) return false;
     bool ok = false;
+    _lastVtxoFailureWasAuth = false;
     try {
       final resp = await _client!.listVtxos();
       _vtxos = resp.vtxos;
       _arkBalance = BigInt.from(resp.totalBalance.toInt());
       _serverHasActiveDelegate = resp.hasActiveDelegate;
       ok = true;
+    } on WalletAuthException catch (e) {
+      // Our credentials, not the ASP. Recorded so the poll loop does not read a
+      // routine re-auth as an outage and evict the user from Ark.
+      _lastVtxoFailureWasAuth = true;
+      debugPrint("Refresh VTXOs unauthorized (not an outage): $e");
     } catch (e) {
       debugPrint("Refresh VTXOs failed: $e");
     }
@@ -722,7 +741,11 @@ class MpcService extends ChangeNotifier {
       try {
         if (_arkAvailable) {
           final ok = await refreshVtxos();
-          if (!ok && !await _probeArk()) {
+          // An auth failure is not an outage. _probeArk() is itself an
+          // authenticated call, so it fails for the same reason and used to
+          // "confirm" a phantom outage — dropping the user out of Ark on a
+          // routine token expiry or a dismissed biometric prompt.
+          if (!ok && !_lastVtxoFailureWasAuth && !await _probeArk()) {
             // ASP went down — enter offline mode.
             _arkAvailable = false;
             _arkWallet = null;
@@ -787,12 +810,25 @@ class MpcService extends ChangeNotifier {
     if (_client == null || _wallet == null) {
       throw StateError("Client not initialized");
     }
-    // Scan the boarding deposit on-chain and hand it to the cosigner's settle.
+    // Scan the boarding deposits on-chain and hand them to the cosigner's settle.
+    //
+    // ONE PER SETTLE. The cosigner's boarding session builds an intent proof for a
+    // single outpoint, so passing several used to board only the first and silently
+    // strand the rest — while the UI reported the full scanned total as boarded.
+    // Looping keeps "Boarding Complete" honest; the cosigner now rejects a batch
+    // of more than one outright rather than truncating.
     final boardingAddress = await _client!.getBoardingAddress();
     final utxos = await _wallet!.scanBoarding(boardingAddress);
-    final txid = await _client!.settle(boardingUtxos: utxos);
+    if (utxos.isEmpty) {
+      throw StateError('No confirmed boarding deposits to settle.');
+    }
+    String? txid;
+    for (final utxo in utxos) {
+      txid = await _client!.settle(boardingUtxos: [utxo]);
+    }
     await refreshVtxos();
-    return txid;
+    await refreshBoardingBalance();
+    return txid!;
   }
 
   Future<String> sendArk(String recipientArkAddress, int amountSats) async {

@@ -17,6 +17,8 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:hive/hive.dart';
+import 'package:app_core/passkey/session_token_source.dart'
+    show StaticSessionToken;
 import 'package:path_provider/path_provider.dart';
 
 import '../firebase_options.dart';
@@ -265,6 +267,30 @@ Future<void> _runBackgroundDelegate({Duration? timeout}) async {
       debugPrint('[push:bg] restoreState returned false (no wallet)');
       return;
     }
+
+    // Carry the persisted session token. Without it every request here went out
+    // with an empty Schnorr signature and no Bearer header, so a passkey-gated
+    // wallet got a flat 401 — and the failure was swallowed as "foreground will
+    // catch up", which made this whole path look like it worked.
+    final token = identityBox.get('passkeySessionToken') as String?;
+    if (token != null) {
+      client.setSessionTokenSource(StaticSessionToken(token));
+    }
+
+    // A gated share cannot be reconstructed without the passkey PRF, and a PRF
+    // evaluation needs a user gesture — impossible in a background isolate. So
+    // this path is genuinely foreground-only for passkey wallets; say so plainly
+    // instead of failing deep inside FROST signing with a confusing StateError.
+    if (client.isShareGated) {
+      debugPrint('[push:bg] share is passkey-gated — re-delegate needs the '
+          'foreground (PRF requires a user gesture); skipping');
+      return;
+    }
+    if (token == null) {
+      debugPrint('[push:bg] no persisted session token; '
+          'falling back to Schnorr auth');
+    }
+
     final future = client.settleDelegate(storeOnly: true);
     await (timeout != null ? future.timeout(timeout) : future);
     debugPrint('[push:bg] settleDelegate(storeOnly:true) ok');

@@ -51,22 +51,30 @@ pub fn intent_to_proto(i: &PaymentIntent, now: i64) -> crate::wallet_proto::Paym
 
 impl CosignerActor {
     /// The parties this wallet has authorized to bill it.
-    /// Auth (`OP_CONTACT_LIST`) ran at the REST boundary.
+    ///
+    /// Auth (`OP_CONTACT_LIST`) ran at the REST boundary, which only proves the
+    /// caller holds the key it named — `require_owner` is what ties that key to
+    /// THIS wallet, otherwise any keypair could read anyone's allowlist.
     pub async fn contact_list(
         &mut self,
-        _req: ContactListRequest,
+        req: ContactListRequest,
     ) -> Result<ContactListResponse, Status> {
+        self.require_owner(&req.user_id)?;
         Ok(ContactListResponse {
             contacts: self.contacts().iter().map(contact_to_proto).collect(),
         })
     }
 
     /// The payer's request inbox, newest first.
-    /// Auth (`OP_PAYREQ_LIST`) ran at the REST boundary.
+    ///
+    /// Auth (`OP_PAYREQ_LIST`) ran at the REST boundary; `require_owner` binds the
+    /// authenticated key to this wallet so a stranger cannot read the inbox
+    /// (amounts, memos, counterparties) of any wallet they can name.
     pub async fn payment_request_list(
         &mut self,
-        _req: PaymentRequestListRequest,
+        req: PaymentRequestListRequest,
     ) -> Result<PaymentRequestListResponse, Status> {
+        self.require_owner(&req.user_id)?;
         let now = now_secs();
         // Prune here too: otherwise it only runs when a NEW request arrives, so a payer who just
         // reads their inbox keeps seeing long-lapsed ones. Re-seal only if something changed.

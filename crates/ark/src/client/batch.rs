@@ -53,6 +53,36 @@ use crate::client::proto;
 ///
 /// The hash is `sha256(intent_id)` lowercase-hex, matching arkd and the
 /// reference client in `third_party/rust-sdk/ark-client/src/batch.rs`.
+/// The batch id of a batch-scoped `event` that `is_ours` rejects, or `None` when
+/// the event is ours or carries no batch id at all.
+///
+/// Central so every settle loop gates on the same set. `BatchStarted` is
+/// deliberately excluded — it is filtered by intent hash instead
+/// (see [`batch_includes_intent`]), and it is what establishes the batch id
+/// everything else is matched against. Heartbeat/StreamStarted are not
+/// batch-scoped.
+pub fn foreign_batch_id<F>(event: &Event, is_ours: F) -> Option<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let id = match event {
+        Event::BatchStarted(_) | Event::Heartbeat(_) | Event::StreamStarted(_) => return None,
+        Event::TreeSigningStarted(e) => &e.id,
+        Event::TreeNoncesAggregated(e) => &e.id,
+        Event::TreeTx(e) => &e.id,
+        Event::TreeNonces(e) => &e.id,
+        Event::TreeSignature(e) => &e.id,
+        Event::BatchFinalization(e) => &e.id,
+        Event::BatchFinalized(e) => &e.id,
+        Event::BatchFailed(e) => &e.id,
+    };
+    if is_ours(id) {
+        None
+    } else {
+        Some(id.clone())
+    }
+}
+
 pub fn batch_includes_intent(event: &proto::BatchStartedEvent, intent_id: &str) -> bool {
     let hash = sha256::Hash::hash(intent_id.as_bytes());
     let hash_hex: String = hash.as_byte_array().iter().map(|b| format!("{b:02x}")).collect();
@@ -625,6 +655,12 @@ impl SettleSession {
             None => return Ok(SettleAction::WaitingForBatch),
         };
 
+        // Batch-scoped events from a batch we did not join are not ours to act on.
+        if let Some(other) = foreign_batch_id(&event, |id| self.is_our_batch(id)) {
+            eprintln!("event: ignoring event for foreign batch id={other}");
+            return Ok(SettleAction::WaitingForBatch);
+        }
+
         match event {
             Event::BatchStarted(e) => {
                 eprintln!("event: BatchStarted id={}", e.id);
@@ -757,6 +793,21 @@ impl SettleSession {
 
 impl SettleSession {
     #[cfg(feature = "client")]
+    /// Whether `id` names the batch this session actually joined.
+    ///
+    /// Every batch-scoped event is broadcast for every batch on a public ASP, so
+    /// each one has to be matched against the batch we confirmed into. Filtering
+    /// `BatchStarted` alone is not enough: an unrelated batch's `BatchFailed`
+    /// would abort a settle still waiting for its own, and its `BatchFinalized`
+    /// would be recorded as our settlement.
+    ///
+    /// A `None` batch_id means we have not joined anything yet, so nothing is
+    /// ours — same as the reference client, which ignores every batch event
+    /// until its `Step` leaves `Start`.
+    fn is_our_batch(&self, id: &str) -> bool {
+        self.batch_id.as_deref() == Some(id)
+    }
+
     async fn handle_batch_started(
         &mut self,
         asp: &mut AspClient,
@@ -1549,6 +1600,13 @@ impl DelegateSettleSession {
 // ---------------------------------------------------------------------------
 
 impl DelegateSettleSession {
+    /// The batch this session joined, or `None` before a matching `BatchStarted`.
+    /// Callers driving the event stream gate batch-scoped events on this — see
+    /// [`foreign_batch_id`].
+    pub fn joined_batch_id(&self) -> Option<&str> {
+        self.batch_id.as_deref()
+    }
+
     /// Insert FROST signatures into the intent proof and forfeit PSBTs.
     ///
     /// `signatures` must match the sighashes returned by `generate_delegate`.
@@ -2037,6 +2095,15 @@ impl DelegateSettleSession {
                 None => continue,
             };
 
+            // Same gate as SettleSession::drive — a foreign batch's Tree*/Finalized/
+            // Failed events must not drive or abort this session.
+            if let Some(other) =
+                foreign_batch_id(&event, |id| self.batch_id.as_deref() == Some(id))
+            {
+                eprintln!("delegate: ignoring event for foreign batch id={other}");
+                continue;
+            }
+
             match event {
                 Event::BatchStarted(e) => {
                     eprintln!("delegate: BatchStarted id={}", e.id);
@@ -2403,6 +2470,67 @@ mod batch_intent_tests {
     const TEST_INTENT: &str = "test-intent";
     const TEST_INTENT_HASH: &str =
         "c65c50e6ddaf679c703ebc2705b82498136a5e9e5fcc2ebd50376b1935689768";
+
+
+    fn started(id: &str) -> Event {
+        Event::BatchStarted(proto::BatchStartedEvent {
+            id: id.into(),
+            intent_id_hashes: vec![],
+            batch_expiry: 0,
+        })
+    }
+    fn failed(id: &str) -> Event {
+        Event::BatchFailed(proto::BatchFailedEvent { id: id.into(), reason: "x".into() })
+    }
+    fn finalized(id: &str) -> Event {
+        Event::BatchFinalized(proto::BatchFinalizedEvent {
+            id: id.into(),
+            commitment_txid: "deadbeef".into(),
+        })
+    }
+    fn tree_tx(id: &str) -> Event {
+        Event::TreeTx(proto::TreeTxEvent {
+            id: id.into(),
+            topic: vec![],
+            batch_index: 0,
+            txid: String::new(),
+            tx: String::new(),
+            children: Default::default(),
+        })
+    }
+
+    /// The bug this guards: a stranger's batch failing used to abort our settle,
+    /// and a stranger's batch finalizing used to be recorded as our settlement.
+    #[test]
+    fn foreign_batch_events_are_rejected() {
+        let ours = |id: &str| id == "ours";
+        assert_eq!(foreign_batch_id(&failed("theirs"), ours).as_deref(), Some("theirs"));
+        assert_eq!(foreign_batch_id(&finalized("theirs"), ours).as_deref(), Some("theirs"));
+        assert_eq!(foreign_batch_id(&tree_tx("theirs"), ours).as_deref(), Some("theirs"));
+    }
+
+    #[test]
+    fn our_own_batch_events_pass_through() {
+        let ours = |id: &str| id == "ours";
+        assert!(foreign_batch_id(&failed("ours"), ours).is_none());
+        assert!(foreign_batch_id(&finalized("ours"), ours).is_none());
+        assert!(foreign_batch_id(&tree_tx("ours"), ours).is_none());
+    }
+
+    /// BatchStarted is filtered by intent hash instead, and establishes the id
+    /// everything else is matched against, so it must never be gated here.
+    #[test]
+    fn batch_started_is_never_gated() {
+        assert!(foreign_batch_id(&started("theirs"), |_| false).is_none());
+    }
+
+    /// Before joining a batch nothing is ours — matching the reference client,
+    /// which ignores every batch event until its Step leaves Start.
+    #[test]
+    fn nothing_is_ours_before_joining() {
+        let none = |_: &str| false;
+        assert_eq!(foreign_batch_id(&finalized("any"), none).as_deref(), Some("any"));
+    }
 
     #[test]
     fn matches_sha256_hex_of_the_intent_id() {

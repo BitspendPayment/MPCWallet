@@ -53,9 +53,27 @@ pub async fn frost_sign(
         .await
         .context("sign/step1")?;
 
-    // Sign what the cosigner says the ceremony is over: a pairing actor may OVERRIDE the message
-    // with a sighash it rebuilt, and step2 aggregates over that one.
-    let message = hex_field(&resp1, "message_to_sign")?;
+    // Sign the sighash WE built, never the one the cosigner echoes back.
+    //
+    // Taking the server's value made this client sign anything the cosigner asked
+    // for: answer step1 with the sighash of a sweep to the cosigner's own address
+    // and the 2-of-2 completes, spending the wallet with no user action beyond an
+    // unrelated send. The Dart client has always built the package from its own
+    // local message (client.dart) — this now matches.
+    //
+    // A pairing/contract actor legitimately rebuilds the message, so it would trip
+    // this check; those flows are out of scope here and must re-derive the sighash
+    // locally rather than trust an echo.
+    let echoed = hex_field(&resp1, "message_to_sign")?;
+    if echoed != sighash {
+        return Err(anyhow!(
+            "cosigner echoed a different sighash than we asked it to sign \
+             (ours {}, theirs {}) — refusing to sign",
+            hex::encode(sighash),
+            hex::encode(&echoed),
+        ));
+    }
+    let message = sighash.to_vec();
 
     let commitments = parse_commitments(&resp1)?;
     let pkg = SigningPackage::new(commitments, message);
@@ -85,6 +103,26 @@ pub async fn frost_sign(
     let mut sig = Vec::with_capacity(64);
     sig.extend_from_slice(&r_point[1..]); // x-only: drop the parity prefix
     sig.extend_from_slice(&z_scalar);
+
+    // Verify before handing it back, as the Dart client does. Our share alone
+    // proves nothing about what the cosigner aggregated, so this is the only
+    // local evidence that the finished signature is over OUR sighash and
+    // validates under the wallet's group key.
+    let group_pk = hex::decode(&wallet.group_key).context("group_key is not hex")?;
+    let pk33: &[u8; 33] = group_pk
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("group_key must be a 33-byte compressed point"))?;
+    let sig64: &[u8; 64] = sig
+        .as_slice()
+        .try_into()
+        .map_err(|_| anyhow!("aggregate signature must be 64 bytes"))?;
+    if !threshold::auth::verify_schnorr_signature(pk33, sighash, sig64) {
+        return Err(anyhow!(
+            "aggregated signature does not verify against the wallet group key \
+             over our sighash — discarding"
+        ));
+    }
     Ok(sig)
 }
 

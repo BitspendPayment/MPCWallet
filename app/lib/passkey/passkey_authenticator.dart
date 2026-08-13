@@ -138,8 +138,20 @@ class PasskeyAuthenticator {
   /// Register a new passkey for [userIdHex]. Enables the PRF extension so the
   /// credential can later produce the blinding seed. Idempotent from the app's
   /// side: safe to call again to (re)provision.
-  Future<void> register(String userIdHex) async {
-    final begin = await _post('/api/passkey/register/begin', {'user_id': userIdHex});
+  /// [signatureHex]/[timestampMs] prove ownership of the wallet. The cosigner
+  /// rejects an unsigned register/begin — otherwise anyone knowing a (public)
+  /// group key could attach their own authenticator and mint a session token
+  /// for that wallet.
+  Future<void> register(
+    String userIdHex, {
+    required String signatureHex,
+    required int timestampMs,
+  }) async {
+    final begin = await _post('/api/passkey/register/begin', {
+      'user_id': userIdHex,
+      'signature': signatureHex,
+      'timestamp_ms': timestampMs,
+    });
     final ceremonyId = begin['ceremony_id'];
     final options = _optionsJsonFor(begin['options'] as Map<String, dynamic>);
 

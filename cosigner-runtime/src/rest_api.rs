@@ -1297,6 +1297,37 @@ async fn passkey_register_begin(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let server = reg.shared().webauthn.clone().ok_or_else(webauthn_disabled)?;
     let user_id = str_field(&body, "user_id");
+
+    // Prove ownership of the wallet before attaching an authenticator to it.
+    //
+    // Without this the route was an account takeover: user_id came straight from
+    // the body, group keys are public (they are the URL path segment and are
+    // handed out for contacts), and register_begin APPENDS to a user that already
+    // has a credential — excludeCredentials is only a client-side hint. Anyone
+    // could register their own authenticator against someone else's wallet and
+    // then mint a session token whose `sub` is that wallet, which verify_auth
+    // accepts as full authentication for every operation.
+    //
+    // A Schnorr signature over the wallet's own signing key is the only proof
+    // that works here: a session token is what a passkey MINTS, so accepting one
+    // would be circular and would let a leaked token add a second authenticator.
+    let user_id_bytes = hex::decode(&user_id)
+        .map_err(|_| webauthn_bad_request("user_id must be hex".into()))?;
+    let signature = hex::decode(str_field(&body, "signature"))
+        .map_err(|_| webauthn_bad_request("signature must be hex".into()))?;
+    let timestamp_ms = body
+        .get("timestamp_ms")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_default();
+    crate::cosigner::handlers::helpers::verify_auth(
+        &user_id_bytes,
+        &signature,
+        timestamp_ms,
+        crate::auth::message::OP_PASSKEY_REGISTER,
+        None,
+    )
+    .map_err(|e| (StatusCode::UNAUTHORIZED, Json(json!({ "error": e.message() }))))?;
+
     let (ceremony_id, options) = server
         .register_begin(&user_id)
         .map_err(webauthn_bad_request)?;

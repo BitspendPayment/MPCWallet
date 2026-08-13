@@ -665,6 +665,23 @@ class MpcClient {
         Uint8List(0), Int64(DateTime.now().millisecondsSinceEpoch));
   }
 
+  /// Auth signature authorizing a passkey to be attached to this wallet.
+  ///
+  /// Deliberately NOT routed through [_authSig]: that falls back to an empty
+  /// signature once the share is gated, and the cosigner rejects an empty one
+  /// here — a session token is what a passkey mints, so accepting one would be
+  /// circular. Call this while the share is still un-gated (during
+  /// `enablePasskey`, before `gateShare`).
+  AuthSignature signForPasskeyRegister() {
+    final h = _authHelper;
+    if (h == null) {
+      throw StateError(
+          'passkey registration must be signed with the wallet key, but the '
+          'share is already gated — re-run before gateShare()');
+    }
+    return h.signForPasskeyRegister();
+  }
+
   /// The wallet's key package carrying the REAL share for a single op. Gated: reconstruct
   /// `P_full = δ + b(seed)` from `_seedSource` (throws if no seed is wired — an ARK sign needs the
   /// PIN/passkey). Un-gated: the stored key package already holds the real share. The reconstructed

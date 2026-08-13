@@ -919,6 +919,10 @@ async fn route_contact_add(
         let _ = reply.send(Err(e));
         return;
     }
+    if let Err(e) = actor.as_ref().unwrap().require_owner(&req.user_id) {
+        let _ = reply.send(Err(e));
+        return;
+    }
     let group_key = state.lock().cosigner_id.clone();
     // Normalise to the contact's GROUP key so the allowlist compares canonically, whichever of a
     // wallet's ids the caller used.
@@ -954,6 +958,10 @@ async fn route_contact_remove(
     actor_policy_installed: &mut bool,
 ) {
     if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    if let Err(e) = actor.as_ref().unwrap().require_owner(&req.user_id) {
         let _ = reply.send(Err(e));
         return;
     }
@@ -1104,6 +1112,10 @@ async fn route_payment_request_decline(
     actor_policy_installed: &mut bool,
 ) {
     if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
+        let _ = reply.send(Err(e));
+        return;
+    }
+    if let Err(e) = actor.as_ref().unwrap().require_owner(&req.user_id) {
         let _ = reply.send(Err(e));
         return;
     }
@@ -1473,6 +1485,17 @@ async fn route_settle_boarding(
     }
     let group_key = state.lock().cosigner_id.clone();
 
+    // One outpoint per settle: `boarding_settle_step1` builds the intent proof for a
+    // single boarding output. Silently taking `.first()` of a longer list boarded one
+    // deposit and stranded the rest while the caller was told the whole batch settled,
+    // so refuse instead — the client settles them one at a time.
+    if req.boarding_utxos.len() > 1 {
+        let _ = reply.send(Err(Status::invalid_argument(format!(
+            "settle accepts one boarding UTXO at a time, got {} — settle them individually",
+            req.boarding_utxos.len()
+        ))));
+        return;
+    }
     let boarding_utxo = req
         .boarding_utxos
         .first()

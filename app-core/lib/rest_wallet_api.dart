@@ -33,6 +33,22 @@ Uint8List _unhex(String? s) {
 typedef PostFn = Future<Map<String, dynamic>> Function(
     String path, Map<String, dynamic> body);
 
+/// The cosigner refused our credentials (401/403).
+///
+/// Deliberately distinct from a transport or ASP failure: an expired session
+/// token, a dismissed biometric prompt and a dead ASP all used to surface as the
+/// same bare `Exception`, so the poll loop read a routine re-auth as an outage
+/// and dropped the user out of Ark entirely.
+class WalletAuthException implements Exception {
+  final String message;
+  final int statusCode;
+
+  WalletAuthException(this.message, this.statusCode);
+
+  @override
+  String toString() => 'WalletAuthException($statusCode): $message';
+}
+
 class RestWalletApi implements WalletApi {
   final String baseUrl;
   final http.Client? _http;
@@ -77,8 +93,15 @@ class RestWalletApi implements WalletApi {
         return _post(path, body, retryOnTokenReject: false);
       }
       final errBody = jsonDecode(resp.body);
-      throw Exception(
-          errBody['error'] ?? 'HTTP ${resp.statusCode}: ${resp.body}');
+      final message =
+          errBody['error'] ?? 'HTTP ${resp.statusCode}: ${resp.body}';
+      // Typed so callers can tell "our credentials were refused" from "the
+      // server or the ASP is down". Conflating them made a single expired
+      // session token look like an ASP outage and evict the user from Ark.
+      if (resp.statusCode == 401 || resp.statusCode == 403) {
+        throw WalletAuthException(message.toString(), resp.statusCode);
+      }
+      throw Exception(message);
     }
     return jsonDecode(resp.body) as Map<String, dynamic>;
   }

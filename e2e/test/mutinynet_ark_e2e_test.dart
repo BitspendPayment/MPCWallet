@@ -196,7 +196,7 @@ void main() {
     final boardingUtxos = await pollBoardingUtxos(
         await alice.getBoardingAddress(), 1,
         host: 'mutinynet.com', port: 50001);
-    final commitmentTxid = await alice.settle(boardingUtxos: boardingUtxos);
+    final commitmentTxid = await settleBoarding(alice, boardingUtxos);
     Log.ok('Settled! commitment_txid=$commitmentTxid');
     expect(commitmentTxid, isNotEmpty);
 

@@ -588,6 +588,26 @@ impl CosignerActor {
             || point::serialize_compressed(&pkp.verifying_key.point) == user_id
     }
 
+    /// Reject a caller that authenticated as some OTHER wallet.
+    ///
+    /// The REST boundary proves the caller holds the key it named in its own
+    /// body, but the URL selects which actor runs — so without this an attacker
+    /// signs as their own wallet A and operates on victim B. That is a real hole
+    /// for the owner-only routes: adding yourself to B's contact allowlist is
+    /// enough to bill B, since the allowlist is the only gate on
+    /// `payment-request/create`.
+    ///
+    /// `PAYREQ_CREATE` is the deliberate exception — it is signed by the
+    /// requester and routed to the payer's actor on purpose.
+    pub(crate) fn require_owner(&self, user_id: &[u8]) -> Result<(), Status> {
+        if self.is_authorized_signer(user_id) {
+            return Ok(());
+        }
+        Err(Status::permission_denied(
+            "authenticated key does not belong to this wallet",
+        ))
+    }
+
     pub fn sign_step1(&mut self, req: SignStep1) -> Result<SignStep1Out, String> {
         // Authentication (OP_SIGN_STEP1) ran at the REST boundary; AUTHORIZATION is ours. Reject
         // before touching `self.ceremony`, or a stranger's rejected call still wipes a live one.
@@ -974,6 +994,21 @@ impl CosignerActor {
                 Err(e) => return Err(format!("event stream: {e}")),
             };
             let Some(event) = resp.event else { continue };
+            // A foreign batch's Finalized/Failed/Tree* events must not drive this
+            // session: Finalized would be recorded as our settlement (wiping the
+            // VTXO set for a phantom outpoint) and Failed would abort a settle that
+            // is still waiting for its own batch.
+            let joined = self
+                .delegate_session
+                .as_ref()
+                .and_then(|s| s.joined_batch_id())
+                .map(str::to_owned);
+            if let Some(other) =
+                ark::client::batch::foreign_batch_id(&event, |id| joined.as_deref() == Some(id))
+            {
+                tracing::debug!("ignoring event for foreign batch {other}");
+                continue;
+            }
             match event {
                 Event::BatchStarted(e) => {
                     // A public ASP broadcasts BatchStarted for batches we are not in.
@@ -1113,6 +1148,15 @@ impl CosignerActor {
             };
             let Some(event) = resp.event else { continue };
             let inflight = self.boarding_settle.as_mut().unwrap();
+            // Same gate as the delegate path — a foreign batch must not finalize or
+            // abort this boarding settle.
+            let joined = inflight.session.batch_id();
+            if let Some(other) =
+                ark::client::batch::foreign_batch_id(&event, |id| !joined.is_empty() && joined == id)
+            {
+                tracing::debug!("ignoring event for foreign batch {other}");
+                continue;
+            }
             match event {
                 Event::BatchStarted(e) => {
                     // Same filter as the delegate path: only join a batch that lists our
@@ -1236,12 +1280,15 @@ impl CosignerActor {
         // Drive the held event stream to BatchFinalized so the new VTXO is settled + ASP-indexed
         // before we return — an immediate send must find it (the optimistic txid is already correct;
         // this just waits for the batch to commit).
+        // Only OUR batch finalizing means the VTXO is settled; a foreign one
+        // finishing first would otherwise end this wait early and report success.
+        let joined = inflight.session.batch_id();
         if let Some(mut stream) = inflight.stream.take() {
             loop {
                 match stream.message().await {
                     Ok(Some(resp)) => match resp.event {
-                        Some(Event::BatchFinalized(_)) => break,
-                        Some(Event::BatchFailed(e)) => {
+                        Some(Event::BatchFinalized(e)) if e.id == joined => break,
+                        Some(Event::BatchFailed(e)) if e.id == joined => {
                             return Err(format!("batch failed: {}", e.reason))
                         }
                         _ => continue,
@@ -1408,6 +1455,9 @@ pub(crate) fn build_send(
             txid: v.txid.clone(),
             vout: v.vout,
             amount_sats: v.amount_sats,
+            // Each input keeps its OWN delay; a boarding-settled VTXO and a
+            // received one genuinely differ.
+            exit_delay: v.exit_delay,
         })
         .collect();
 
@@ -1419,10 +1469,6 @@ pub(crate) fn build_send(
         ));
     }
 
-    let exit_delay = vtxos
-        .first()
-        .map(|v| v.exit_delay)
-        .unwrap_or(info.unilateral_exit_delay as u32);
     let network = ark::client::parse_network(&info.network)?;
     let change_exit_delay = info.unilateral_exit_delay as u32;
     let change_addr = if total > req.amount {
@@ -1442,7 +1488,6 @@ pub(crate) fn build_send(
         &req.recipient_ark_address,
         req.amount,
         change_addr.as_deref(),
-        exit_delay,
         info,
     )?;
     Ok((

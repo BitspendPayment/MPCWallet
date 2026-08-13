@@ -10,6 +10,10 @@
 //!
 //! Drives the registry directly, so it covers AUTHORIZATION (in the actor), not AUTHENTICATION
 //! (the Schnorr check at the REST boundary). Persistence is in-process SQLite.
+//!
+//! Owner-only routes carry the payer's own id, because that is what the REST layer produces:
+//! `signer_user_id` falls back to the URL group key when the body omits `user_id`, so an empty
+//! one never reaches an actor in production. `require_owner` rejects it.
 
 mod common;
 
@@ -39,6 +43,7 @@ async fn allowlist_gates_requests_and_survives_cold_spawn() {
     // The payer, and the party asking to be paid (who receives the money).
     let (payer_kps, payer_pkp) = common::dkg_2of2();
     let payer_group = hex::encode(payer_pkp.verifying_key.serialize());
+    let payer_id = payer_pkp.verifying_key.serialize().to_vec();
     let (_receiver_kps, receiver_pkp) = common::dkg_2of2();
     let receiver_vk = receiver_pkp.verifying_key.serialize().to_vec();
 
@@ -74,7 +79,7 @@ async fn allowlist_gates_requests_and_survives_cold_spawn() {
     registry
         .dispatch(&payer_group, |reply| CosignerCommand::ContactAdd {
             req: ContactAddRequest {
-                user_id: vec![],
+                user_id: payer_id.clone(),
                 contact_verifying_key: receiver_vk.clone(),
                 label: "Bob".to_string(),
                 signature: vec![],
@@ -92,7 +97,7 @@ async fn allowlist_gates_requests_and_survives_cold_spawn() {
     let list = registry
         .dispatch(&payer_group, |reply| CosignerCommand::ContactList {
             req: ContactListRequest {
-                user_id: vec![],
+                user_id: payer_id.clone(),
                 signature: vec![],
                 timestamp_ms: 0,
             },
@@ -108,7 +113,7 @@ async fn allowlist_gates_requests_and_survives_cold_spawn() {
     registry
         .dispatch(&payer_group, |reply| CosignerCommand::ContactRemove {
             req: ContactRemoveRequest {
-                user_id: vec![],
+                user_id: payer_id.clone(),
                 contact_verifying_key: receiver_vk.clone(),
                 signature: vec![],
                 timestamp_ms: 0,
@@ -128,6 +133,67 @@ async fn allowlist_gates_requests_and_survives_cold_spawn() {
         .await
         .expect_err("a revoked contact must not be able to create a request");
     assert_eq!(err.code(), tonic::Code::PermissionDenied);
+
+    let _ = shared.persistence.delete("sealed_state", &payer_group);
+}
+
+/// The owner-only routes must reject a caller who authenticated as a DIFFERENT wallet.
+///
+/// `verify_auth` only proves the caller holds the key it named in its own body, while the URL
+/// picks the actor — so without `require_owner` an attacker signs as their own wallet and writes
+/// to the victim's. Adding yourself to the victim's allowlist is enough to bill them, since that
+/// allowlist is the only gate on PaymentRequestCreate.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_only_routes_reject_another_wallets_key() {
+    let Some(shared) = common::try_shared().await else {
+        return;
+    };
+
+    let (payer_kps, payer_pkp) = common::dkg_2of2();
+    let payer_group = hex::encode(payer_pkp.verifying_key.serialize());
+    // The attacker holds a perfectly valid wallet — just not this one.
+    let (_att_kps, attacker_pkp) = common::dkg_2of2();
+    let attacker_id = attacker_pkp.verifying_key.serialize().to_vec();
+
+    let registry = CosignerRegistry::new(shared.clone()).unwrap();
+    common::seed_policy(
+        &registry,
+        &payer_group,
+        &payer_kps[1],
+        &payer_kps[0],
+        &payer_pkp,
+        Some(hex::encode([9u8; 32])),
+    )
+    .await;
+
+    let err = registry
+        .dispatch(&payer_group, |reply| CosignerCommand::ContactAdd {
+            req: ContactAddRequest {
+                user_id: attacker_id.clone(),
+                contact_verifying_key: attacker_id.clone(),
+                label: "self-authorized".to_string(),
+                signature: vec![],
+                timestamp_ms: 0,
+            },
+            reply,
+        })
+        .await
+        .expect_err("another wallet's key must not write this wallet's allowlist");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "got: {err:?}");
+
+    // ...and must not be able to read the inbox or the allowlist either.
+    let err = registry
+        .dispatch(&payer_group, |reply| CosignerCommand::ContactList {
+            req: ContactListRequest {
+                user_id: attacker_id.clone(),
+                signature: vec![],
+                timestamp_ms: 0,
+            },
+            reply,
+        })
+        .await
+        .expect_err("another wallet's key must not read this wallet's contacts");
+    assert_eq!(err.code(), tonic::Code::PermissionDenied, "got: {err:?}");
 
     let _ = shared.persistence.delete("sealed_state", &payer_group);
 }

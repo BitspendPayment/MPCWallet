@@ -45,3 +45,20 @@ Future<List<BoardingUtxo>> scanBoardingFor(MpcClient client,
   final addr = await client.getBoardingAddress();
   return pollBoardingUtxos(addr, minSats);
 }
+
+/// Settle every scanned deposit, ONE PER CALL, returning the last commitment
+/// txid.
+///
+/// The cosigner builds its boarding intent proof for a single outpoint and
+/// rejects a batch of more than one, so a list cannot be handed over wholesale.
+/// That matters here because these tests reuse wallet ids: a test that funds and
+/// then bails out before settling (ASP unreachable) leaves its deposit behind,
+/// and the next test on the same wallet would scan two.
+Future<String> settleBoarding(MpcClient client, List<BoardingUtxo> utxos) async {
+  if (utxos.isEmpty) throw StateError('no boarding UTXOs to settle');
+  String commitment = '';
+  for (final u in utxos) {
+    commitment = await client.settle(boardingUtxos: [u]);
+  }
+  return commitment;
+}

@@ -57,6 +57,18 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
+  /// Auth signature for attaching a passkey to this wallet. Must be produced
+  /// BEFORE the share is PRF-gated, while the raw signing key is still available.
+  AuthSignature signForPasskeyRegister() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPasskeyRegister,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
   /// Auth signature for authorizing a contact to bill this wallet.
   AuthSignature signForContactAdd() {
     final timestamp = currentTimestamp;

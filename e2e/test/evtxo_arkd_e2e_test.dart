@@ -240,7 +240,7 @@ void main() {
     });
     try {
       final boardingUtxos = await scanBoardingFor(client);
-      await client.settle(boardingUtxos: boardingUtxos);
+      await settleBoarding(client, boardingUtxos);
     } finally {
       settling = false;
       timer.cancel();
