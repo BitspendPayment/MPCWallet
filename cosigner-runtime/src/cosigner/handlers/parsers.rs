@@ -4,10 +4,20 @@
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use threshold::keys::PublicKeyPackage;
 use tonic::Status;
 
-use crate::policy::PolicyState;
-use crate::policy::engine::PolicyEngine;
+/// Tweak a public key package (BIP-341 key-path; pure public math, no secret) and return its
+/// JSON. Host-side replacement for the legacy in-WASM `pub_key_package_tweak` call — used only
+/// for address/script derivation and verification, never signing.
+pub fn pub_key_package_tweak_json(
+    pkp_json: &str,
+    merkle_root: Option<&[u8]>,
+) -> Result<String, Status> {
+    let pkp = PublicKeyPackage::from_json(pkp_json)
+        .map_err(|e| Status::internal(format!("bad public key package JSON: {e}")))?;
+    Ok(pkp.tweak(merkle_root).to_json())
+}
 
 pub fn user_id_hex(user_id: &[u8]) -> String {
     hex::encode(user_id)
@@ -49,6 +59,26 @@ pub fn extract_identifier(kp_json: &str) -> Result<String, Status> {
         .as_str()
         .map(|s| s.to_string())
         .ok_or_else(|| Status::internal("missing identifier in key package"))
+}
+
+/// The recipient's signing identifier `id_i` = the entry of a 2-entry `V′` PKP whose
+/// id is NOT the cosigner's. Used by a contract actor to insert the recipient's FROST
+/// commitment/share at its real `V′` identifier (the author's existing V identifier,
+/// or a refreshed participant's derived id) — which is generally NOT `derive(user_id)`.
+pub fn extract_recipient_identifier(
+    pkp_json: &str,
+    cosigner_id_hex: &str,
+) -> Result<String, Status> {
+    let v: serde_json::Value = serde_json::from_str(pkp_json)
+        .map_err(|e| Status::internal(format!("bad public key package JSON: {e}")))?;
+    let shares = v["verifyingShares"]
+        .as_object()
+        .ok_or_else(|| Status::internal("missing verifyingShares in PKP"))?;
+    shares
+        .keys()
+        .find(|k| k.as_str() != cosigner_id_hex)
+        .cloned()
+        .ok_or_else(|| Status::internal("no recipient identifier in V′ PKP"))
 }
 
 pub fn extract_verifying_key(pkp_json: &str) -> Result<String, Status> {
@@ -97,14 +127,10 @@ pub fn build_signing_package_json(
     Ok(pkg.to_string())
 }
 
-pub fn evaluate_policy_for_amount(policy_state: &PolicyState, spending_amount: i64) -> Option<String> {
-    PolicyEngine::evaluate_policy(policy_state, spending_amount)
-}
-
 /// Parse a JSON object of string-wrapped values into a HashMap.
 pub fn parse_json_string_map(json: &str) -> Result<HashMap<String, String>, Status> {
-    let v: serde_json::Value = serde_json::from_str(json)
-        .map_err(|e| Status::internal(format!("bad JSON: {e}")))?;
+    let v: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| Status::internal(format!("bad JSON: {e}")))?;
     let obj = v
         .as_object()
         .ok_or_else(|| Status::internal("expected JSON object"))?;

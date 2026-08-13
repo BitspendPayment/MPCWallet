@@ -18,14 +18,9 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-wasip1
 
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
-
-      - name: Install cargo-component
-        run: cargo install cargo-component
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -34,18 +29,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ffi/target
-            cosigner/target
             cosigner-runtime/target
-            e2e/signer-server/target
           key: e2e-rust-merged-ffi-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
           restore-keys: e2e-rust-merged-ffi-
 
       - name: Build all
         run: |
           cargo build --release --manifest-path ffi/Cargo.toml
-          (cd cosigner && cargo component build --release)
           cargo build --release --manifest-path cosigner-runtime/Cargo.toml
-          cargo build --release --manifest-path e2e/signer-server/Cargo.toml
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4
@@ -54,55 +45,19 @@ jobs:
           retention-days: 1
           path: |
             ffi/target/release/libmpcwallet_ffi.so
-            cosigner/target/wasm32-wasip1/release/cosigner.wasm
             cosigner-runtime/target/release/cosigner-runtime
-            e2e/signer-server/target/release/signer-server
 
-  bitcoin-e2e:
-    name: Bitcoin E2E (regtest)
-    needs: build
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: e2e-binaries
-
-      - name: Make binaries executable
-        run: |
-          chmod +x cosigner-runtime/target/release/cosigner-runtime
-          chmod +x e2e/signer-server/target/release/signer-server
-
-      - name: Setup Dart
-        uses: dart-lang/setup-dart@v1
-        with:
-          sdk: '3.11.4'
-
-      - name: Install Dart dependencies
-        run: cd e2e && dart pub get
-
-      - name: Start signer-server
-        run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
-          sleep 1
-
-      - name: Run Bitcoin E2E test
-        run: cd e2e && dart test test/full_system_test.dart --timeout 600s
-
-      - name: Cleanup
-        if: always()
-        run: |
-          pkill -f signer-server || true
-          docker compose down || true
 
   ark-e2e:
     name: Ark E2E (regtest)
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The suite alone runs ~26 min on a dev machine (14 tests, several waiting on
+    # real arkd batch rounds), and this budget also covers checkout, Dart setup,
+    # `docker compose up` + a 30s settle, chain init and arkd init — on a runner
+    # slower than a workstation. 25 was already below the suite's own runtime, so
+    # the job was being killed mid-run and reported as a failure either way.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
@@ -114,7 +69,6 @@ jobs:
       - name: Make binaries executable
         run: |
           chmod +x cosigner-runtime/target/release/cosigner-runtime
-          chmod +x e2e/signer-server/target/release/signer-server
 
       - name: Setup Dart
         uses: dart-lang/setup-dart@v1
@@ -136,16 +90,10 @@ jobs:
       - name: Initialize arkd
         run: ./scripts/arkd_init.sh --fund
 
-      - name: Start signer-server
-        run: |
-          e2e/signer-server/target/release/signer-server --port 9090 &
-          sleep 1
-
       - name: Run Ark E2E test
         run: cd e2e && dart test test/ark_e2e_test.dart --timeout 600s
 
       - name: Cleanup
         if: always()
         run: |
-          pkill -f signer-server || true
           docker compose -f docker-compose.yml -f docker-compose.ark.yml down || true

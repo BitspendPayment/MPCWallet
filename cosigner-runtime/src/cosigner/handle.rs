@@ -1,11 +1,9 @@
-//! `CosignerHandle` is the dispatcher's view of an actor: a typed mpsc sender plus
-//! a JoinHandle for graceful shutdown.
+//! `CosignerHandle` is the dispatcher's view of an actor: a typed mpsc sender.
 
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 
 use super::command::CosignerCommand;
 
@@ -37,11 +35,10 @@ impl CosignerHandle {
     }
 }
 
-/// Owned by the registry; tracked alongside the sender so we can join the task
-/// during shutdown or eviction.
+/// Owned by the registry; holds the actor's sender + last-active clock. The task stops
+/// gracefully when its channel closes (all handles dropped) — not via abort.
 pub(crate) struct OwnedHandle {
     pub handle: CosignerHandle,
-    pub join: JoinHandle<()>,
     /// Unix seconds at the last `recv()` event on the actor. Shared so the
     /// actor task updates it inline and the eviction sweep reads it
     /// lock-free. Set to `now_secs()` at spawn time.
@@ -67,16 +64,10 @@ mod tests {
         let last_active = Arc::new(AtomicI64::new(100));
         let (tx, _rx) = mpsc::channel::<CosignerCommand>(1);
         let handle = CosignerHandle::new(tx);
-        // Construct an OwnedHandle without spawning a real actor task —
-        // we just need to verify the atomic plumbing. JoinHandle for a
-        // never-completing dummy.
-        let dummy_join = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap()
-            .spawn(async {});
+        // Construct an OwnedHandle without spawning a real actor task — we just
+        // verify the atomic plumbing.
         let owned = OwnedHandle {
             handle,
-            join: dummy_join,
             last_active: last_active.clone(),
         };
 

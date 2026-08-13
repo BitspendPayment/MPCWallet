@@ -5,11 +5,13 @@ import 'dart:typed_data';
 import 'package:app_core/policy.dart';
 import 'package:app_core/auth_helper.dart';
 import 'package:app_core/ark/ark_send.dart';
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:app_core/wallet_api.dart';
 import 'package:app_core/grpc_wallet_api.dart';
 import 'package:app_core/rest_wallet_api.dart';
+import 'package:app_core/passkey/session_token_source.dart';
+import 'package:app_core/passkey/seed_source.dart';
+import 'package:app_core/pin_blinding.dart';
 import 'package:app_core/attested_wallet_api.dart';
 import 'package:app_core/enclave/native_enclave.dart' show AttestationStatus;
 import 'package:http/http.dart' as http;
@@ -18,7 +20,6 @@ import 'package:app_core/threshold/threshold.dart' as threshold;
 import 'package:app_core/threshold/frost/signing.dart' as frost;
 import 'package:app_core/threshold/frost/commitment.dart' as frost_comm;
 import 'package:protocol/protocol.dart';
-import 'package:crypto/crypto.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:hive/hive.dart';
 import 'dart:io';
@@ -26,7 +27,6 @@ import 'package:path/path.dart' as p;
 import 'package:convert/convert.dart';
 
 import 'package:app_core/persistence/wallet_store.dart';
-import 'package:app_core/hardware_signer.dart';
 
 class MpcClient {
   final WalletApi _stub;
@@ -36,10 +36,6 @@ class MpcClient {
   // User ID for this client instance (persisted or derived after DKG)
   List<int>? _userId;
   String? get userId => _userId == null ? null : hex.encode(_userId!);
-
-  // Recovey Id
-  List<int>? _recoveryId;
-  List<int>? get recoveryId => _recoveryId;
 
   /// The FROST group x-only public key (64 hex chars).
   /// This is the owner key for Ark VTXOs — NOT the same as userId.
@@ -52,41 +48,65 @@ class MpcClient {
     return compressedHex.length == 66 ? compressedHex.substring(2) : compressedHex;
   }
 
+  /// The FROST group verifying key, COMPRESSED (66 hex) — the wallet's public IDENTITY. Neither
+  /// [userId] (a share key) nor [groupXOnlyPubKey] (same key, parity stripped, for taproot).
+  String? get groupKeyHex {
+    final pkp = _normalPolicy?.publicKeyPackage;
+    if (pkp == null) return null;
+    return hex.encode(threshold.elemSerializeCompressed(pkp.verifyingKey.E));
+  }
+
+  List<int>? get groupKeyBytes {
+    final h = groupKeyHex;
+    return h == null ? null : hex.decode(h);
+  }
+
   final int _maxSigners;
   final int _minSigners;
 
+  /// REST base URL (set only for the REST transport) — used by [subscribeEvents] to open the SSE
+  /// event stream, which is a raw streamed GET outside the request-reply `WalletApi`.
+  String? _restBaseForEvents;
+
   threshold.SecretKey? _signingSecret;
+
+  /// PIN/passkey-PRF share gating. When a [SeedSource] is configured the wallet's FROST share is
+  /// stored BLINDED (δ = share − b(seed)) inside `_normalPolicy.keyPackage.secretShare`; the raw
+  /// share is never persisted and is reconstructed transiently only for an ARK sign / contract
+  /// op (see [_walletKeyPackage]). Reads + auth then need no share (auth rides the session token).
+  SeedSource? _seedSource;
+
+  /// Whether the stored share is blinded (a persistent property set at DKG time; loaded from state).
+  /// Kept separate from [_seedSource] so persist/load/sign agree even before a seed source is wired.
+  bool _shareBlinded = false;
+
+  /// Whether the persisted share is blinded — i.e. a passkey/PIN was provisioned
+  /// and a seed source must be wired before any ARK sign. Used on cold-start
+  /// restore to decide whether to re-attach the passkey seed/token sources.
+  bool get isShareGated => _shareBlinded;
+
+  /// Wire the blinding seed source (passkey PRF in production; a fixed seed in tests). Set before
+  /// DKG to create a gated wallet, and before signing to unlock ARK ops. Never wired ⇒ legacy
+  /// un-gated behavior.
+  void setSeedSource(SeedSource source) => _seedSource = source;
+
+  /// The wallet's DKG dealer secret — the polynomial constant term that
+  /// generated this wallet's share. It is a SINGLE secp256k1 key the wallet
+  /// controls alone (its public point is the DKG `walletVk`), distinct from the
+  /// threshold share. It is the wallet's on-chain ("utxo") signing key: on-chain
+  /// receive/spend/broadcast happen wallet-alone with NO cosigner. The FROST
+  /// group key stays the Ark owner key (boarding + VTXO).
+  threshold.SecretKey? _onchainSecret;
+
+  /// 32-byte on-chain secret, or null before DKG/restore.
+  Uint8List? get onchainSecretBytes => _onchainSecret == null
+      ? null
+      : Uint8List.fromList(threshold.bigIntToBytes(_onchainSecret!.scalar));
 
   // Auth helper for signing requests (initialized after DKG or restore)
   ClientAuthHelper? _authHelper;
 
   SpendingPolicy? _normalPolicy;
-  Map<String, ProtectedPolicy> _protectedPolicies;
-
-  RecoveryPolicy? _recoveryPolicy;
-
-  // Recovery-identity signer (hardware or software).
-  //
-  // Nullable: normal sends + Ark ops don't touch the recovery share, so a
-  // session that isn't mid-DKG or mid-policy-op doesn't need one attached.
-  // The MpcService layer attaches a signer only for the four operations
-  // that actually need it (DKG, restore, update policy, delete policy) and
-  // detaches immediately after, keeping the recovery share out of RAM the
-  // rest of the time.
-  HardwareSignerInterface? _hardwareSigner;
-  set hardwareSigner(HardwareSignerInterface? s) => _hardwareSigner = s;
-  HardwareSignerInterface? get hardwareSigner => _hardwareSigner;
-
-  HardwareSignerInterface _requireSigner(String op) {
-    final s = _hardwareSigner;
-    if (s == null) {
-      throw StateError(
-        '$op requires the recovery signer to be attached '
-        '(call loadRecoverySigner first)',
-      );
-    }
-    return s;
-  }
 
   /// Creates a client that manages two shares (identities).
   ///
@@ -97,22 +117,16 @@ class MpcClient {
   /// [encryptionCipher] - Optional cipher for encrypted storage.
   ///                      Use HiveAesCipher for AES-256 encryption.
   ///                      When null, data is stored unencrypted.
-  /// [hardwareSigner] - Hardware signer for recovery identity.
-  ///                    The recovery identity's secret stays on the
-  ///                    hardware signer and DKG/signing is delegated.
   /// Create an MpcClient using gRPC transport (HTTP/2).
   MpcClient(
     grpc_base.ClientChannel channel, {
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
   })  : _stub = GrpcWalletApi(channel),
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _minSigners = minSigners {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -122,21 +136,29 @@ class MpcClient {
   /// Create an MpcClient using REST transport (HTTP/1.1).
   MpcClient.rest(
     String baseUrl, {
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
     http.Client? httpClient,
   })  : _stub = RestWalletApi(baseUrl, httpClient: httpClient),
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _minSigners = minSigners {
+    _restBaseForEvents = baseUrl;
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
     );
+  }
+
+  /// Wire the upstream Bearer session-token source onto the transport
+  /// (auth-off-the-share migration). No-op for transports that can't carry HTTP
+  /// headers (attested FFI), which stay on Schnorr until that path is extended.
+  void setSessionTokenSource(SessionTokenSource source) {
+    final stub = _stub;
+    if (stub is RestWalletApi) {
+      stub.sessionTokens = source;
+    }
   }
 
   /// Create an MpcClient using attested REST transport (enclave FFI).
@@ -145,11 +167,10 @@ class MpcClient {
   static Future<MpcClient> attested(
     String baseUrl, {
     required String expectedPcr0,
-    int maxSigners = 3,
+    int maxSigners = 2,
     int minSigners = 2,
     String? storageId,
     HiveCipher? encryptionCipher,
-    HardwareSignerInterface? hardwareSigner,
     int cacheTtlSecs = 60,
   }) async {
     final api = await AttestedWalletApi.create(baseUrl,
@@ -158,7 +179,6 @@ class MpcClient {
       stub: api,
       maxSigners: maxSigners,
       minSigners: minSigners,
-      hardwareSigner: hardwareSigner,
       storageId: storageId,
       encryptionCipher: encryptionCipher,
     );
@@ -170,14 +190,11 @@ class MpcClient {
     required WalletApi stub,
     required int maxSigners,
     required int minSigners,
-    HardwareSignerInterface? hardwareSigner,
     String? storageId,
     HiveCipher? encryptionCipher,
   })  : _stub = stub,
         _maxSigners = maxSigners,
-        _minSigners = minSigners,
-        _hardwareSigner = hardwareSigner,
-        _protectedPolicies = {} {
+        _minSigners = minSigners {
     _store = WalletStore(
       boxName: storageId ?? 'mpc_wallet_state_default',
       cipher: encryptionCipher,
@@ -216,15 +233,8 @@ class MpcClient {
     Hive.init(storePath);
   }
 
-  bool get isInitialized => _normalPolicy != null && _recoveryPolicy != null;
-
-  bool get hasSpendingPolicy => _protectedPolicies.isNotEmpty;
-
-  ProtectedPolicy? get activeSpendingPolicy =>
-      _protectedPolicies.isNotEmpty ? _protectedPolicies.values.last : null;
-
-  List<ProtectedPolicy> get spendingPolicies =>
-      _protectedPolicies.values.toList();
+  // Real 2-of-2: a completed DKG yields the normal policy; there is no recovery policy.
+  bool get isInitialized => _normalPolicy != null;
 
   /// Restores client state from persistence.
   /// [debugState] can be provided to inject state for testing (bypassing store).
@@ -250,7 +260,8 @@ class MpcClient {
     }
     _userId = hex.decode(storedUserId);
 
-    // Restore signing secret for authentication
+    // Restore signing secret for authentication. Absent for a gated wallet (share stored blinded);
+    // then `_authHelper` stays null and auth rides the session token.
     if (state['signingSecret'] != null) {
       final secretHex = state['signingSecret'] as String;
       final secretBytes = Uint8List.fromList(hex.decode(secretHex));
@@ -259,23 +270,20 @@ class MpcClient {
       _authHelper =
           ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
     }
+    // Gated wallet: `_normalPolicy.keyPackage.secretShare` holds δ; reconstruct at sign time.
+    _shareBlinded = state['shareBlinded'] == true;
+
+    // Restore the single-key on-chain secret (the DKG dealer secret).
+    if (state['onchainSecret'] != null) {
+      final secretBytes =
+          Uint8List.fromList(hex.decode(state['onchainSecret'] as String));
+      _onchainSecret =
+          threshold.SecretKey(threshold.bytesToBigInt(secretBytes));
+    }
 
     if (state['spendingPolicies'] != null) {
       _normalPolicy = SpendingPolicy.fromJson(
           Map<String, dynamic>.from(state['spendingPolicies']));
-    }
-
-    if (state['recoveryPolicy'] != null) {
-      _recoveryPolicy = RecoveryPolicy.fromJson(
-          Map<String, dynamic>.from(state['recoveryPolicy']));
-    }
-
-    if (state['protectedPolicies'] != null) {
-      final pp = Map<String, dynamic>.from(state['protectedPolicies'] as Map);
-      pp.forEach((k, v) {
-        _protectedPolicies[k] =
-            ProtectedPolicy.fromJson(Map<String, dynamic>.from(v as Map));
-      });
     }
 
     return true;
@@ -289,22 +297,21 @@ class MpcClient {
       state['signingSecret'] =
           hex.encode(threshold.bigIntToBytes(_signingSecret!.scalar));
     }
+    if (_onchainSecret != null) {
+      state['onchainSecret'] =
+          hex.encode(threshold.bigIntToBytes(_onchainSecret!.scalar));
+    }
     if (_normalPolicy != null) {
+      // When gating is on, `_normalPolicy.keyPackage.secretShare` already holds δ (the raw share is
+      // never persisted); `shareBlinded` tells restore to reconstruct at sign time, not load time.
       state['spendingPolicies'] = _normalPolicy!.toJson();
     }
-    if (_recoveryPolicy != null) {
-      state['recoveryPolicy'] = _recoveryPolicy!.toJson();
-    }
-    if (_protectedPolicies.isNotEmpty) {
-      state['protectedPolicies'] =
-          _protectedPolicies.map((k, v) => MapEntry(k, v.toJson()));
-    }
+    state['shareBlinded'] = _shareBlinded;
     await _store.saveClientState(state);
   }
 
   // Getters for testing
   threshold.KeyPackage? get keyPackage1 => _normalPolicy?.keyPackage;
-  threshold.KeyPackage? get keyPackage2 => _recoveryPolicy?.keyPackage;
   threshold.PublicKeyPackage? get publicKey => _normalPolicy?.publicKeyPackage;
 
   // --- SERVER METADATA ---
@@ -322,297 +329,61 @@ class MpcClient {
   /// without contributing key material. Group key = s_hw + s_server.
   Future<void> doDkg() async {
     await _store.init();
-    final signer = _requireSigner('doDkg');
 
-    // 0. Quick connectivity test
-    print('[DKG] Step 0: Testing signer connectivity (getInfo)...');
-    try {
-      final info = await signer.getInfo();
-      print('[DKG] Step 0: Signer responded: hasKeyPackage=${info.hasKeyPackage}');
-    } catch (e) {
-      print('[DKG] Step 0: Signer getInfo FAILED: $e');
-    }
+    // Real 2-of-2 {wallet, cosigner}: the wallet is a dealer (its own secret) and
+    // the cosigner is the other dealer. Both hold a share; both are mandatory to
+    // sign. No hardware signer, no recovery share.
+    final secret = threshold.newSecretKey();
+    // This dealer secret is also the wallet's single-key on-chain ("utxo") key.
+    _onchainSecret = secret;
+    final coefficients =
+        List<BigInt>.generate(_minSigners - 1, (_) => threshold.modNRandom());
+    final (r1Secret, r1Pkg) =
+        threshold.dkgPart1(_maxSigners, _minSigners, secret, coefficients);
 
-    // 1. Hardware signer generates secret (dealer)
-    print('[DKG] Step 1: Calling signer.dkgInit...');
-    final dkgInit = await signer.dkgInit(_maxSigners, _minSigners);
-    print('[DKG] Step 1: signer.dkgInit complete');
-    final hwVerifyingKey = dkgInit.verifyingKeyBytes;
-    final hwIdentifier = dkgInit.identifier;
+    final walletVkBytes =
+        threshold.elemSerializeCompressed(r1Pkg.commitment.toVerifyingKey().E);
+    final walletIdentifier = threshold.Identifier.derive(walletVkBytes);
+    // Temporary session label during DKG (endpoints are unauthenticated until the
+    // group key exists). The canonical user_id is the verifying share, set below.
+    final tempUserId = Uint8List.fromList(walletVkBytes);
 
-    // 2. Derive wallet identifier deterministically from HW signer's VK
-    final walletIdInput = Uint8List.fromList(
-      [...'wallet:'.codeUnits, ...hwVerifyingKey],
-    );
-    final walletIdentifier = threshold.Identifier.derive(walletIdInput);
-
-    // Use HW VK as temporary session key during DKG
-    final tempUserId = Uint8List.fromList(hwVerifyingKey);
-
-    // 3. Send Round1 packages to server:
-    //    - Wallet: empty round1 = passive receiver
-    //    - HW signer: actual round1 = dealer
-    final hwR1Json = jsonEncode(dkgInit.round1Package.toJson());
-
-    final reqWallet = DKGStep1Request()
+    // Step 1 — wallet sends its round1 (dealer). The server self-inits as the
+    // second dealer and completes the round once both are registered.
+    final step1Resp = await _stub.dKGStep1(DKGStep1Request()
       ..userId = tempUserId
       ..identifier = walletIdentifier.serialize()
-      ..round1Package = ''; // passive receiver
+      ..round1Package = jsonEncode(r1Pkg.toJson()));
 
-    final reqHw = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json;
-
-    print('[DKG] Step 1: Sending DKGStep1 to server...');
-    final step1Futures = await Future.wait(
-        [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
-    final step1Resp = step1Futures[0];
-    print('[DKG] Step 1: Server responded with ${step1Resp.round1Packages.length} packages');
-
-    // 4. Trigger Step 2 on server (server computes round2)
-    print('[DKG] Step 2: Calling DKGStep2...');
-    await _stub.dKGStep2(DKGStep2Request()..userId = tempUserId);
-    print('[DKG] Step 2: Server responded');
-
-    // 5. Parse dealer R1 packages (for HW signer and wallet)
-    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
-    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
-
-    step1Resp.round1Packages.forEach((k, v) {
-      if (v.isEmpty) return; // skip passive receiver entries
-      final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      // HW signer needs all other dealers' R1 (= server's)
-      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
-      // Wallet needs all dealers' R1 (= HW signer + server)
-      dealerR1ForWallet[id] = pkg;
-    });
-
-    // 6. HW signer computes shares for server + wallet
-    print('[DKG] Step 3: Calling signer.dkgRound2 (${dealerR1ForHw.length} packages)...');
-    final sharesFromHw = await signer.dkgRound2(
-      dealerR1ForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-    print('[DKG] Step 3: signer.dkgRound2 complete');
-
-    // 7. Send Round2 packages to server
-    //    - HW signer: actual shares for others
-    //    - Wallet: empty (passive receiver)
-    final reqStep3Hw = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
-
-    final reqStep3Wallet = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar());
-    // wallet sends no round2 packages (passive receiver)
-
-    print('[DKG] Step 3: Sending DKGStep3 to server...');
-    final step3Futures = await Future.wait(
-        [_stub.dKGStep3(reqStep3Wallet), _stub.dKGStep3(reqStep3Hw)]);
-    print('[DKG] Step 3: Server responded');
-
-    // 8. Wallet receives shares from dealers (HW signer + server)
-    final sharesForWallet = _parseShares(step3Futures[0].round2PackagesForMe);
-    final sharesForHw = _parseShares(step3Futures[1].round2PackagesForMe);
-
-    // 9. Wallet finalizes as passive receiver
-    final allParticipantIds = <threshold.Identifier>[
-      ...dealerR1ForWallet.keys,
-      walletIdentifier,
-    ];
-    final (walletKeyPkg, pubKeyPkg) = threshold.dkgPart3Receive(
-      walletIdentifier,
-      dealerR1ForWallet,
-      sharesForWallet,
-      _minSigners,
-      _maxSigners,
-      allParticipantIds,
-    );
-
-    // 10. HW signer finalizes (stores key internally)
-    final dkgResult = await signer.dkgRound3(
-      dealerR1ForHw,
-      sharesForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 11. Wallet's DKG secret share becomes the auth key
-    _signingSecret = threshold.SecretKey(walletKeyPkg.secretShare);
-    _userId = threshold
-        .elemSerializeCompressed(walletKeyPkg.verifyingShare)
-        .toList();
-    _recoveryId = hwVerifyingKey.toList();
-
-    // 12. Store policies
-    _normalPolicy = SpendingPolicy(
-        id: "normal_policy_id",
-        keyPackage: walletKeyPkg,
-        publicKeyPackage: pubKeyPkg);
-
-    // Recovery policy: secret share stays on hardware signer (store zero locally)
-    final recoveryVerifyingShare =
-        pubKeyPkg.verifyingShares[dkgResult.identifier];
-    if (recoveryVerifyingShare == null) {
-      throw StateError("Recovery identifier not found in public key package");
-    }
-
-    final recoveryKeyPkg = threshold.KeyPackage(
-      dkgResult.identifier,
-      BigInt.zero, // secret stays on hardware signer
-      recoveryVerifyingShare,
-      pubKeyPkg.verifyingKey,
-      _minSigners,
-    );
-
-    _recoveryPolicy = RecoveryPolicy(
-        id: "recovery_policy_id",
-        keyPackage: recoveryKeyPkg,
-        publicKeyPackage: pubKeyPkg);
-
-    _authHelper = ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
-
-    await _saveState();
-  }
-
-  /// Restore: re-derive the wallet's signing share using the same DKG secrets
-  /// stored on the hardware signer and server. The group public key stays the
-  /// same so the Bitcoin address (and funds) are preserved.
-  Future<void> doRestore() async {
-    await _store.init();
-    final signer = _requireSigner('doRestore');
-
-    // 1. Hardware signer reuses stored DKG secret (same VK, same identifier)
-    final restoreInit = await signer.restoreInit(_maxSigners, _minSigners);
-    final hwVerifyingKey = restoreInit.verifyingKeyBytes;
-    final hwIdentifier = restoreInit.identifier;
-
-    // 2. Derive wallet identifier (deterministic — same as original DKG)
-    final walletIdInput = Uint8List.fromList(
-      [...'wallet:'.codeUnits, ...hwVerifyingKey],
-    );
-    final walletIdentifier = threshold.Identifier.derive(walletIdInput);
-
-    // Use HW VK as temporary session key during restore
-    final tempUserId = Uint8List.fromList(hwVerifyingKey);
-
-    // 3. Send Round1 packages to server with is_restore flag
-    final hwR1Json = jsonEncode(restoreInit.round1Package.toJson());
-
-    final reqWallet = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = walletIdentifier.serialize()
-      ..round1Package = '' // passive receiver
-      ..isRestore = true;
-
-    final reqHw = DKGStep1Request()
-      ..userId = tempUserId
-      ..identifier = hwIdentifier.serialize()
-      ..round1Package = hwR1Json
-      ..isRestore = true;
-
-    final step1Futures = await Future.wait(
-        [_stub.dKGStep1(reqWallet), _stub.dKGStep1(reqHw)]);
-    final step1Resp = step1Futures[0];
-
-    // 4. Trigger Step 2 on server (server computes round2)
+    // Step 2 — server computes its round2 share for the wallet.
     await _stub.dKGStep2(DKGStep2Request()..userId = tempUserId);
 
-    // 5. Parse dealer R1 packages (for HW signer and wallet)
-    final dealerR1ForHw = <threshold.Identifier, threshold.Round1Package>{};
-    final dealerR1ForWallet = <threshold.Identifier, threshold.Round1Package>{};
-
+    // The server's round1 package (the other dealer).
+    final round1Pkgs = <threshold.Identifier, threshold.Round1Package>{};
     step1Resp.round1Packages.forEach((k, v) {
       if (v.isEmpty) return;
       final id = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      if (id != hwIdentifier) dealerR1ForHw[id] = pkg;
-      dealerR1ForWallet[id] = pkg;
+      if (id == walletIdentifier) return; // skip our own
+      round1Pkgs[id] = threshold.Round1Package.fromJson(jsonDecode(v));
     });
 
-    // 6. HW signer computes shares for server + wallet
-    final sharesFromHw = await signer.dkgRound2(
-      dealerR1ForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
+    // Wallet computes its round2 share for the server.
+    final (r2Secret, sharesFromWallet) =
+        threshold.dkgPart2(r1Secret, round1Pkgs);
 
-    // 7. Send Round2 packages to server
-    final reqStep3Hw = DKGStep3Request()
+    // Step 3 — wallet sends its round2 share; server finalizes.
+    final step3Resp = await _stub.dKGStep3(DKGStep3Request()
       ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(hwIdentifier.toScalar())
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromHw));
+      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar())
+      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFromWallet)));
 
-    final reqStep3Wallet = DKGStep3Request()
-      ..userId = tempUserId
-      ..identifier = threshold.bigIntToBytes(walletIdentifier.toScalar());
+    // Wallet finalizes (full participant) → its key package + the group PKP.
+    final sharesForWallet = _parseShares(step3Resp.round2PackagesForMe);
+    final (walletKeyPkg, pubKeyPkg) =
+        threshold.dkgPart3(r1Secret, r2Secret, round1Pkgs, sharesForWallet);
 
-    final step3Futures = await Future.wait(
-        [_stub.dKGStep3(reqStep3Wallet), _stub.dKGStep3(reqStep3Hw)]);
-
-    // 8. Wallet receives shares from dealers (HW signer + server)
-    final sharesForWallet = _parseShares(step3Futures[0].round2PackagesForMe);
-    final sharesForHw = _parseShares(step3Futures[1].round2PackagesForMe);
-
-    // 9. Wallet finalizes as passive receiver
-    final allParticipantIds = <threshold.Identifier>[
-      ...dealerR1ForWallet.keys,
-      walletIdentifier,
-    ];
-    final (walletKeyPkg, pubKeyPkg) = threshold.dkgPart3Receive(
-      walletIdentifier,
-      dealerR1ForWallet,
-      sharesForWallet,
-      _minSigners,
-      _maxSigners,
-      allParticipantIds,
-    );
-
-    // 10. HW signer finalizes (stores updated key internally)
-    final dkgResult = await signer.dkgRound3(
-      dealerR1ForHw,
-      sharesForHw,
-      receiverIdentifiers: [walletIdentifier],
-    );
-
-    // 11. Wallet's new secret share becomes the auth key
-    _signingSecret = threshold.SecretKey(walletKeyPkg.secretShare);
-    _userId = threshold
-        .elemSerializeCompressed(walletKeyPkg.verifyingShare)
-        .toList();
-    _recoveryId = hwVerifyingKey.toList();
-
-    // 12. Store policies
-    _normalPolicy = SpendingPolicy(
-        id: "normal_policy_id",
-        keyPackage: walletKeyPkg,
-        publicKeyPackage: pubKeyPkg);
-
-    final recoveryVerifyingShare =
-        pubKeyPkg.verifyingShares[dkgResult.identifier];
-    if (recoveryVerifyingShare == null) {
-      throw StateError("Recovery identifier not found in public key package");
-    }
-
-    final recoveryKeyPkg = threshold.KeyPackage(
-      dkgResult.identifier,
-      BigInt.zero,
-      recoveryVerifyingShare,
-      pubKeyPkg.verifyingKey,
-      _minSigners,
-    );
-
-    _recoveryPolicy = RecoveryPolicy(
-        id: "recovery_policy_id",
-        keyPackage: recoveryKeyPkg,
-        publicKeyPackage: pubKeyPkg);
-
-    // Clear protected policies (verifying shares changed, old keys invalid)
-    _protectedPolicies.clear();
-
-    _authHelper = ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
+    // The wallet's DKG share becomes `_normalPolicy` (blinded under the seed when gating is on).
+    await _finalizeWalletShare(walletKeyPkg, pubKeyPkg);
 
     await _saveState();
   }
@@ -627,173 +398,378 @@ class MpcClient {
     return _normalPolicy?.publicKeyPackage;
   }
 
-  // --- REFRESH ---
+  // --- CONTRACT eVTXO CREATION ---
 
-  Future<void> createSpendingPolicy(
-      Duration interval, Int64 thresholdAmount, String pin) async {
-    if (!isInitialized) {
-      throw StateError("Client not initialized (DKG not run).");
+  /// Create a contract eVTXO bound to [contractId] WITH a peer [receiverVk]. The
+  /// cooperative leaf reuses the wallet's EXISTING key `V` (no new key): a single
+  /// key-preserving REFRESH places a co-signing share of `V` onto a `{receiver, cosigner}`
+  /// pairing so the chosen receiver (another user) can co-sign independently, while the
+  /// cosigner GATES every spend by [contractWasm]. The wallet computes its refresh slices
+  /// locally from `V` and sends `a@cosigner` (scalar) + `a@receiver·G` (point) +
+  /// `ECIES(a@receiver)` (to receiver_vk) to the cosigner; the cosigner adds its own
+  /// `b@receiver`, ECIES-encrypts it too, and drops BOTH halves into the receiver's inbox.
+  /// Only the POINT `a@receiver·G` reaches the cosigner in the clear, so it never learns
+  /// the receiver's full share. The cosigner validates `sha256(contractWasm)==contractId`,
+  /// stores the wasm, and registers the eVTXO spk (coop leaf = `V`).
+  ///
+  /// [receiverVk] is the peer receiver's verifying key (33 bytes). [ownerPk] is the
+  /// unilateral-exit-leaf x-only key; defaults to the wallet's own `V` x-only.
+  ///
+  /// Returns the registered eVTXO scriptPubKey plus the wallet's `V` key package + PKP,
+  /// which the author uses to spend the contract's cooperative leaf via its normal pairing.
+  Future<
+      ({
+        Uint8List scriptPubkey,
+        threshold.KeyPackage keyPackage,
+        threshold.PublicKeyPackage publicKeyPackage,
+      })> createEvtxoKey(
+    Uint8List contractId,
+    Uint8List contractWasm,
+    Uint8List serverPk,
+    int exitDelay, {
+    required Uint8List receiverVk,
+    Uint8List? ownerPk,
+  }) async {
+    if (!isInitialized || _userId == null) {
+      throw StateError('Client not initialized (DKG not run).');
     }
 
-    final seed = sha256.convert(utf8.encode(pin)).bytes;
+    final vKp = await _walletKeyPackage();
+    final vPkp = _normalPolicy!.publicKeyPackage;
+    final walletId = vKp.identifier;
+    final cosignerId =
+        vPkp.verifyingShares.keys.firstWhere((id) => id != walletId);
+    final receiverId = threshold.Identifier.derive(receiverVk);
+    final ts = Int64(DateTime.now().millisecondsSinceEpoch);
 
-    // Part 1: Generate Refresh Secrets
-    // We use 2-party refresh (Client + Server) for Policy Creation.
-    final refreshTotalParties = 2;
-    final refreshThreshold = 2; // 2-of-2
+    // Exit-leaf owner defaults to the wallet's own V x-only (drop the parity byte).
+    final vCompressed = threshold.elemSerializeCompressed(vPkp.verifyingKey.E);
+    final ownerXonly = ownerPk ?? Uint8List.fromList(vCompressed.sublist(1));
 
-    if (_userId == null) {
-      throw StateError("Signing secret is null, cannot proceed with refresh.");
-    }
+    // Key-preserving refresh of V onto {receiver, cosigner}: a@cosigner (scalar) +
+    // a@receiver·G (point) go to the cosigner; a@receiver is ECIES-sealed to the receiver.
+    final idSet = <threshold.Identifier>[walletId, cosignerId];
+    final slope = threshold.modNRandom();
+    final (aAtReceiver, aAtCosigner) =
+        threshold.refreshShareToId(vKp, idSet, receiverId, cosignerId, slope);
+    final aAtReceiverPoint =
+        threshold.elemSerializeCompressed(threshold.elemBaseMul(aAtReceiver));
+    final eciesAAtReceiver =
+        threshold.eciesEncrypt(threshold.bigIntToBytes(aAtReceiver), receiverVk);
 
-    final signingIdentifier = _normalPolicy!.keyPackage.identifier;
-
-    final (r1Sec1, r1Pub1) = threshold.dkgRefreshPart1(
-        signingIdentifier, refreshTotalParties, refreshThreshold,
-        seed: seed);
-
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot proceed with refresh.");
-    }
-
-    // Step 1: Exchange
-    final auth1 = _authHelper!.signForRefreshStep1();
-    final req1 = RefreshStep1Request()
+    final resp = await _stub.contractCreate(ContractCreateRequest()
       ..userId = _userId!
-      ..round1Package = jsonEncode(r1Pub1.toJson())
-      ..interval = Int64(interval.inSeconds)
-      ..thresholdAmount = thresholdAmount
-      ..signature = auth1.signature
-      ..timestampMs = auth1.timestampMs;
+      ..identifier = walletId.serialize()
+      ..contractId = contractId
+      ..contractWasm = contractWasm
+      ..serverPk = serverPk
+      ..exitDelay = exitDelay
+      ..ownerPk = ownerXonly
+      ..receiverVk = receiverVk
+      ..aAtCosigner = threshold.bigIntToBytes(aAtCosigner)
+      ..aAtReceiverPoint = aAtReceiverPoint
+      ..signature = Uint8List(0) // contract-create path is unauthenticated for now
+      ..timestampMs = ts
+      ..eciesAAtReceiver = eciesAAtReceiver);
 
-    final step1Resp = await _stub.refreshStep1(req1);
-
-    // Step 2: Shares
-    final auth2 = _authHelper!.signForRefreshStep2();
-    final req2_1 = RefreshStep2Request()
-      ..userId = _userId!
-      ..signature = auth2.signature
-      ..timestampMs = auth2.timestampMs;
-
-    await _stub.refreshStep2(req2_1);
-
-    // Parse R1 packages (includes server's)
-    final round1PkgsMap1 = <threshold.Identifier, threshold.Round1Package>{};
-
-    step1Resp.round1Packages.forEach((k, v) {
-      final id_temp = threshold.Identifier(BigInt.parse(k, radix: 16));
-      final pkg = threshold.Round1Package.fromJson(jsonDecode(v));
-      if (id_temp != signingIdentifier) round1PkgsMap1[id_temp] = pkg;
-    });
-
-    // Compute shares
-    final (r2Sec1, sharesFrom1) =
-        threshold.dkgRefreshPart2(r1Sec1, round1PkgsMap1);
-
-    // Step 3: Finalize
-    final auth3 = _authHelper!.signForRefreshStep3();
-    final req3_1 = RefreshStep3Request()
-      ..userId = _userId!
-      ..round2PackagesForOthers.addAll(_buildSharesMap(sharesFrom1))
-      ..signature = auth3.signature
-      ..timestampMs = auth3.timestampMs;
-
-    final step3Resp1 = await _stub.refreshStep3(req3_1);
-
-    final sharesForMe1 = _parseShares(step3Resp1.round2PackagesForMe);
-
-    final normalKeyPackage1 = _normalPolicy!.keyPackage;
-    final normalPubPackage = _normalPolicy!.publicKeyPackage;
-
-    final (keyPkg1, pubKeyPkg1) = threshold.dkgRefreshPart3(r2Sec1,
-        round1PkgsMap1, sharesForMe1, normalPubPackage, normalKeyPackage1);
-
-    // Compute protected key for Identity 1
-    // myUpdate is evaluatePolynomial(myId, coeffs)
-    final myUpdate =
-        threshold.evaluatePolynomial(signingIdentifier, r1Sec1.coefficients);
-    final newSecret = keyPkg1.secretShare;
-
-    var diff = (newSecret - myUpdate);
-
-    final protectedKeyPkg = threshold.KeyPackage(
-      keyPkg1.identifier,
-      diff, // Cleared
-      keyPkg1.verifyingShare,
-      keyPkg1.verifyingKey,
-      keyPkg1.minSigners,
+    return (
+      scriptPubkey: Uint8List.fromList(resp.contractScriptPubkey),
+      keyPackage: vKp,
+      publicKeyPackage: vPkp,
     );
+  }
 
-    _protectedPolicies[step1Resp.policyId] = ProtectedPolicy(
-      id: step1Resp.policyId,
-      keyPackage: protectedKeyPkg,
-      publicKeyPackage: pubKeyPkg1,
-      startTime:
-          DateTime.fromMillisecondsSinceEpoch(step1Resp.startTime.toInt()),
-      interval: interval,
-      thresholdSats: thresholdAmount.toInt(),
+  /// Phase 2: create a contract eVTXO from a published TEMPLATE + the author's typed config. The
+  /// cosigner composes the template + a provider synthesized from [configBlob] (the encoded
+  /// key-value config) into one contract whose composed sha256 becomes the bound contract_id, then
+  /// runs the same peer flow as [createEvtxoKey] (refresh V onto {receiver, cosigner} + relay).
+  /// Returns the eVTXO spk, the COMPOSED contract id, and the wallet's V key package + PKP.
+  Future<
+      ({
+        Uint8List scriptPubkey,
+        Uint8List contractId,
+        threshold.KeyPackage keyPackage,
+        threshold.PublicKeyPackage publicKeyPackage,
+      })> createEvtxoFromTemplate({
+    required String templateId,
+    required String stubId,
+    required Uint8List configBlob,
+    required Uint8List serverPk,
+    int exitDelay = 0,
+    required Uint8List receiverVk,
+    Uint8List? ownerPk,
+  }) async {
+    if (!isInitialized || _userId == null) {
+      throw StateError('Client not initialized (DKG not run).');
+    }
+    final vKp = await _walletKeyPackage();
+    final vPkp = _normalPolicy!.publicKeyPackage;
+    final walletId = vKp.identifier;
+    final cosignerId =
+        vPkp.verifyingShares.keys.firstWhere((id) => id != walletId);
+    final receiverId = threshold.Identifier.derive(receiverVk);
+    final ts = Int64(DateTime.now().millisecondsSinceEpoch);
+
+    final vCompressed = threshold.elemSerializeCompressed(vPkp.verifyingKey.E);
+    final ownerXonly = ownerPk ?? Uint8List.fromList(vCompressed.sublist(1));
+
+    final idSet = <threshold.Identifier>[walletId, cosignerId];
+    final slope = threshold.modNRandom();
+    final (aAtReceiver, aAtCosigner) =
+        threshold.refreshShareToId(vKp, idSet, receiverId, cosignerId, slope);
+    final aAtReceiverPoint =
+        threshold.elemSerializeCompressed(threshold.elemBaseMul(aAtReceiver));
+    final eciesAAtReceiver =
+        threshold.eciesEncrypt(threshold.bigIntToBytes(aAtReceiver), receiverVk);
+
+    final resp = await _stub.contractCreate(ContractCreateRequest()
+      ..userId = _userId!
+      ..identifier = walletId.serialize()
+      ..templateId = templateId
+      ..stubId = stubId
+      ..configBlob = configBlob
+      ..serverPk = serverPk
+      ..exitDelay = exitDelay
+      ..ownerPk = ownerXonly
+      ..receiverVk = receiverVk
+      ..aAtCosigner = threshold.bigIntToBytes(aAtCosigner)
+      ..aAtReceiverPoint = aAtReceiverPoint
+      ..signature = Uint8List(0)
+      ..timestampMs = ts
+      ..eciesAAtReceiver = eciesAAtReceiver);
+
+    return (
+      scriptPubkey: Uint8List.fromList(resp.contractScriptPubkey),
+      contractId: Uint8List.fromList(resp.contractId),
+      keyPackage: vKp,
+      publicKeyPackage: vPkp,
     );
+  }
+
+  /// Receiver side: fetch the contract shares held for this wallet in its inbox, decrypt
+  /// BOTH ECIES halves with the signing secret, sum them into the receiver's share
+  /// `P = a@receiver + b@receiver`, and return the spendable context per contract eVTXO
+  /// (the `{receiver, cosigner}` pairing key package + PKP + taptree parameters).
+  Future<
+      List<
+          ({
+            Uint8List scriptPubkey,
+            Uint8List contractId,
+            int exitDelay,
+            Uint8List serverPk,
+            Uint8List ownerPk,
+            threshold.KeyPackage keyPackage,
+            threshold.PublicKeyPackage publicKeyPackage,
+          })>> fetchContractShares() async {
+    // `_normalPolicy` (not `_signingSecret`) — a gated wallet has no raw `_signingSecret`; the
+    // share (blinded) lives in the policy and is reconstructed by `_walletKeyPackage()` below.
+    if (_userId == null || _normalPolicy == null) {
+      throw StateError('Client not initialized.');
+    }
+    final auth = _authSig((h) => h.signForEvtxoPending());
+    final resp = await _stub.evtxoPendingShares(EvtxoPendingSharesRequest()
+      ..userId = _userId!
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+
+    final receiverId = threshold.Identifier.derive(Uint8List.fromList(_userId!));
+    // Reconstruct the wallet share (P_full) to ECIES-decrypt the inbox; gated ⇒ needs the seed.
+    final secret = (await _walletKeyPackage()).secretShare;
+    final out = <
+        ({
+          Uint8List scriptPubkey,
+          Uint8List contractId,
+          int exitDelay,
+          Uint8List serverPk,
+          Uint8List ownerPk,
+          threshold.KeyPackage keyPackage,
+          threshold.PublicKeyPackage publicKeyPackage,
+        })>[];
+    for (final s in resp.shares) {
+      final aAtR = threshold.bytesToBigInt(threshold.eciesDecrypt(
+          Uint8List.fromList(s.eciesHalfAuthor), secret));
+      final bAtR = threshold.bytesToBigInt(threshold.eciesDecrypt(
+          Uint8List.fromList(s.eciesHalfCosigner), secret));
+      final pI = threshold.modNAdd(aAtR, bAtR);
+      final pkp = threshold.PublicKeyPackage.fromJson(
+          jsonDecode(s.publicKeyPackageJson) as Map<String, dynamic>);
+      final kp = threshold.KeyPackage(
+          receiverId, pI, threshold.elemBaseMul(pI), pkp.verifyingKey, 2);
+      out.add((
+        scriptPubkey: Uint8List.fromList(s.evtxoScriptPubkey),
+        contractId: Uint8List.fromList(s.contractId),
+        exitDelay: s.exitDelay,
+        serverPk: Uint8List.fromList(s.serverPk),
+        ownerPk: Uint8List.fromList(s.ownerPk),
+        keyPackage: kp,
+        publicKeyPackage: pkp,
+      ));
+    }
+    return out;
+  }
+
+  /// Receiver side: clear a picked-up contract share from the inbox.
+  Future<void> ackContractShare(Uint8List evtxoScriptPubkey) async {
+    final auth = _authSig((h) => h.signForEvtxoAck());
+    await _stub.evtxoAckShare(EvtxoAckShareRequest()
+      ..userId = _userId!
+      ..evtxoScriptPubkey = evtxoScriptPubkey
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
+
+  /// Subscribe (Phase 3) to this wallet's cosigner event stream over HTTP (SSE). For a BACKEND
+  /// user that holds the connection open and reacts to events — chiefly `contract_share` (a
+  /// contract share landed in our inbox). Best-effort live nudges; the inbox (`fetchContractShares`)
+  /// is the durable record, so drain it on connect to catch up. REST transport only.
+  Stream<({String type, Map<String, dynamic> data})> subscribeEvents() async* {
+    if (_userId == null) throw StateError('Client not initialized.');
+    final base = _restBaseForEvents;
+    if (base == null) {
+      throw StateError('Event stream is only available on the REST transport.');
+    }
+    final auth = _authSig((h) => h.signForEventsSubscribe());
+    final uri = Uri.parse('${base.replaceAll(RegExp(r'/+$'), '')}/api/u/'
+        '${hex.encode(_userId!)}/events'
+        '?signature=${hex.encode(auth.signature)}&timestamp_ms=${auth.timestampMs.toInt()}');
+    final req = http.Request('GET', uri)..headers['accept'] = 'text/event-stream';
+    final resp = await http.Client().send(req);
+    if (resp.statusCode != 200) {
+      throw Exception('events subscribe: HTTP ${resp.statusCode}');
+    }
+    String? ev;
+    await for (final line
+        in resp.stream.transform(utf8.decoder).transform(const LineSplitter())) {
+      if (line.startsWith('event:')) {
+        ev = line.substring(6).trim();
+      } else if (line.startsWith('data:')) {
+        final raw = line.substring(5).trim();
+        final data = raw.isEmpty
+            ? <String, dynamic>{}
+            : jsonDecode(raw) as Map<String, dynamic>;
+        yield (type: ev ?? (data['type'] as String? ?? 'message'), data: data);
+        ev = null;
+      }
+      // blank lines separate events; keep-alive comment lines (':') are ignored.
+    }
+  }
+
+
+  /// Auth signature for a request. With share gating on, `_authHelper` is null and the cosigner
+  /// authenticates the Bearer session token at the REST boundary, so we send an empty Schnorr
+  /// signature. Un-gated, this is the usual share-derived signature.
+  AuthSignature _authSig(AuthSignature Function(ClientAuthHelper) sign) {
+    final h = _authHelper;
+    if (h != null) return sign(h);
+    return AuthSignature(
+        Uint8List(0), Int64(DateTime.now().millisecondsSinceEpoch));
+  }
+
+  /// Auth signature authorizing a passkey to be attached to this wallet.
+  ///
+  /// Deliberately NOT routed through [_authSig]: that falls back to an empty
+  /// signature once the share is gated, and the cosigner rejects an empty one
+  /// here — a session token is what a passkey mints, so accepting one would be
+  /// circular. Call this while the share is still un-gated (during
+  /// `enablePasskey`, before `gateShare`).
+  AuthSignature signForPasskeyRegister() {
+    final h = _authHelper;
+    if (h == null) {
+      throw StateError(
+          'passkey registration must be signed with the wallet key, but the '
+          'share is already gated — re-run before gateShare()');
+    }
+    return h.signForPasskeyRegister();
+  }
+
+  /// The wallet's key package carrying the REAL share for a single op. Gated: reconstruct
+  /// `P_full = δ + b(seed)` from `_seedSource` (throws if no seed is wired — an ARK sign needs the
+  /// PIN/passkey). Un-gated: the stored key package already holds the real share. The reconstructed
+  /// share lives only for the caller's scope (best-effort wipe = it goes out of scope after use).
+  Future<threshold.KeyPackage> _walletKeyPackage() async {
+    final kp = _normalPolicy!.keyPackage;
+    if (!_shareBlinded) return kp;
+    final src = _seedSource;
+    if (src == null) {
+      throw StateError(
+          'signing requires the wallet seed (PIN/passkey) — none configured');
+    }
+    final seed = await src.deriveSeed();
+    final pFull = reconstructShare(
+            threshold.bigIntToBytes(kp.secretShare), kp.identifier, seed)
+        .scalar;
+    return threshold.KeyPackage(kp.identifier, pFull, kp.verifyingShare,
+        kp.verifyingKey, kp.minSigners);
+  }
+
+  /// Finalize the wallet's freshly-DKG'd share into `_normalPolicy` + auth state. When a
+  /// [SeedSource] is configured, store the share BLINDED (δ) — the raw share is never persisted and
+  /// never lingers in memory; it's reconstructed transiently at sign time. Auth then rides the
+  /// session token (no share-derived helper). Un-gated: keep the raw share + the Schnorr helper.
+  Future<void> _finalizeWalletShare(threshold.KeyPackage walletKeyPkg,
+      threshold.PublicKeyPackage pubKeyPkg) async {
+    _userId =
+        threshold.elemSerializeCompressed(walletKeyPkg.verifyingShare).toList();
+    final src = _seedSource;
+    if (src != null) {
+      final seed = await src.deriveSeed();
+      final delta = threshold.bytesToBigInt(blindShare(
+          threshold.SecretKey(walletKeyPkg.secretShare),
+          walletKeyPkg.identifier,
+          seed));
+      final blindedKp = threshold.KeyPackage(walletKeyPkg.identifier, delta,
+          walletKeyPkg.verifyingShare, walletKeyPkg.verifyingKey,
+          walletKeyPkg.minSigners);
+      _normalPolicy = SpendingPolicy(
+          id: "normal_policy_id",
+          keyPackage: blindedKp,
+          publicKeyPackage: pubKeyPkg);
+      _shareBlinded = true;
+      _signingSecret = null;
+      _authHelper = null;
+    } else {
+      _signingSecret = threshold.SecretKey(walletKeyPkg.secretShare);
+      _normalPolicy = SpendingPolicy(
+          id: "normal_policy_id",
+          keyPackage: walletKeyPkg,
+          publicKeyPackage: pubKeyPkg);
+      _authHelper =
+          ClientAuthHelper.fromSigningSecret(_signingSecret!, _userId!);
+    }
+  }
+
+  /// Gate an already-DKG'd (raw) share retroactively: blind it to δ under [seed], persist δ, and drop
+  /// the raw share + Schnorr auth helper. Used when the seed only exists after DKG — a passkey's PRF
+  /// needs the post-DKG user id to register/assert. No-op if already gated.
+  Future<void> gateShare(Uint8List seed) async {
+    if (_shareBlinded) return;
+    final kp = _normalPolicy?.keyPackage;
+    if (kp == null) throw StateError('no wallet share to gate');
+    final delta = threshold.bytesToBigInt(
+        blindShare(threshold.SecretKey(kp.secretShare), kp.identifier, seed));
+    _normalPolicy = SpendingPolicy(
+        id: "normal_policy_id",
+        keyPackage: threshold.KeyPackage(kp.identifier, delta, kp.verifyingShare,
+            kp.verifyingKey, kp.minSigners),
+        publicKeyPackage: _normalPolicy!.publicKeyPackage);
+    _shareBlinded = true;
+    _signingSecret = null;
+    _authHelper = null;
     await _saveState();
+    // Hive appends; without compaction the pre-gating state (raw share +
+    // signingSecret) would remain readable in the box file.
+    await _store.compact();
   }
 
   // --- SIGNING ---
-  Future<String> getPolicyId(Uint8List message) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot get Policy ID.");
-    }
-
-    final auth = _authHelper!.signForGetPolicyId();
-    final response = await _stub.getPolicyId(GetPolicyIdRequest()
-      ..userId = _userId!
-      ..txMessage = message
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-    return response.policyId;
-  }
 
   Future<threshold.Signature> sign(Uint8List message,
-      {String? pin,
-      String? policyId,
-      List<int>? fullTransaction,
-      bool applyTweak = true}) async {
-    var keyPackage = _normalPolicy!.keyPackage;
-    var groupPubKey = _normalPolicy!.publicKeyPackage;
+      {List<int>? fullTransaction, bool applyTweak = true}) async {
+    final keyPackage = await _walletKeyPackage();
+    final groupPubKey = _normalPolicy!.publicKeyPackage;
 
     if (_userId == null) {
       throw StateError("User ID is null, cannot proceed with signing.");
-    }
-
-    final signingIdentifier = _normalPolicy!.keyPackage.identifier;
-
-    if (policyId != null &&
-        _protectedPolicies.containsKey(policyId) &&
-        pin != null) {
-      final protectedPolicy = _protectedPolicies[policyId];
-
-      final minSigners = 2; // Matched with createSpendingPolicy
-
-      final seed = sha256.convert(utf8.encode(pin)).bytes;
-
-      // Re-run part 1 logic to reliably recover the polynomial
-      final (r1Sec, _) = threshold.dkgRefreshPart1(
-          signingIdentifier, minSigners, minSigners,
-          seed: seed);
-
-      final myUpdate =
-          threshold.evaluatePolynomial(signingIdentifier, r1Sec.coefficients);
-
-      final partialShare = protectedPolicy!.keyPackage.secretShare;
-      final correctedShare = (partialShare + myUpdate);
-
-      keyPackage = threshold.KeyPackage(
-        protectedPolicy.keyPackage.identifier,
-        correctedShare,
-        protectedPolicy.keyPackage.verifyingShare,
-        protectedPolicy.keyPackage.verifyingKey,
-        protectedPolicy.keyPackage.minSigners,
-      );
-
-      groupPubKey = protectedPolicy.publicKeyPackage;
     }
 
     return signWithContext(
@@ -811,6 +787,8 @@ class MpcClient {
     threshold.PublicKeyPackage groupPubKey,
     List<int>? fullTransaction, {
     bool applyTweak = true,
+    String? routeGroupKeyHex,
+    List<int>? arkTx,
   }) async {
     final nonce = frost_comm.newNonce(keyPkg.secretShare);
 
@@ -818,8 +796,10 @@ class MpcClient {
       throw StateError("User ID is null, cannot proceed with signing.");
     }
 
+    // `user_id` is our own verifying share (auth identity); routing is by the actor URL.
+    // Contract spends reuse our normal V actor, so there's no separate routing key.
     // 2. Step 1: Commitments
-    final auth1 = _authHelper!.signForSignStep1();
+    final auth1 = _authSig((h) => h.signForSignStep1());
     final req = SignStep1Request()
       ..userId = _userId!
       ..hidingCommitment =
@@ -833,10 +813,17 @@ class MpcClient {
     if (fullTransaction != null) {
       req.fullTransaction = fullTransaction;
     }
+    // For a contract RECEIVER spending via the {receiver, cosigner} pairing actor, the
+    // cosigner is authoritative about the message: with `ark_tx` present it takes the two-leg
+    // path and signs the requested leg (else it overrides to leg 1, breaking the aggregate).
+    if (arkTx != null) {
+      req.arkTx = arkTx;
+    }
     if (!applyTweak) {
       req.scriptPathSpend = true;
     }
-    final signStep1Resp = await _stub.signStep1(req);
+    final signStep1Resp =
+        await _stub.signStep1(req, routeGroupKeyHex: routeGroupKeyHex);
 
     // Parse Commitments
     final commitmentsMap =
@@ -865,12 +852,14 @@ class MpcClient {
     final sigShare = frost.sign(signingPkg, nonce, keyPkg);
 
     // 4. Send Share & Get Result
-    final auth2 = _authHelper!.signForSignStep2();
-    final signStep2Resp = await _stub.signStep2(SignStep2Request()
-      ..userId = _userId!
-      ..signatureShare = threshold.bigIntToBytes(sigShare.s)
-      ..signature = auth2.signature
-      ..timestampMs = auth2.timestampMs);
+    final auth2 = _authSig((h) => h.signForSignStep2());
+    final signStep2Resp = await _stub.signStep2(
+        SignStep2Request()
+          ..userId = _userId!
+          ..signatureShare = threshold.bigIntToBytes(sigShare.s)
+          ..signature = auth2.signature
+          ..timestampMs = auth2.timestampMs,
+        routeGroupKeyHex: routeGroupKeyHex);
 
     // 5. Verify
     final R = threshold
@@ -883,136 +872,6 @@ class MpcClient {
     return signature.verify(pubPackage.verifyingKey, message);
   }
 
-  // --- RECOVERY SIGNING (Client-only 2-of-3 FROST) ---
-
-  /// Produces a FROST threshold signature using both client key packages
-  /// (signing + recovery identity) without server participation.
-  /// No taproot tweak is applied — this is for auth, not Bitcoin transactions.
-  ///
-  /// When a hardware signer is configured, the recovery identity's nonce
-  /// generation and signing are delegated to the hardware device.
-  /// FROST sign with both keys: signing identity (local) + recovery identity
-  /// (hardware signer). No taproot tweak — used for auth, not Bitcoin txs.
-  Future<threshold.Signature> _frostSignWithBothKeys(Uint8List message) async {
-    if (!isInitialized) {
-      throw StateError("Client not initialized (DKG not run).");
-    }
-
-    final signer = _requireSigner('_frostSignWithBothKeys');
-    final keyPkg1 = _normalPolicy!.keyPackage;
-    final recoveryId = _recoveryPolicy!.keyPackage.identifier;
-    final groupPubKey = _normalPolicy!.publicKeyPackage;
-
-    // 1. Hardware signer generates nonce for recovery identity
-    final recoveryCommitments = await signer.generateNonce();
-
-    // 2. Generate signing identity nonce locally
-    final nonce1 = frost_comm.newNonce(keyPkg1.secretShare);
-
-    // 3. Build commitments map with both identities
-    final commitmentsMap = <threshold.Identifier, frost_comm.SigningCommitments>{
-      keyPkg1.identifier: nonce1.commitments,
-      recoveryId: recoveryCommitments,
-    };
-
-    // 4. Create signing package
-    final signingPkg = frost_comm.SigningPackage(commitmentsMap, message);
-
-    // 5. Hardware signer produces recovery share (no taproot tweak)
-    final recoveryShareScalar = await signer.sign(
-      message: message,
-      commitments: commitmentsMap,
-      applyTweak: false,
-    );
-
-    // 6. Compute signing identity share locally
-    final share1 = frost.sign(signingPkg, nonce1, keyPkg1);
-
-    // 7. Aggregate both shares
-    final sharesMap = <threshold.Identifier, frost.SignatureShare>{
-      keyPkg1.identifier: share1,
-      recoveryId: frost.SignatureShare(recoveryShareScalar),
-    };
-
-    return frost.aggregate(signingPkg, sharesMap, groupPubKey);
-  }
-
-  // --- POLICY MANAGEMENT ---
-
-  Future<void> updatePolicy(String policyId,
-      {int? thresholdSats, int? intervalSeconds}) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot update policy.");
-    }
-    if (!_protectedPolicies.containsKey(policyId)) {
-      throw StateError("Policy $policyId not found.");
-    }
-
-    final existing = _protectedPolicies[policyId]!;
-    final newThreshold = thresholdSats ?? existing.thresholdSats;
-    final newInterval = intervalSeconds ?? existing.interval.inSeconds;
-    final timestampMs = DateTime.now().millisecondsSinceEpoch;
-
-    final message = threshold.RecoveryAuthMessage.buildUpdatePolicyMessage(
-      policyId: policyId,
-      thresholdSats: newThreshold,
-      intervalSeconds: newInterval,
-      timestampMs: timestampMs,
-      userIdHex: hex.encode(_userId!),
-    );
-
-    final signature = await _frostSignWithBothKeys(message);
-
-    await _stub.updatePolicy(UpdatePolicyRequest()
-      ..userId = _userId!
-      ..policyId = policyId
-      ..thresholdSats = Int64(newThreshold)
-      ..intervalSeconds = Int64(newInterval)
-      ..frostSignatureR = signature.serialize().sublist(0, 32)
-      ..frostSignatureZ = signature.serialize().sublist(32, 64)
-      ..timestampMs = Int64(timestampMs));
-
-    // Update local state
-    _protectedPolicies[policyId] = ProtectedPolicy(
-      id: policyId,
-      keyPackage: existing.keyPackage,
-      publicKeyPackage: existing.publicKeyPackage,
-      startTime: existing.startTime,
-      interval: Duration(seconds: newInterval),
-      thresholdSats: newThreshold,
-    );
-    await _saveState();
-  }
-
-  Future<void> deletePolicy(String policyId) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot delete policy.");
-    }
-    if (!_protectedPolicies.containsKey(policyId)) {
-      throw StateError("Policy $policyId not found.");
-    }
-
-    final timestampMs = DateTime.now().millisecondsSinceEpoch;
-
-    final message = threshold.RecoveryAuthMessage.buildDeletePolicyMessage(
-      policyId: policyId,
-      timestampMs: timestampMs,
-      userIdHex: hex.encode(_userId!),
-    );
-
-    final signature = await _frostSignWithBothKeys(message);
-
-    await _stub.deletePolicy(DeletePolicyRequest()
-      ..userId = _userId!
-      ..policyId = policyId
-      ..frostSignatureR = signature.serialize().sublist(0, 32)
-      ..frostSignatureZ = signature.serialize().sublist(32, 64)
-      ..timestampMs = Int64(timestampMs));
-
-    // Update local state
-    _protectedPolicies.remove(policyId);
-    await _saveState();
-  }
 
   // Helpers
   Map<String, String> _buildSharesMap(
@@ -1043,7 +902,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot get Ark info.");
     }
-    final auth = _authHelper!.signForGetArkInfo();
+    final auth = _authSig((h) => h.signForGetArkInfo());
     return await _stub.getArkInfo(GetArkInfoRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1054,7 +913,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot get Ark address.");
     }
-    final auth = _authHelper!.signForGetArkAddress();
+    final auth = _authSig((h) => h.signForGetArkAddress());
     final response = await _stub.getArkAddress(GetArkAddressRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1066,7 +925,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot get boarding address.");
     }
-    final auth = _authHelper!.signForGetBoardingAddress();
+    final auth = _authSig((h) => h.signForGetBoardingAddress());
     final response = await _stub.getBoardingAddress(GetBoardingAddressRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1078,7 +937,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot list VTXOs.");
     }
-    final auth = _authHelper!.signForListVtxos();
+    final auth = _authSig((h) => h.signForListVtxos());
     return await _stub.listVtxos(ListVtxosRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1089,19 +948,8 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot list Ark transactions.");
     }
-    final auth = _authHelper!.signForListArkTransactions();
+    final auth = _authSig((h) => h.signForListArkTransactions());
     return await _stub.listArkTransactions(ListArkTransactionsRequest()
-      ..userId = _userId!
-      ..signature = auth.signature
-      ..timestampMs = auth.timestampMs);
-  }
-
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance() async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot check boarding balance.");
-    }
-    final auth = _authHelper!.signForCheckBoardingBalance();
-    return await _stub.checkBoardingBalance(CheckBoardingBalanceRequest()
       ..userId = _userId!
       ..signature = auth.signature
       ..timestampMs = auth.timestampMs);
@@ -1112,8 +960,7 @@ class MpcClient {
   /// 2-round flow:
   /// Phase 1: get sighashes (ark tx + checkpoint tx inputs)
   /// Phase 2: send FROST signatures, server submits to ASP + finalizes
-  Future<String> sendVtxo(String recipientArkAddress, int amountSats,
-      {String? policyId, String? pin}) async {
+  Future<String> sendVtxo(String recipientArkAddress, int amountSats) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot send VTXO.");
     }
@@ -1130,9 +977,12 @@ class MpcClient {
     // 3. Get change address (our own Ark address)
     final changeAddr = await getArkAddress();
 
-    // 4. Get owner x-only pubkey (strip 02/03 prefix from userId)
-    final userIdHex = hex.encode(_userId!);
-    final ownerPk = userIdHex.length == 66 ? userIdHex.substring(2) : userIdHex;
+    // 4. Owner x-only pubkey. VTXOs are locked to the GROUP key (a FROST aggregate verifies under
+    //    it), NOT `_userId` — the share key builds a taptree the ASP rejects as INVALID_PSBT_INPUT.
+    final ownerPk = groupXOnlyPubKey;
+    if (ownerPk == null) {
+      throw StateError('Group key unavailable — cannot build an Ark send.');
+    }
 
     // Use exit_delay from first VTXO (all should be same type)
     // VTXOs from server don't carry exit_delay, so use unilateral_exit_delay
@@ -1169,15 +1019,12 @@ class MpcClient {
     );
 
     try {
-      // 6. FROST sign each sighash via sign() which handles client-side policy
-      //    key correction. Pass real PSBT bytes as fullTransaction so the server
-      //    independently evaluates the same net spend for policy selection.
+      // 6. FROST sign each sighash. Pass real PSBT bytes as fullTransaction so
+      //    the server independently evaluates the same net spend.
       final sigHexes = <String>[];
       for (final sighash in session.sighashes) {
         final sig = await sign(
           sighash,
-          policyId: policyId,
-          pin: pin,
           fullTransaction: session.arkTxBytes,
           applyTweak: false, // script-path spend
         );
@@ -1199,7 +1046,7 @@ class MpcClient {
       // 8. Submit via server proxy (server forwards to ASP + counter-signs)
       final spentOutpoints = vtxosResp.vtxos.map((v) => '${v.txid}:${v.vout}').toList();
 
-      final auth = _authHelper!.signForSendVtxo();
+      final auth = _authSig((h) => h.signForSendVtxo());
       final resp = await _stub.submitArkSend(SubmitArkSendRequest()
         ..userId = _userId!
         ..signature = auth.signature
@@ -1223,7 +1070,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot submit Ark send.");
     }
-    final auth = _authHelper!.signForSendVtxo();
+    final auth = _authSig((h) => h.signForSendVtxo());
     final resp = await _stub.submitArkSend(SubmitArkSendRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1238,7 +1085,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot redeem VTXO.");
     }
-    final auth = _authHelper!.signForRedeemVtxo();
+    final auth = _authSig((h) => h.signForRedeemVtxo());
     return await _stub.redeemVtxo(RedeemVtxoRequest()
       ..userId = _userId!
       ..onChainAddress = onChainAddress
@@ -1254,7 +1101,10 @@ class MpcClient {
   /// and redeems), not "promote my boarding UTXO into a VTXO." Server-side
   /// `SignStep1` forces the normal key package whenever an active settle
   /// or delegate session is in flight, so no PIN is required.
-  Future<String> settle() async {
+  /// [boardingUtxos] are the wallet-scanned on-chain boarding outputs to settle
+  /// — the cosigner no longer scans the chain. They are sent on the phase-1
+  /// (no-signatures) request.
+  Future<String> settle({List<BoardingUtxo> boardingUtxos = const []}) async {
     if (_userId == null) {
       throw StateError("User ID is null, cannot settle.");
     }
@@ -1262,13 +1112,16 @@ class MpcClient {
     List<List<int>> signedMessages = [];
 
     while (true) {
-      final auth = _authHelper!.signForSettle();
+      final auth = _authSig((h) => h.signForSettle());
       final request = SettleRequest()
         ..userId = _userId!
         ..signature = auth.signature
         ..timestampMs = auth.timestampMs;
       if (signedMessages.isNotEmpty) {
         request.signedMessages.addAll(signedMessages);
+      } else {
+        // Phase 1: supply the boarding UTXOs the wallet found on-chain.
+        request.boardingUtxos.addAll(boardingUtxos);
       }
 
       final response = await _stub.settle(request);
@@ -1289,10 +1142,7 @@ class MpcClient {
         for (final sighash in response.messagesToSign) {
           final sighashBytes = Uint8List.fromList(sighash);
 
-          // Settling always signs with the normal policy KP. Server-side
-          // SignStep1 forces this when a settle session is active, so
-          // passing pin/policyId here would only cause a key mismatch
-          // and a FROST aggregation failure.
+          // Settling always signs with the normal policy KP.
           final sig = await sign(
             sighashBytes,
             applyTweak: !scriptPath,
@@ -1341,7 +1191,7 @@ class MpcClient {
     }
 
     // Phase 1: request sighashes
-    final auth1 = _authHelper!.signForSettleDelegate();
+    final auth1 = _authSig((h) => h.signForSettleDelegate());
     final req1 = SettleDelegateRequest()
       ..userId = _userId!
       ..signature = auth1.signature
@@ -1381,7 +1231,7 @@ class MpcClient {
 
     // Phase 2: send signatures. When storeOnly, the server holds the intent
     // and the auto-settle tick task drives it later.
-    final auth2 = _authHelper!.signForSettleDelegate();
+    final auth2 = _authSig((h) => h.signForSettleDelegate());
     final req2 = SettleDelegateRequest()
       ..userId = _userId!
       ..signature = auth2.signature
@@ -1415,7 +1265,7 @@ class MpcClient {
     if (_userId == null) {
       throw StateError("User ID is null, cannot registerDeviceToken.");
     }
-    final auth = _authHelper!.signForRegisterDeviceToken();
+    final auth = _authSig((h) => h.signForRegisterDeviceToken());
     final req = RegisterDeviceTokenRequest()
       ..userId = _userId!
       ..signature = auth.signature
@@ -1426,62 +1276,93 @@ class MpcClient {
     await _stub.registerDeviceToken(req);
   }
 
-  // --- BROADCAST ---
-  Future<String> broadcastTransaction(String txHex) async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot broadcast transaction.");
+
+  // ---------------------------------------------------------------------------
+  // Request-to-pay
+  // ---------------------------------------------------------------------------
+  //
+  // These use [userId] like every other call, so the URL id, body `user_id` and the session
+  // token's `sub` agree (the runtime checks the token first). The cosigner resolves that id to the
+  // wallet's GROUP key itself — the key a payee address must derive from.
+
+  List<int> _idOrThrow() {
+    final id = _userId;
+    if (id == null) {
+      throw StateError('User id unavailable — complete DKG before using payment requests.');
     }
-
-    final request = BroadcastTransactionRequest()
-      ..userId = _userId!
-      ..txHex = txHex;
-
-    final response = await _stub.broadcastTransaction(request);
-    return response.txId;
+    return id;
   }
 
-  // --- SYNC ---
-  Future<List<UtxoInfo>> fetchHistory() async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot fetch history.");
-    }
-
-    final auth = _authHelper!.signForFetchHistory();
-    final response = await _stub.fetchHistory(FetchHistoryRequest()
-      ..userId = _userId!
+  /// Authorize [contactGroupKeyHex] to send this wallet payment requests.
+  Future<void> contactAdd(String contactGroupKeyHex, String label) async {
+    final auth = _authSig((h) => h.signForContactAdd());
+    await _stub.contactAdd(ContactAddRequest()
+      ..userId = _idOrThrow()
+      ..contactVerifyingKey = hex.decode(contactGroupKeyHex)
+      ..label = label
       ..signature = auth.signature
       ..timestampMs = auth.timestampMs);
-    return response.utxos;
   }
 
-  Stream<TransactionNotification> subscribeToHistory() {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot subscribe to history.");
-    }
+  /// Revoke a contact. Their pending requests are dropped too.
+  Future<void> contactRemove(String contactGroupKeyHex) async {
+    final auth = _authSig((h) => h.signForContactRemove());
+    await _stub.contactRemove(ContactRemoveRequest()
+      ..userId = _idOrThrow()
+      ..contactVerifyingKey = hex.decode(contactGroupKeyHex)
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
 
-    if (_stub is GrpcWalletApi) {
-      final grpc = _stub as GrpcWalletApi;
-      final auth = _authHelper!.signForSubscribeHistory();
-      return grpc.subscribeToHistory(SubscribeToHistoryRequest()
-        ..userId = _userId!
+  Future<List<Contact>> contactList() async {
+    final auth = _authSig((h) => h.signForContactList());
+    final resp = await _stub.contactList(ContactListRequest()
+      ..userId = _idOrThrow()
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+    return resp.contacts;
+  }
+
+  /// Ask [payerGroupKeyHex] to pay us. Addressed to THEIR actor while identifying US; their
+  /// allowlist is the authorization. The payee address is derived by their cosigner from our
+  /// group key — we never supply it.
+  Future<PaymentIntent> requestPayment(
+    String payerGroupKeyHex,
+    int amountSats, {
+    String memo = '',
+    int expiresInSecs = 0,
+  }) async {
+    final auth = _authSig((h) => h.signForPayreqCreate());
+    final resp = await _stub.createPaymentRequest(
+      PaymentRequestCreateRequest()
+        ..userId = _idOrThrow()
+        ..amountSats = Int64(amountSats)
+        ..memo = memo
+        ..expiresInSecs = Int64(expiresInSecs)
         ..signature = auth.signature
-        ..timestampMs = auth.timestampMs);
-    }
-    // REST transport: no streaming, return empty stream (caller uses polling).
-    return const Stream.empty();
+        ..timestampMs = auth.timestampMs,
+      payerGroupKeyHex,
+    );
+    return resp.intent;
   }
 
-  Future<List<TransactionSummary>> fetchRecentTransactions() async {
-    if (_userId == null) {
-      throw StateError("User ID is null, cannot fetch recent transactions.");
-    }
-
-    final auth = _authHelper!.signForFetchRecentTransactions();
-    final response =
-        await _stub.fetchRecentTransactions(FetchRecentTransactionsRequest()
-          ..userId = _userId!
-          ..signature = auth.signature
-          ..timestampMs = auth.timestampMs);
-    return response.transactions;
+  /// Payment requests addressed to this wallet, newest first.
+  Future<List<PaymentIntent>> paymentRequests() async {
+    final auth = _authSig((h) => h.signForPayreqList());
+    final resp = await _stub.paymentRequestList(PaymentRequestListRequest()
+      ..userId = _idOrThrow()
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+    return resp.intents;
   }
+
+  Future<void> declinePaymentRequest(String id) async {
+    final auth = _authSig((h) => h.signForPayreqDecline());
+    await _stub.paymentRequestDecline(PaymentRequestDeclineRequest()
+      ..userId = _idOrThrow()
+      ..id = id
+      ..signature = auth.signature
+      ..timestampMs = auth.timestampMs);
+  }
+
 }

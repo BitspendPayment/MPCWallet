@@ -120,6 +120,49 @@ impl FcmClient {
         Ok(())
     }
 
+    /// Send a USER-VISIBLE notification (title/body) plus a data payload. Used
+    /// for boarding deposits: the user taps the notification to board (no
+    /// background processing, so a normal-priority visible push, not silent).
+    pub async fn send_notification(
+        &self,
+        target_token: &str,
+        title: &str,
+        body: &str,
+        data: &HashMap<String, String>,
+    ) -> Result<(), String> {
+        let access = self.access_token().await?;
+        let url = format!(
+            "{}/v1/projects/{}/messages:send",
+            self.base_url, self.sa.project_id
+        );
+        let body = serde_json::json!({
+            "message": {
+                "token": target_token,
+                "notification": { "title": title, "body": body },
+                "data": data,
+                "android": { "priority": "HIGH" },
+                "apns": {
+                    "headers": { "apns-priority": "10" },
+                    "payload": { "aps": { "alert": { "title": title, "body": body } } }
+                }
+            }
+        });
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&access)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| format!("FCM POST: {e}"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(format!("FCM send returned {status}: {body}"));
+        }
+        Ok(())
+    }
+
     async fn access_token(&self) -> Result<String, String> {
         let now = unix_secs();
         {
@@ -157,8 +200,8 @@ impl FcmClient {
             exp: now + 3600,
         };
         let header = Header::new(Algorithm::RS256);
-        let jwt = encode(&header, &claims, &self.encoding_key)
-            .map_err(|e| format!("sign JWT: {e}"))?;
+        let jwt =
+            encode(&header, &claims, &self.encoding_key).map_err(|e| format!("sign JWT: {e}"))?;
         let resp = self
             .http
             .post(&token_uri)

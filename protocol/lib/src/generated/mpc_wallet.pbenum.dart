@@ -1,18 +1,22 @@
-///
+//
 //  Generated code. Do not modify.
 //  source: mpc_wallet.proto
 //
 // @dart = 2.12
-// ignore_for_file: annotate_overrides,camel_case_types,constant_identifier_names,directives_ordering,library_prefixes,non_constant_identifier_names,prefer_final_fields,return_of_invalid_type,unnecessary_const,unnecessary_import,unnecessary_this,unused_import,unused_shown_name
 
-// ignore_for_file: UNDEFINED_SHOWN_NAME
+// ignore_for_file: annotate_overrides, camel_case_types, comment_references
+// ignore_for_file: constant_identifier_names, library_prefixes
+// ignore_for_file: non_constant_identifier_names, prefer_final_fields
+// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+
 import 'dart:core' as $core;
+
 import 'package:protobuf/protobuf.dart' as $pb;
 
 class SendVtxoResponse_Status extends $pb.ProtobufEnum {
-  static const SendVtxoResponse_Status SIGNING_REQUIRED = SendVtxoResponse_Status._(0, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SIGNING_REQUIRED');
-  static const SendVtxoResponse_Status SETTLED = SendVtxoResponse_Status._(1, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SETTLED');
-  static const SendVtxoResponse_Status ERROR = SendVtxoResponse_Status._(2, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'ERROR');
+  static const SendVtxoResponse_Status SIGNING_REQUIRED = SendVtxoResponse_Status._(0, _omitEnumNames ? '' : 'SIGNING_REQUIRED');
+  static const SendVtxoResponse_Status SETTLED = SendVtxoResponse_Status._(1, _omitEnumNames ? '' : 'SETTLED');
+  static const SendVtxoResponse_Status ERROR = SendVtxoResponse_Status._(2, _omitEnumNames ? '' : 'ERROR');
 
   static const $core.List<SendVtxoResponse_Status> values = <SendVtxoResponse_Status> [
     SIGNING_REQUIRED,
@@ -27,10 +31,10 @@ class SendVtxoResponse_Status extends $pb.ProtobufEnum {
 }
 
 class SettleResponse_Status extends $pb.ProtobufEnum {
-  static const SettleResponse_Status SIGNING_REQUIRED = SettleResponse_Status._(0, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SIGNING_REQUIRED');
-  static const SettleResponse_Status WAITING_FOR_BATCH = SettleResponse_Status._(1, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'WAITING_FOR_BATCH');
-  static const SettleResponse_Status SETTLED = SettleResponse_Status._(2, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SETTLED');
-  static const SettleResponse_Status ERROR = SettleResponse_Status._(3, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'ERROR');
+  static const SettleResponse_Status SIGNING_REQUIRED = SettleResponse_Status._(0, _omitEnumNames ? '' : 'SIGNING_REQUIRED');
+  static const SettleResponse_Status WAITING_FOR_BATCH = SettleResponse_Status._(1, _omitEnumNames ? '' : 'WAITING_FOR_BATCH');
+  static const SettleResponse_Status SETTLED = SettleResponse_Status._(2, _omitEnumNames ? '' : 'SETTLED');
+  static const SettleResponse_Status ERROR = SettleResponse_Status._(3, _omitEnumNames ? '' : 'ERROR');
 
   static const $core.List<SettleResponse_Status> values = <SettleResponse_Status> [
     SIGNING_REQUIRED,
@@ -46,10 +50,10 @@ class SettleResponse_Status extends $pb.ProtobufEnum {
 }
 
 class SettleDelegateResponse_Status extends $pb.ProtobufEnum {
-  static const SettleDelegateResponse_Status SIGNING_REQUIRED = SettleDelegateResponse_Status._(0, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SIGNING_REQUIRED');
-  static const SettleDelegateResponse_Status SETTLED = SettleDelegateResponse_Status._(1, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'SETTLED');
-  static const SettleDelegateResponse_Status ERROR = SettleDelegateResponse_Status._(2, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'ERROR');
-  static const SettleDelegateResponse_Status DELEGATED = SettleDelegateResponse_Status._(3, const $core.bool.fromEnvironment('protobuf.omit_enum_names') ? '' : 'DELEGATED');
+  static const SettleDelegateResponse_Status SIGNING_REQUIRED = SettleDelegateResponse_Status._(0, _omitEnumNames ? '' : 'SIGNING_REQUIRED');
+  static const SettleDelegateResponse_Status SETTLED = SettleDelegateResponse_Status._(1, _omitEnumNames ? '' : 'SETTLED');
+  static const SettleDelegateResponse_Status ERROR = SettleDelegateResponse_Status._(2, _omitEnumNames ? '' : 'ERROR');
+  static const SettleDelegateResponse_Status DELEGATED = SettleDelegateResponse_Status._(3, _omitEnumNames ? '' : 'DELEGATED');
 
   static const $core.List<SettleDelegateResponse_Status> values = <SettleDelegateResponse_Status> [
     SIGNING_REQUIRED,
@@ -64,3 +68,5 @@ class SettleDelegateResponse_Status extends $pb.ProtobufEnum {
   const SettleDelegateResponse_Status._($core.int v, $core.String n) : super(v, n);
 }
 
+
+const _omitEnumNames = $core.bool.fromEnvironment('protobuf.omit_enum_names');

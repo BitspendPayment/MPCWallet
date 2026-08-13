@@ -3,8 +3,8 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    bitcoin, config, cosigner, dkg_coordinator, fcm_client, persistence, rest_api, shared,
-    telemetry, vtxo_stream,
+    config, contract, cosigner, esplora, fcm_client, onboarding, kv_store, rest_api, shared,
+    telemetry, vtxo_stream, webauthn_server,
 };
 
 #[derive(Parser)]
@@ -13,11 +13,6 @@ use cosigner_runtime::{
     about = "MPC Wallet Server with per-user WASM crypto isolation"
 )]
 struct Args {
-    /// Path to the cosigner WASM component.
-    /// Falls back to COSIGNER_WASM_PATH env var, then the local build path.
-    #[arg(long)]
-    wasm: Option<String>,
-
     /// REST/JSON listen port (HTTP/1.1). Defaults to PORT env var or 7074.
     #[arg(long)]
     port: Option<u16>,
@@ -30,12 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = Args::parse();
 
     let cfg = config::ServerConfig::from_environment();
-    tracing::info!(
-        "Config: electrum={}:{}, network={}",
-        cfg.electrum_url,
-        cfg.electrum_port,
-        cfg.bitcoin_network
-    );
+    tracing::info!("Config: network={}", cfg.bitcoin_network);
 
     // Refuse to boot with an empty `bitcoin_network`. The client uses this
     // string verbatim as the HRP source for rendering wallet addresses; an
@@ -52,66 +42,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .into());
     }
 
-    // Persistence backend.
-    let (persistence, secret_store): (
-        Arc<dyn persistence::KvStore>,
-        Arc<dyn persistence::SecretStore>,
-    ) = match cfg.persistence_backend.as_str() {
-        #[cfg(feature = "enclave-backend")]
-        "enclave" => {
-            tracing::info!("Persistence: enclave supervisor at {}", cfg.supervisor_url);
-            let store = Arc::new(persistence::EnclaveStore::new(
-                cfg.supervisor_url.clone(),
-                cfg.enclave_mgmt_token.clone(),
-            ));
-            (store.clone(), store)
-        }
-        #[cfg(feature = "sled-backend")]
-        _ => {
-            let data_dir = std::path::Path::new(&cfg.data_dir);
-            std::fs::create_dir_all(data_dir)?;
-            tracing::info!("Persistence: Sled at {}", cfg.data_dir);
-            let store = Arc::new(persistence::SledStore::open(data_dir)?);
-            (store.clone(), store)
-        }
-        #[cfg(not(feature = "sled-backend"))]
-        other => {
-            panic!("Unknown persistence backend: {other}");
-        }
-    };
+    // Persistence: the single embedded SQLite KV backend, a file on the local data volume.
+    tracing::info!("Persistence: SQLite KV backend at {}", cfg.sqlite_path);
+    let persistence: Arc<dyn kv_store::KvStore> =
+        Arc::new(kv_store::SqliteStore::open(&cfg.sqlite_path)?);
 
-    // Bitcoin services.
-    let electrum_client = bitcoin::ElectrumClient::new(&cfg.electrum_url, cfg.electrum_port);
-    let bitcoin_history = Arc::new(tokio::sync::Mutex::new(
-        bitcoin::BitcoinHistoryService::new(electrum_client),
-    ));
-
-    // Initialize Electrum connection in background.
-    let bh = bitcoin_history.clone();
-    tokio::spawn(async move {
-        let service = bh.lock().await;
-        if let Err(e) = service.init().await {
-            tracing::error!("Failed to initialize Electrum: {e}");
-        }
-    });
-
-    // Optional ASP connection.
-    let asp_client = if !cfg.asp_url.is_empty() {
-        tracing::info!("Connecting to ASP at {}", cfg.asp_url);
-        match ark::client::AspClient::connect(&cfg.asp_url).await {
-            Ok(client) => {
-                tracing::info!("Connected to ASP");
-                Some(client)
-            }
-            Err(e) => {
-                tracing::warn!("Failed to connect to ASP: {e} (Ark RPCs will be unavailable)");
-                None
-            }
-        }
-    } else {
-        tracing::info!("ASP_URL not set, Ark RPCs disabled");
-        None
-    };
+    // ASP connection — REQUIRED. The cosigner is an Ark wallet co-signer; it cannot serve without
+    // an ASP, so a missing URL or a failed connect is a hard startup error, not a soft fallback.
+    if cfg.asp_url.is_empty() {
+        return Err("ASP_URL is required".into());
+    }
+    tracing::info!("Connecting to ASP at {}", cfg.asp_url);
+    let asp_client = ark::client::AspClient::connect(&cfg.asp_url)
+        .await
+        .map_err(|e| format!("Failed to connect to ASP at {}: {e}", cfg.asp_url))?;
+    tracing::info!("Connected to ASP");
 
     // FCM push client (optional; auto-settle still works without it).
     let fcm = if cfg.fcm_service_account_json.trim().is_empty() {
@@ -147,20 +92,69 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let shared = Arc::new(shared::SharedServices::new(
+    let session_authority = std::sync::Arc::new(
+        cosigner_runtime::auth::session::SessionAuthority::from_secret_hex(&cfg.webauth_token_secret),
+    );
+    if session_authority.enabled() {
+        tracing::info!("Session-token auth enabled (WEBAUTH_TOKEN_SECRET configured)");
+    } else {
+        // Not merely informational: a passkey-GATED wallet authenticates by
+        // session token alone (its Schnorr signature is empty), so without a
+        // token secret every request from a gated wallet is rejected.
+        tracing::warn!(
+            "Session-token auth DISABLED (no WEBAUTH_TOKEN_SECRET); Schnorr-only — \
+             passkey-gated wallets cannot authenticate against this deployment"
+        );
+    }
+
+    let mut shared = shared::SharedServices::new(
         persistence,
-        secret_store,
-        bitcoin_history,
         asp_client,
         fcm,
         cfg.auto_settle_safety_margin_secs,
         cfg.actor_idle_threshold_secs,
-    ));
+        session_authority,
+    );
 
-    // WASM source: CLI > env > config default.
-    let wasm_source = args.wasm.unwrap_or(cfg.cosigner_wasm_path.clone());
-    tracing::info!("Loading WASM component from: {}", wasm_source);
-    let registry = cosigner::CosignerRegistry::new(&wasm_source, shared.clone())?;
+    // Contracts are stored in the cosigner's own KV at eVTXO creation; the gate
+    // resolves them from there. Gating is a no-op if the engine fails to init.
+    let contract_registry: Box<dyn contract::ContractRegistry> =
+        Box::new(contract::KvRegistry::new(shared.persistence.clone()));
+    match contract::ContractHost::new(contract_registry) {
+        Ok(host) => {
+            tracing::info!("Contract engine ready");
+            shared.contract_host = Some(Arc::new(host));
+        }
+        Err(e) => tracing::warn!("Contract engine disabled: {e}"),
+    }
+
+    // WebAuthn ceremony server: the cosigner is its own Relying Party (register/assert + session
+    // token mint). Disabled (None) if the RP config is invalid, rather than aborting startup.
+    match webauthn_server::WebauthnServer::new(
+        webauthn_server::RpConfig {
+            rp_id: &cfg.webauth_rp_id,
+            rp_origin: &cfg.webauth_rp_origin,
+            android_origin: &cfg.webauth_android_origin,
+            rp_name: &cfg.webauth_rp_name,
+        },
+        shared.persistence.clone(),
+        shared.session_authority.clone(),
+    ) {
+        Ok(server) => {
+            tracing::info!(
+                "WebAuthn server ready (rp_id={}, origin={})",
+                cfg.webauth_rp_id,
+                cfg.webauth_rp_origin
+            );
+            shared.webauthn = Some(Arc::new(server));
+        }
+        Err(e) => tracing::warn!("WebAuthn server disabled: {e}"),
+    }
+
+    let shared = Arc::new(shared);
+
+    // The cosigner runs natively in-process (no WASM guest); only the contract is sandboxed WASM.
+    let registry = cosigner::CosignerRegistry::new(shared.clone())?;
 
     // Populate cross-user secondary indices from persistence so restore /
     // VTXO-stream lookups don't need to wake any actor.
@@ -168,8 +162,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("Failed to load registry indices from persistence: {e}");
     }
 
-    // Spawn the global VTXO stream task if ASP is configured.
-    if shared.asp_client.is_some() {
+    // Spawn the global VTXO stream task.
+    {
         let registry_clone = registry.clone();
         let shared_clone = shared.clone();
         tokio::spawn(async move {
@@ -181,21 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // intent in sled and send TickAutoSettle to their actor (cold-spawning
     // if needed).
     //
-    // Sled is the source of truth for "this user has a stored intent the
-    // cosigner needs to drive." Iterating the in-memory DashMap would miss
-    // users whose actor isn't spawned — which is exactly the post-restart
-    // case Phase 2 of the persistence work was meant to fix. Iterating
-    // sled lets the tick fire for any user with a delegate row regardless
-    // of whether they've made a request since the last cosigner-runtime
-    // boot.
-    //
-    // Cost: `get_or_spawn` for a cold user instantiates a new WASM Store.
-    // We only pay this for users with a delegate row — which is exactly
-    // the set that has work to do. Auto-settle either succeeds (sled row
-    // and in-memory record both clear, the actor settles back into idle
-    // and eventually evicts) or fails (same outcome — client re-delegates
-    // on next refresh).
-    if shared.asp_client.is_some() {
+    {
         let registry_clone = registry.clone();
         let persistence_clone = shared.persistence.clone();
         tokio::spawn(async move {
@@ -205,11 +185,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             interval.tick().await;
             loop {
                 interval.tick().await;
-                let candidates = match persistence_clone.get_all("delegate_sessions") {
+                // spawn + tick every actor with a pending guest-delegate threshold
+                // marker, so a stored delegate auto-settles even after a runtime
+                // restart.
+                let candidates = match persistence_clone.get_all("guest_delegate_thresholds") {
                     Ok(rows) => rows,
                     Err(e) => {
                         tracing::warn!(
-                            "auto-settle tick: get_all delegate_sessions failed: {e}"
+                            "auto-settle tick: get_all guest_delegate_thresholds failed: {e}"
                         );
                         continue;
                     }
@@ -218,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 tracing::debug!(
-                    "auto-settle tick: {} user(s) with stored delegate",
+                    "auto-settle tick: {} user(s) with stored guest-delegate marker",
                     candidates.len()
                 );
                 for (user_id, _value) in candidates {
@@ -229,9 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             continue;
                         }
                     };
-                    if let Err(e) =
-                        handle.try_send(cosigner::CosignerCommand::TickAutoSettle)
-                    {
+                    if let Err(e) = handle.try_send(cosigner::CosignerCommand::TickAutoSettle) {
                         tracing::debug!("auto-settle tick: skip {user_id}: {e}");
                     }
                 }
@@ -239,12 +220,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Idle-eviction sweep (issue #30 gap 3): every 60s, drop actors that
-    // haven't recv'd anything for `ACTOR_IDLE_THRESHOLD_SECS`. Runs
+    // Boarding watcher: every 60s, poll each user's recorded boarding address
+    // via esplora and push a "tap to board" notification for new confirmed
+    // deposits. The cosigner's ONLY chain dependency — read-only, opt-in via
+    // ESPLORA_URL, and inert without FCM. The wallet still scans + signs.
+    if !cfg.esplora_url.is_empty() {
+        if let Some(fcm) = shared.fcm.clone() {
+            let persistence_clone = shared.persistence.clone();
+            let esplora_client = esplora::EsploraClient::new(&cfg.esplora_url);
+            let interval_secs = cfg.boarding_watch_interval_secs.max(1);
+            tracing::info!(
+                "Boarding watcher enabled (esplora {}, every {interval_secs}s)",
+                cfg.esplora_url
+            );
+            tokio::spawn(async move {
+                let mut interval =
+                    tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+                interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+                interval.tick().await;
+                loop {
+                    interval.tick().await;
+                    cosigner::registry::boarding_watch_sweep(
+                        &esplora_client,
+                        &persistence_clone,
+                        &fcm,
+                    )
+                    .await;
+                }
+            });
+        } else {
+            tracing::warn!("ESPLORA_URL set but FCM unconfigured; boarding watcher disabled");
+        }
+    }
+
+    // every 24 hr, drop actors that haven't recv'd anything for `ACTOR_IDLE_THRESHOLD_SECS`. Runs
     // independently of ASP — purely a memory-pressure relief mechanism.
     //
     // The auto-settle tick above now only sends to users with a stored
-    // delegate row in sled, so it no longer keeps every spawned actor's
+    // delegate row in store, so it no longer keeps every spawned actor's
     // `last_active` fresh. Idle actors (no client RPCs, no stream events,
     // no stored delegate) will now eventually evict in production —
     // exactly the behaviour the sweep was designed for.
@@ -252,7 +265,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let registry_clone = registry.clone();
         let threshold = shared.actor_idle_threshold_secs;
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60 * 60 * 24));
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await; // skip immediate fire
             loop {
@@ -265,17 +278,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // DKG coordinator: short-lived per-user ceremony sessions, evicted on
+    // Onboarding coordinator: short-lived per-user ceremony sessions, evicted on
     // TTL. Spawned independently of the per-user registry — the post-DKG
     // actor is lazy-spawned by the first sign/ark/refresh/policy call.
     let dkg_ttl = std::time::Duration::from_secs(cfg.dkg_session_ttl_secs);
-    let dkg_coord = dkg_coordinator::DkgCoordinator::new(shared.clone(), dkg_ttl);
+    let onboarding_mgr =
+        onboarding::OnboardingManager::with_registry(shared.clone(), registry.clone(), dkg_ttl);
     {
-        let coord = dkg_coord.clone();
+        let coord = onboarding_mgr.clone();
         tokio::spawn(async move {
             coord.run_eviction_loop().await;
         });
     }
+
+    // Contract-creation coordinator: refreshes V onto the service pairing INSIDE the wallet's
+    // guest (Plan A — the host never reads V), so it needs the actor registry to dispatch.
+    let contract_mgr = contract::ContractManager::new(shared.clone(), registry.clone());
 
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
@@ -286,7 +304,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
     let app_state = rest_api::AppState {
         registry: registry.clone(),
-        dkg_coordinator: dkg_coord.clone(),
+        onboarding_manager: onboarding_mgr.clone(),
+        contract_manager: contract_mgr.clone(),
         server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
             bitcoin_network: cfg.bitcoin_network.clone(),
         }),

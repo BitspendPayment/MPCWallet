@@ -706,7 +706,7 @@ resource "aws_subnet" "public" {
   tags = { Name = "${local.prefix}-public" }
 }
 
-# Private subnet (for VPC endpoints and NAT egress).
+# Private subnet (for VPC endpoint ENIs).
 resource "aws_subnet" "private" {
   count = var.local ? 0 : 1
 
@@ -736,25 +736,6 @@ resource "aws_internet_gateway" "main" {
   tags = { Name = "${local.prefix}-igw" }
 }
 
-# NAT gateway for private subnet egress.
-resource "aws_eip" "nat" {
-  count  = var.local ? 0 : 1
-  domain = "vpc"
-
-  tags = { Name = "${local.prefix}-nat-eip" }
-}
-
-resource "aws_nat_gateway" "main" {
-  count = var.local ? 0 : 1
-
-  allocation_id = aws_eip.nat[0].id
-  subnet_id     = aws_subnet.public[0].id
-
-  tags = { Name = "${local.prefix}-nat" }
-
-  depends_on = [aws_internet_gateway.main]
-}
-
 # Route tables.
 resource "aws_route_table" "public" {
   count  = var.local ? 0 : 1
@@ -774,14 +755,12 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public[0].id
 }
 
+# No default route — private subnets only host VPC endpoint ENIs.
+# Interface endpoints (KMS, SSM) are reached directly via their in-subnet ENI;
+# S3 via the gateway endpoint route added below. No egress path needed.
 resource "aws_route_table" "private" {
   count  = var.local ? 0 : 1
   vpc_id = aws_vpc.main[0].id
-
-  route {
-    cidr_block     = "0.0.0.0/0"
-    nat_gateway_id = aws_nat_gateway.main[0].id
-  }
 
   tags = { Name = "${local.prefix}-private-rt" }
 }

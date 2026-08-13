@@ -7,7 +7,7 @@ import 'test_setup.dart';
 class Flows {
   static Future<void> completeOnboarding(
     WidgetTester tester, {
-    required String password,
+    String pin = '123456',
   }) async {
     await pumpUntilFound(
       tester,
@@ -16,13 +16,9 @@ class Flows {
     );
     await WelcomePage.tapCreate(tester);
     await tester.pumpAndSettle();
-    await SignerSelectionPage.pickSoftware(tester);
-    await SignerSelectionPage.tapContinue(tester);
+    await PinPage.enter(tester, pin);
     await tester.pumpAndSettle();
-    await PasswordPage.enter(tester, password);
-    await tester.pumpAndSettle();
-    await GoogleSignInPage.signIn(tester);
-    await tester.pumpAndSettle();
+    // Onboarding goes straight to the server step after the PIN.
     await ServerConnectPage.pickRegtest(tester);
     // Don't pumpAndSettle here — the DKG screen has a CircularProgressIndicator
     // that never "settles" until DKG completes, so pumpAndSettle would block
@@ -36,16 +32,11 @@ class Flows {
     await tester.pumpAndSettle();
   }
 
-  /// Home → Send → Review → Sign → (maybe PIN) → back to Home.
-  ///
-  /// Asserts the spending-policy PIN dialog is present-or-absent according to
-  /// [expectPin] — this is how the test pins down policy enforcement.
+  /// Home → Send → Review → Sign → back to Home.
   static Future<void> doOnChainSend(
     WidgetTester tester, {
     required String destination,
     required String amountSats,
-    required bool expectPin,
-    String pin = '123456',
   }) async {
     await HomePage.tapSend(tester);
     await tester.pumpAndSettle();
@@ -54,18 +45,6 @@ class Flows {
     await SendPage.tapReview(tester);
     await pumpUntilFound(tester, find.byKey(const Key('reviewSignBtn')));
     await ReviewPage.tapSign(tester);
-    if (expectPin) {
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('signingPinField')),
-        timeout: const Duration(seconds: 30),
-      );
-      await SigningPinDialog.enterAndAuthorize(tester, pin);
-    } else {
-      await tester.pump(const Duration(seconds: 2));
-      expect(find.byKey(const Key('signingPinField')), findsNothing,
-          reason: 'send of $amountSats sats must not prompt for PIN');
-    }
     await pumpUntilFound(
       tester,
       find.byKey(const Key('homeSendBtn')),

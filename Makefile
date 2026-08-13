@@ -2,15 +2,9 @@
 #  MPC Wallet — Makefile
 #
 #  Primary commands:
-#    make e2e            Run E2E test (no Ark)
-#    make e2e-ark        Run Ark E2E test
-#    make software       Start regtest for software signer (no USB device, no Ark)
-#    make hardware       Start regtest for hardware device (no Ark)
-#    make hardware-ark   Start regtest for hardware device with Ark
-#    make hw-build       Build HW Signer TrustZone firmware (Secure + NS)
-#    make hw-flash       Flash HW Signer via debug probe
-#    make hw-test        Smoke test HW Signer over USB HID
-#    make down           Stop everything
+#    make e2e     Run the Ark E2E suite (regtest + arkd, built and torn up fresh)
+#    make up      Start regtest + arkd + the cosigner in the foreground
+#    make down    Stop everything
 #
 #  Release (Firebase App Distribution):
 #    make release                       Build arm64 release APK + push to testers
@@ -21,28 +15,26 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e e2e-ark software software-ark hardware hardware-ark flash down \
-	bob-up bob-down \
-	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-all \
-	threshold-ffi-build ark-ffi-build enclave-ffi-build threshold-ffi-test \
-	threshold-ffi-android ark-ffi-android enclave-ffi-android \
-	threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32 \
-	cosigner-build runtime-build signer-build pico-build \
-	hw-build hw-build-secure hw-build-ns hw-flash hw-flash-probe hw-test \
+.PHONY: e2e up down \
+	bob-up bob-down bob-send \
+	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-x86_64 ffi-android-all \
+	contracts-build runtime-build \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
-	signer-run signer-stop runtime-run runtime-stop \
-	arkd-up arkd-down arkd-init \
+	runtime-run runtime-stop \
+	arkd-up arkd-down arkd-init db-reset \
 	proto threshold-test \
-	flutter flutter-run ark-newaddress crypto-bench \
+	flutter flutter-32 flutter-x86 ark-newaddress crypto-bench \
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
-	e2e-test e2e-ark-test regtest regtest-ark regtest-hardware regtest-hardware-ark regtest-hardware-ark-down \
-	integration-test integration-test-ci integration-test-ci-ark \
+	e2e-test e2e-ark-test regtest regtest-ark regtest-down \
+	cli cli-build \
 	release release-apk release-apk-fat release-testers-add release-testers-remove
 
 # ── Variables ─────────────────────────────────────────────────────────────────
 
 export DATA_DIR=/tmp/mpc_wallet_stress
+# The cosigner-runtime's single embedded SQLite KV backend — a file on local disk.
+export SQLITE_PATH=/tmp/mpc_cosigner/cosigner.db
 
 NDK_VERSION ?= 27.0.12077973
 NDK_HOME     = $(HOME)/Android/Sdk/ndk/$(NDK_VERSION)
@@ -50,11 +42,11 @@ NDK_HOME     = $(HOME)/Android/Sdk/ndk/$(NDK_VERSION)
 MUTINYNET_ASP_URL ?= http://localhost:7070
 SESSIONS          ?= 10
 CONCURRENCY       ?= 5
-SIGNER_PORT       ?= 9090
 SERVER            ?= 127.0.0.1:7074
 
-# Firebase App Distribution. Read from app/android/app/google-services.json.
-FIREBASE_APP_ID  ?= 1:575541915148:android:5fbaa581de7d4686378829
+# Firebase App Distribution. Read from app/android/app/google-services.json
+# (the com.vtxos.app client's mobilesdk_app_id).
+FIREBASE_APP_ID  ?= 1:575541915148:android:03d0cade16cd0393378829
 FIREBASE_PROJECT ?= vtxos-7afb3
 TESTERS_GROUP    ?= internal
 RELEASE_NOTES    ?= Internal build
@@ -72,47 +64,13 @@ VERSION_FLAGS = $(if $(VERSION),--build-name=$(VERSION)) $(if $(BUILD_NUMBER),--
 #  PRIMARY COMMANDS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 1) Run E2E test (no Ark) — builds server + signer, runs test, cleans up
-e2e: threshold-ffi-build cosigner-build runtime-build signer-run
-	@echo "Running E2E test..."
-	cd e2e && dart test test/full_system_test.dart
-	-pkill -f "signer-server" || true
-
-# 2) Run Ark E2E test — starts regtest + arkd, builds everything, tests, cleans up
-e2e-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run ffi-build cosigner-build runtime-build
+# Run the Ark E2E suite — starts regtest + arkd, builds everything, tests, cleans up
+e2e: runtime-stop arkd-up bitcoin-init arkd-init ffi-build runtime-build db-reset
 	@echo "Running Ark E2E test..."
 	cd e2e && dart test test/ark_e2e_test.dart
-	-pkill -f "signer-server" || true
 
-# 3) Start regtest for SOFTWARE signer (no USB device required) — server in foreground
-#    Identical infrastructure to `make hardware`; only difference is the banner.
-#    The Rust signer-server (port 9090) is NOT started — software signer runs
-#    in-app via threshold-ffi.
-software: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-build ffi-android
-	@echo ""
-	@echo "==> Software signer mode — no USB device required."
-	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
-	@echo "==> In the app, pick 'Software Signer' (default) on the first screen."
-	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
-	@echo ""
-	@bash -c 'set -m; \
-		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
-		MINE_PID=$$!; \
-		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
-		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-			--port 7074'
-
-# 3b) Start regtest + arkd for SOFTWARE signer (no USB device required) — Ark enabled
-software-ark: cosigner-build runtime-build ffi-build ffi-android
-	@echo "=== Tearing down any prior stack (volumes too, for fresh keys) ==="
-	-pkill -f "target/release/cosigner-runtime" || true
-	-pkill -f bob_proxy || true
-	-docker compose -f docker-compose.yml -f docker-compose.ark.yml down -v 2>/dev/null || true
-	-sudo rm -rf /root/.mpc_wallet/cosigner-runtime/db 2>/dev/null || true
-	-sudo rm -rf /tmp/bob_ark 2>/dev/null || true
+# Start regtest + arkd with the software 2-of-2 signer, cosigner in the foreground
+up: runtime-build ffi-build ffi-android
 	@echo "=== Starting regtest + arkd ==="
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
 	@echo "Waiting for services to stabilize (20s)..."
@@ -124,15 +82,14 @@ software-ark: cosigner-build runtime-build ffi-build ffi-android
 	@echo "=== Waiting 10s for NBXplorer to index initial blocks ==="
 	@sleep 10
 	@echo "=== Setting up Bob (ark-sample counter-party) ==="
-	$(MAKE) bob-up
+	$(MAKE) bob-up 
 	@echo "=== Setting up ADB reverse ==="
 	-adb reverse tcp:7074 tcp:7074
 	-adb reverse tcp:50001 tcp:50001
 	-adb reverse tcp:7090 tcp:7090
 	@echo ""
-	@echo "==> Software signer mode + Ark — no USB device required."
+	@echo "==> Software 2-of-2 signer mode + Ark."
 	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
-	@echo "==> In the app, pick 'Software Signer' (default) on the first screen."
 	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
 	@echo ""
 	@bash -c 'set -m; \
@@ -142,61 +99,18 @@ software-ark: cosigner-build runtime-build ffi-build ffi-android
 		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
 		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
 		       ASP_URL=http://127.0.0.1:7070 \
-		       FCM_SERVICE_ACCOUNT_JSON="$$(cat $${FCM_SA_FILE:-$$HOME/Downloads/vtxos-key.json} 2>/dev/null)"; \
+		       FCM_SERVICE_ACCOUNT_JSON="$$(cat $${FCM_SA_FILE:-$$HOME/Downloads/vtxos-key.json} 2>/dev/null)" \
+		       WEBAUTH_RP_ID=vtxos.com \
+		       WEBAUTH_RP_ORIGIN=https://vtxos.com \
+		       WEBAUTH_ANDROID_ORIGIN=android:apk-key-hash:u1pNepeObJUpSkSqH964HvFRqbhC_ejQP3GHA3-lreI,android:apk-key-hash:Lf1QIwQnlPBYPwDFhloUkYC-0tYAKSpKCQbEiyz118s \
+		       WEBAUTH_TOKEN_SECRET=$${WEBAUTH_TOKEN_SECRET:-6d706377616c6c65742d6465762d746f6b656e2d7365637265742d3332622121}; \
 		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 			--port 7074'
 
-# 4) Start regtest for hardware device (no Ark) — server runs in foreground
-hardware: regtest-up bitcoin-init adb-reverse cosigner-build runtime-build ffi-build ffi-android
-	@echo ""
-	@echo "==> Hardware signer mode — connect rp235x via USB OTG to phone."
-	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
-	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
-	@echo ""
-	@bash -c 'set -m; \
-		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
-		MINE_PID=$$!; \
-		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
-		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123; \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-			--port 7074'
-
-# 5) Start regtest for hardware device with Ark — server runs in foreground
-hardware-ark: cosigner-build runtime-build ffi-build ffi-android
-	@echo "=== Starting regtest + arkd ==="
-	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
-	@echo "Waiting for services to stabilize (10s)..."
-	@sleep 10
-	@echo "=== Initializing Bitcoin chain ==="
-	./scripts/bitcoin.sh init
-	@echo "=== Initializing arkd ==="
-	./scripts/arkd_init.sh --fund
-	@echo "=== Setting up ADB reverse ==="
-	-adb reverse tcp:7074 tcp:7074
-	-adb reverse tcp:50001 tcp:50001
-	@echo ""
-	@echo "==> Run Flutter in a separate terminal:  cd app && flutter run"
-	@echo "==> Server logs below (Ctrl+C to stop server + mine loop):"
-	@echo ""
-	@bash -c 'set -m; \
-		(while true; do ./scripts/bitcoin.sh mine 2>/dev/null; sleep 10; done) & \
-		MINE_PID=$$!; \
-		trap "kill $$MINE_PID 2>/dev/null || true; wait $$MINE_PID 2>/dev/null || true" EXIT INT TERM; \
-		export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		       BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
-		       ASP_URL=http://127.0.0.1:7070; \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-			--port 7074'
-
-# 5) Stop everything (server, signer, mine loop, Docker)
+# Stop everything (cosigner, mine loop, Docker)
 down:
 	@echo "Stopping all services..."
 	-pkill -f "target/release/cosigner-runtime" || true
-	-pkill -f "signer-server" || true
 	-pkill -f "bitcoin.sh mine" || true
 	-pkill -f "bob_proxy" || true
 	-sudo fuser -k 7074/tcp 2>/dev/null || true
@@ -228,59 +142,6 @@ bob-send:
 		--config $${BOB_DIR:-/tmp/bob_ark}/ark.config.toml \
 		--seed $${BOB_DIR:-/tmp/bob_ark}/ark.seed \
 		send-to-ark-addresses "$(ADDR),$(or $(AMT),50000)"
-
-# ═══════════════════════════════════════════════════════════════════════════════
-#  HW SIGNER (TrustZone — Secure + Non-Secure worlds)
-# ═══════════════════════════════════════════════════════════════════════════════
-
-# Build Secure world (rp235x-hal, crypto, SAU — generates target/veneers.o)
-hw-build-secure:
-	@echo "Building HW Signer Secure world..."
-	cd hwsigner-secure && cargo +nightly build --release
-
-# Build Non-Secure world (Embassy, USB HID — links veneers.o from Secure build)
-hw-build-ns: hw-build-secure
-	@echo "Building HW Signer Non-Secure world..."
-	cd hwsigner && cargo clean && cargo +nightly build --release
-
-# Build both worlds
-hw-build: hw-build-ns
-
-# Sign Secure world firmware (ECDSA secp256k1 + SHA-256)
-hw-sign: hw-build
-	@echo "Signing Secure world firmware..."
-	cp hwsigner-secure/target/thumbv8m.main-none-eabihf/release/hwsigner-secure \
-		hwsigner-secure/hwsigner-secure.elf
-	picotool seal --sign --hash \
-		hwsigner-secure/hwsigner-secure.elf \
-		hwsigner-secure/hwsigner-secure-signed.elf \
-		keys/ec_private_key.pem \
-		keys/otp.json \
-		--major 0 --minor 1
-	@echo "Signed: hwsigner-secure/hwsigner-secure-signed.elf"
-
-# Flash both worlds via debug probe (requires SWD probe connected)
-hw-flash-probe: hw-sign
-	@echo "Flashing via debug probe..."
-	cp hwsigner/target/thumbv8m.main-none-eabihf/release/hwsigner hwsigner/hwsigner.elf
-	probe-rs download --chip RP2350 hwsigner-secure/hwsigner-secure-signed.elf
-	probe-rs download --chip RP2350 hwsigner/hwsigner.elf
-	probe-rs reset --chip RP2350
-	@echo "Flashed and reset!"
-
-# Flash both worlds via BOOTSEL USB (hold BOOTSEL + plug in first)
-hw-flash: hw-sign
-	@echo "Flashing via picotool (device must be in BOOTSEL mode)..."
-	cp hwsigner/target/thumbv8m.main-none-eabihf/release/hwsigner hwsigner/hwsigner.elf
-	picotool load hwsigner-secure/hwsigner-secure-signed.elf --ignore-partitions --family rp2350-arm-s -v
-	picotool load hwsigner/hwsigner.elf --ignore-partitions --family rp2350-arm-s -v
-	picotool reboot
-	@echo "Flashed and rebooted!"
-
-# Smoke test HW Signer over USB HID (no phone needed)
-hw-test:
-	@echo "Testing HW Signer over USB HID..."
-	scripts/.venv/bin/python3 scripts/test_hwsigner.py $(ARGS)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  BUILD TARGETS
@@ -327,27 +188,26 @@ ffi-test:
 	@echo "Running merged FFI tests..."
 	cargo test --release --manifest-path ffi/Cargo.toml
 
-# DEPRECATED aliases — point at the merged ffi-build/ffi-android. Kept for one
-# release cycle so muscle memory and any out-of-tree scripts keep working.
-threshold-ffi-build ark-ffi-build enclave-ffi-build: ffi-build
-threshold-ffi-android ark-ffi-android enclave-ffi-android: ffi-android
-threshold-ffi-android-32 ark-ffi-android-32 enclave-ffi-android-32: ffi-android-arm32
-threshold-ffi-test: ffi-test
-
 # Server & cosigner
-cosigner-build:
-	@echo "Building cosigner WASM component..."
-	cd cosigner && cargo component build --release
-	@echo "Built: cosigner/target/wasm32-wasip1/release/cosigner.wasm"
+
+# WASI sysroot for cross-compiling the C deps (secp256k1-sys) of the wasm guest.
+# System clang targeting wasm32-wasip2 has no sysroot, so its stdint.h falls through
+# to /usr/include (glibc) and fails on bits/libc-header-start.h. wasi-sdk 24 ships an
+# LLVM-18 sysroot matching the system clang-18; point clang at it via --sysroot.
+contracts-build:
+	@echo "Building example WASM contracts (wasm32-wasip2 components)..."
+	cd contracts/examples/spending-limit && cargo build --release
+	@echo "Built: contracts/examples/spending-limit/target/wasm32-wasip2/release/spending_limit.wasm"
+	cd contracts/examples/oracle-gate && cargo build --release
+	@echo "Built: contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm"
+	cd contracts/examples/oracle-gate-template && cargo build --release
+	@echo "Built: oracle-gate-template (Phase 2 template, imports oracle:gate/config)"
+	cd contracts/examples/config-provider && cargo build --release
+	@echo "Built: config-provider (Phase 2 provider stub, patchable config slot)"
 
 runtime-build:
 	@echo "Building server..."
 	cd cosigner-runtime && cargo build --release
-
-signer-build:
-	@echo "Building Hardware Signer Test Server..."
-	-sudo chown -R $(USER):$(USER) e2e/signer-server/target 2>/dev/null || true
-	cd e2e/signer-server && cargo build --release
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  INFRASTRUCTURE
@@ -373,25 +233,13 @@ adb-reverse:
 	@echo "Forwarding active: phone 127.0.0.1:7074 -> PC REST server"
 	@echo "Forwarding active: phone 127.0.0.1:50001 -> PC Electrs"
 
-signer-run: signer-build
-	@echo "Starting Hardware Signer Test Server on port 9090..."
-	cd e2e/signer-server && cargo run --release -- --port 9090 &
-	@sleep 2
-
-signer-stop:
-	@echo "Stopping Hardware Signer Test Server..."
-	-sudo pkill -9 -f "signer-server" || true
-	-sudo pkill -9 signer-server || true
-	@sleep 1
-
-runtime-run: cosigner-build runtime-build
+runtime-run: runtime-build
 	@echo "Starting MPC Wallet Server on port 7074..."
 	export ELECTRUM_URL=127.0.0.1 && \
 	export ELECTRUM_PORT=50001 && \
 	export BITCOIN_RPC_USER=admin1 && \
 	export BITCOIN_RPC_PASSWORD=123 && \
 	cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 		--port 7074 &
 	@sleep 2
 	@echo "MPC Wallet Server running in background."
@@ -400,7 +248,7 @@ runtime-stop:
 	@echo "Stopping MPC Wallet Server..."
 	-sudo fuser -k 7074/tcp || true
 	-sudo pkill -9 -f "target/release/cosigner-runtime" || true
-	-sudo pkill -9 -f "cosigner-runtime --wasm" || true
+	-sudo pkill -9 -f "cosigner-runtime" || true
 	-sudo pkill -9 cosigner-runtime || true
 	sudo rm -rf $(DATA_DIR) || true
 	@sleep 2
@@ -410,6 +258,15 @@ arkd-up:
 	docker compose -f docker-compose.yml -f docker-compose.ark.yml up -d
 	@echo "Waiting for arkd to start (30s)..."
 	@sleep 30
+
+# Reset the cosigner-runtime's SQLite KV file for a clean test run. The reset is per-target
+# (NOT on runtime restart), so the `sealed_state` snapshot survives the ark_e2e restart — the
+# same guarantee the old FLUSHALL-on-redis-up gave. `-wal`/`-shm` are SQLite's sidecar files;
+# leaving them behind next to a deleted DB would resurrect stale pages.
+db-reset:
+	@rm -f $(SQLITE_PATH) $(SQLITE_PATH)-wal $(SQLITE_PATH)-shm
+	@mkdir -p $(dir $(SQLITE_PATH))
+	@echo "cosigner SQLite reset ($(SQLITE_PATH))"
 
 arkd-down:
 	@echo "Stopping arkd services..."
@@ -451,29 +308,25 @@ crypto-bench:
 #  STRESS / LOAD TESTING
 # ═══════════════════════════════════════════════════════════════════════════════
 
-stress-test: runtime-stop signer-stop regtest-up bitcoin-init signer-run runtime-run
+stress-test: runtime-stop regtest-up bitcoin-init runtime-run
 	@echo "Running Multi-User E2E Stress Test..."
 	cd e2e && dart test test/multi_user_stress_test.dart
 	@$(MAKE) runtime-stop
-	@$(MAKE) signer-stop
 
-load-test: runtime-stop signer-stop regtest-up bitcoin-init signer-run runtime-run
+load-test: runtime-stop regtest-up bitcoin-init runtime-run
 	@echo "Running Dart Load Tester (sessions=$(SESSIONS), concurrency=$(CONCURRENCY))..."
 	cd e2e && dart pub get && \
 		dart run bin/load_tester.dart \
 			--server $(SERVER) \
-			--signer-host 127.0.0.1 \
-			--signer-port $(SIGNER_PORT) \
 			--sessions $(SESSIONS) \
 			--concurrency $(CONCURRENCY)
 	@$(MAKE) runtime-stop
-	@$(MAKE) signer-stop
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  SIGNET / MUTINYNET
 # ═══════════════════════════════════════════════════════════════════════════════
 
-signet-hardware-ark: cosigner-build runtime-build ffi-build ffi-android
+signet-hardware-ark: runtime-build ffi-build ffi-android
 	@echo "=== Setting up ADB reverse ==="
 	-adb reverse tcp:7074 tcp:7074
 	@echo ""
@@ -485,7 +338,6 @@ signet-hardware-ark: cosigner-build runtime-build ffi-build ffi-android
 	export BITCOIN_NETWORK=signet && \
 	export ASP_URL=$(MUTINYNET_ASP_URL) && \
 	cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-		--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
 		--port 7074
 
 signet-down:
@@ -493,72 +345,47 @@ signet-down:
 	-pkill -f "target/release/cosigner-runtime" || true
 	@echo "Stopped."
 
-e2e-mutinynet: threshold-ffi-build cosigner-build runtime-build signer-run
+e2e-mutinynet: ffi-build runtime-build
 	@echo "Running MutinyNet E2E test..."
 	cd e2e && dart test test/mutinynet_e2e_test.dart --timeout 600s
-	-pkill -f "signer-server" || true
 
-e2e-mutinynet-ark: ffi-build cosigner-build runtime-build signer-run
+e2e-mutinynet-ark: ffi-build runtime-build
 	@echo "Running MutinyNet Ark E2E test..."
 	cd e2e && dart test test/mutinynet_ark_e2e_test.dart --timeout 900s
-	-pkill -f "signer-server" || true
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  FLUTTER INTEGRATION TESTS — UI on Android emulator against real backend
+#  CLI — regtest REPL wallet
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# Run integration tests against an emulator that's already running, with
-# services already started elsewhere (e.g. `make software` in a separate
-# terminal). Default for local dev.
-integration-test:
-	cd app && \
-		flutter test integration_test/app_test.dart
+# Interactive wallet REPL for driving a running stack by hand: onboard, fund,
+# board, send, contacts and payment requests. Point it at whatever cosigner is
+# up — `make regtest-ark` locally, or a deployment.
+#
+# REGTEST ONLY. The keystore (~/.merlin-cli/wallets.json) holds PLAINTEXT
+# signing secrets.
+#
+#   make cli                      # against the local runtime on :7074
+#   make cli URL=https://mutiny.vtxos.network
+CLI_URL ?= http://127.0.0.1:7074
+URL     ?= $(CLI_URL)
 
-# Full headless lifecycle (no Ark): boots regtest, builds FFI for x86_64
-# emulator, starts signer + runtime, runs tests, tears down.
-integration-test-ci: runtime-stop signer-stop regtest-up bitcoin-init adb-reverse \
-	ffi-android-x86_64 cosigner-build runtime-build signer-run runtime-run
-	@echo "Running integration tests..."
-	-adb reverse tcp:18443 tcp:18443
-	cd app && flutter pub get && \
-		flutter test integration_test/app_test.dart
-	$(MAKE) runtime-stop
-	$(MAKE) signer-stop
+cli:
+	@echo "merlin CLI → $(URL)  (regtest only: keystore secrets are plaintext)"
+	cd cli && COSIGNER_URL=$(URL) cargo run --release
 
-# Integration tests with the Ark stack running. The Ark test is gated on ASP
-# availability so it skips itself if arkd isn't reachable; running through
-# this target makes sure it isn't.
-integration-test-ci-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init \
-	signer-run ffi-android-x86_64 cosigner-build runtime-build
-	@echo "Running Ark integration test..."
-	-adb reverse tcp:7074 tcp:7074
-	-adb reverse tcp:50001 tcp:50001
-	-adb reverse tcp:18443 tcp:18443
-	export ELECTRUM_URL=127.0.0.1 ELECTRUM_PORT=50001 \
-		BITCOIN_RPC_USER=admin1 BITCOIN_RPC_PASSWORD=123 \
-		ASP_URL=http://127.0.0.1:7070 && \
-		cd cosigner-runtime && cargo run --release --bin cosigner-runtime -- \
-			--wasm ../cosigner/target/wasm32-wasip1/release/cosigner.wasm \
-			--port 7074 &
-	@sleep 5
-	cd app && flutter pub get && \
-		flutter test integration_test/app_test.dart
-	$(MAKE) runtime-stop
-	$(MAKE) signer-stop
-	$(MAKE) arkd-down
+# Compile without running — what CI would check.
+cli-build:
+	cd cli && cargo build --release
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  LEGACY ALIASES (old names still work)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 e2e-test: e2e
-e2e-ark-test: e2e-ark
-regtest: regtest-up bitcoin-init signer-run runtime-run
-regtest-ark: runtime-stop signer-stop arkd-up bitcoin-init arkd-init signer-run
+e2e-ark-test: e2e
+regtest: regtest-up bitcoin-init runtime-run
+regtest-ark: runtime-stop arkd-up bitcoin-init arkd-init
 regtest-down: down
-regtest-hardware: hardware
-regtest-hardware-ark: hardware-ark
-regtest-hardware-ark-down: down
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  RELEASE — Firebase App Distribution

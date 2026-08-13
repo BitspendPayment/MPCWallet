@@ -32,9 +32,10 @@ pub fn ark_address(
 /// Derive the boarding address for on-chain funding.
 ///
 /// Uses ark-core's `BoardingOutput` to ensure consistency with the batch protocol.
-/// The boarding address is a P2TR address with a 2-leaf taptree:
-/// - Forfeit leaf: `<asp_pk> CHECKSIGVERIFY <owner_pk> CHECKSIG`
-/// - Exit leaf: `<owner_pk> CHECKSIGVERIFY <delay> CSV DROP`
+/// The boarding address is a P2TR address with a 2-leaf taptree (see ark-core's
+/// `multisig_script` / `csv_sig_script` for the authoritative opcode order):
+/// - Forfeit leaf: `<asp_pk> OP_CHECKSIGVERIFY <owner_pk> OP_CHECKSIG`
+/// - Exit leaf: `<delay> OP_CSV OP_DROP <owner_pk> OP_CHECKSIG`
 ///
 /// This allows the boarding UTXO to be swept into the Ark in the next batch round.
 pub fn boarding_address(
@@ -126,4 +127,15 @@ pub fn parse_xonly_pubkey(hex: &str) -> Result<bitcoin::key::PublicKey, String> 
     Ok(bitcoin::key::PublicKey::from(
         bitcoin::secp256k1::PublicKey::from_x_only_public_key(xonly, bitcoin::key::Parity::Even),
     ))
+}
+
+/// The scriptPubKey (hex) an Ark address pays to.
+///
+/// Lets a caller recognise "this transaction output pays that address" without re-deriving the
+/// taptree — the address already commits to the tweaked output key.
+pub fn ark_address_script_pubkey_hex(ark_address: &str) -> Result<String, String> {
+    let addr: ark_core::ArkAddress = ark_address
+        .parse()
+        .map_err(|e| format!("parse ark address: {e:?}"))?;
+    Ok(hex::encode(addr.to_p2tr_script_pubkey().as_bytes()))
 }

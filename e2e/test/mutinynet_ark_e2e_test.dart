@@ -23,7 +23,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 import 'package:app_core/ark_wallet.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
+import 'package:e2e/boarding_poll.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:e2e/logger.dart';
 import 'package:hive/hive.dart';
@@ -78,7 +78,6 @@ void main() {
     serverProcess = await Process.start(
       '../cosigner-runtime/target/release/cosigner-runtime',
       [
-        '--wasm', '../cosigner/target/wasm32-wasip1/release/cosigner.wasm',
         '--port', serverPort.toString(),
       ],
       mode: ProcessStartMode.normal,
@@ -88,6 +87,9 @@ void main() {
         'BITCOIN_NETWORK': 'signet',
         'ASP_URL': _aspUrl,
         'HOME': serverTempDir.path,
+        // Per-run SQLite KV file. Same dir across restarts, so state survives a runtime
+        // bounce the way the shared Redis instance used to.
+        'SQLITE_PATH': '${serverTempDir.path}/cosigner.db',
       },
     );
 
@@ -145,9 +147,7 @@ void main() {
   test('MutinyNet Ark: Board + Send', () async {
     // 1. Alice DKG
     Log.step(1, 'Alice DKG');
-    final aliceSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await aliceSigner.connect();
-    final alice = MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: aliceSigner);
+    final alice = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: "alice_mutinynet_ark");
     await alice.doDkg();
     Log.ok('Alice DKG complete.');
 
@@ -193,7 +193,10 @@ void main() {
     // 7. Settle (board into Ark)
     Log.step(7, 'Settle (Board into Ark)');
     Log.info('Calling settle() — waiting for ASP batch round...');
-    final commitmentTxid = await alice.settle();
+    final boardingUtxos = await pollBoardingUtxos(
+        await alice.getBoardingAddress(), 1,
+        host: 'mutinynet.com', port: 50001);
+    final commitmentTxid = await settleBoarding(alice, boardingUtxos);
     Log.ok('Settled! commitment_txid=$commitmentTxid');
     expect(commitmentTxid, isNotEmpty);
 
@@ -214,9 +217,7 @@ void main() {
 
     // 9. Bob DKG
     Log.step(9, 'Bob DKG');
-    final bobSigner = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await bobSigner.connect();
-    final bob = MpcClient.rest('http://127.0.0.1:$serverPort', hardwareSigner: bobSigner, storageId: 'bob_mutinynet_ark');
+    final bob = MpcClient.rest('http://127.0.0.1:$serverPort', storageId: 'bob_mutinynet_ark');
     await bob.doDkg();
     final bobArkAddress = await bob.getArkAddress();
     Log.ok('Bob Ark address: $bobArkAddress');

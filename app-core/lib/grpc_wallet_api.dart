@@ -1,7 +1,6 @@
 /// gRPC implementation of [WalletApi] — wraps the generated [MPCWalletClient] stub.
 library;
 
-import 'package:grpc/grpc.dart';
 import 'package:grpc/src/client/channel.dart' as grpc_base;
 import 'package:protocol/protocol.dart';
 import 'wallet_api.dart';
@@ -22,41 +21,24 @@ class GrpcWalletApi implements WalletApi {
   Future<DKGStep3Response> dKGStep3(DKGStep3Request r) => _stub.dKGStep3(r);
 
   @override
-  Future<SignStep1Response> signStep1(SignStep1Request r) => _stub.signStep1(r);
+  Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) =>
+      _stub.contractCreate(r);
   @override
-  Future<SignStep2Response> signStep2(SignStep2Request r) => _stub.signStep2(r);
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+          EvtxoPendingSharesRequest r) =>
+      _stub.evtxoPendingShares(r);
+  @override
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) =>
+      _stub.evtxoAckShare(r);
 
   @override
-  Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) =>
-      _stub.refreshStep1(r);
+  Future<SignStep1Response> signStep1(SignStep1Request r,
+          {String? routeGroupKeyHex}) =>
+      _stub.signStep1(r);
   @override
-  Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) =>
-      _stub.refreshStep2(r);
-  @override
-  Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) =>
-      _stub.refreshStep3(r);
-
-  @override
-  Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) =>
-      _stub.getPolicyId(r);
-  @override
-  Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) =>
-      _stub.updatePolicy(r);
-  @override
-  Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) =>
-      _stub.deletePolicy(r);
-
-  @override
-  Future<BroadcastTransactionResponse> broadcastTransaction(
-          BroadcastTransactionRequest r) =>
-      _stub.broadcastTransaction(r);
-  @override
-  Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) =>
-      _stub.fetchHistory(r);
-  @override
-  Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
-          FetchRecentTransactionsRequest r) =>
-      _stub.fetchRecentTransactions(r);
+  Future<SignStep2Response> signStep2(SignStep2Request r,
+          {String? routeGroupKeyHex}) =>
+      _stub.signStep2(r);
 
   @override
   Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest r) =>
@@ -68,10 +50,6 @@ class GrpcWalletApi implements WalletApi {
   Future<GetBoardingAddressResponse> getBoardingAddress(
           GetBoardingAddressRequest r) =>
       _stub.getBoardingAddress(r);
-  @override
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance(
-          CheckBoardingBalanceRequest r) =>
-      _stub.checkBoardingBalance(r);
   @override
   Future<ListVtxosResponse> listVtxos(ListVtxosRequest r) =>
       _stub.listVtxos(r);
@@ -93,6 +71,30 @@ class GrpcWalletApi implements WalletApi {
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) =>
       _stub.submitArkSend(r);
 
+  // Request-to-pay is REST-only: the runtime serves no gRPC (nothing binds MPCWallet), so these
+  // exist solely to satisfy the interface.
+  @override
+  Future<ContactAddResponse> contactAdd(ContactAddRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<ContactListResponse> contactList(ContactListRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestCreateResponse> createPaymentRequest(
+          PaymentRequestCreateRequest r, String payerGroupKeyHex) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestListResponse> paymentRequestList(
+          PaymentRequestListRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+  @override
+  Future<PaymentRequestDeclineResponse> paymentRequestDecline(
+          PaymentRequestDeclineRequest r) =>
+      throw UnsupportedError('request-to-pay is REST-only');
+
   @override
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) =>
       _stub.getServerInfo(r);
@@ -101,11 +103,6 @@ class GrpcWalletApi implements WalletApi {
   Future<RegisterDeviceTokenResponse> registerDeviceToken(
           RegisterDeviceTokenRequest r) =>
       _stub.registerDeviceToken(r);
-
-  /// Server streaming RPC (gRPC only, not part of WalletApi interface).
-  Stream<TransactionNotification> subscribeToHistory(
-          SubscribeToHistoryRequest r) =>
-      _stub.subscribeToHistory(r);
 
   @override
   Future<void> shutdown() => _channel.shutdown();

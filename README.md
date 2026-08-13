@@ -1,238 +1,134 @@
 # Merlin Wallet
 
-A **Recoverable Social Threshold Bitcoin wallet** powered by **FROST threshold signatures**. The full private key never exists on any single device. Three independent identities — your phone, a hardware signer, and a remote cosigning service — jointly control your funds through a 2-of-3 threshold scheme.
+A **2-of-2 FROST threshold Bitcoin wallet**. The full private key never exists on any single device: two independent identities — your phone and a remote cosigning service running inside an AWS Nitro Enclave — jointly control your funds. Neither can move funds alone.
 
+The wallet spends across two value layers:
 
+- **Ark (off-chain VTXOs).** The primary path. The FROST group key (phone + cosigner, 2-of-2) owns the VTXOs; boarding, sending, and settling go through an **Ark Service Provider (arkd)**.
+- **On-chain Bitcoin.** A single key the wallet controls **alone** (the DKG dealer secret), for direct on-chain send/receive. It needs neither the cosigner nor the ASP, so it keeps working when they're unavailable — the app calls this **offline mode**.
 
-Each layer is doing exactly one job. WASM alone gives memory isolation but not concurrency control. The actor model alone gives concurrency control but not fault isolation. The enclave alone gives the runtime a verifiable identity but doesn't isolate users from each other. The combination is the point.
+Both parties are required to produce a valid Taproot (BIP-340) Schnorr signature on the Ark path. The server alone cannot move funds; the phone alone cannot move Ark funds.
 
 ## Architecture
 
 ```
-                        +-----------------------+
-                        |   Cosigner Runtime    |
-                        |   AWS Nitro Enclave   |
-                        |   (Rust + Wasmtime)   |
-                        |   Identity 3/3        |
-                        +-----------+-----------+
-                                    |
-                              gRPC / attested HTTPS
-                                    |
-              +---------------------+---------------------+
-              |                                           |
-+-------------+--------------+             +--------------+-------------+
-|   Android Phone            |   USB OTG   |   HW Signer (RP2350)       |
-|   Flutter App              +-------------+   TrustZone firmware       |
-|   Identity 1/3             |   HID 64B   |   Identity 2/3             |
-|   Day-to-day signing       |   reports   |   Recovery / policy ops    |
-+----------------------------+             +----------------------------+
+   +-----------------------+         +-----------------------+
+   |   Cosigner Runtime    |         |   Ark Service         |
+   |   AWS Nitro Enclave   |         |   Provider (arkd)     |
+   |   Rust · native FROST |         |   VTXO batching /     |
+   |   Identity 2/2        |         |   settlement          |
+   +-----------+-----------+         +-----------+-----------+
+               |                                 |
+        attested HTTPS                     Ark rounds
+               |                                 |
+   +-----------+---------------------------------+-----------+
+   |   Android Phone — Flutter app — Identity 1/2            |
+   |   in-app FROST signing (FFI) · passkey-gated share      |
+   |   on-chain single-key path (wallet-alone / offline)     |
+   +--------------------------------------------------------+
 ```
 
 | Identity | Held by | Role |
 |---|---|---|
-| **Signing** | Phone (local) | Day-to-day transaction signing |
-| **Recovery** | HW signer (USB HID) | Policy changes, restoration |
-| **Server** | Cosigner runtime in enclave | Co-signs transactions, never sees the full key |
-
-Any 2-of-3 produces a valid Taproot (BIP-340) Schnorr signature. The server alone cannot move funds. The phone alone cannot move funds. You need cooperation between any two parties.
+| **Wallet share** | Phone (local, passkey-gated FROST share) | One half of the 2-of-2; signs in-app |
+| **Cosigner share** | Cosigner runtime in the enclave | The other half; co-signs, never sees the full key |
 
 ## The Cosigner Runtime
 
-The remote cosigning service is built on three concentric isolation boundaries, each addressing a different class of threat:
+The remote cosigning service is built on two isolation boundaries, each addressing a different class of threat.
 
 ```
-┌─ AWS Nitro Enclave ──────────────────────────────────────┐  hardware-attested VM
-│  PCR0 measurement · KMS keys locked to PCR0              │  client trusts: "the right binary booted"
-│                                                          │
-│  ┌─ cosigner-runtime (Rust)   tokio actor per user ──┐   │  concurrency isolation
-│  │  per-user mailbox · serial command processing     │   │  trust: "no cross-user state mutation"
-│  │                                                   │   │
-│  │  ┌─ Wasmtime sandbox  one Store per user ─────┐   │   │  memory & fault isolation
-│  │  │  cosigner.wasm · FROST · DKG · Schnorr     │   │   │  trust: "no leak between users"
-│  │  └─────────────────────────────────────────────┘   │   │
-│  └─────────────────────────────────────────────────────┘  │
-└──────────────────────────────────────────────────────────┘
+┌─ AWS Nitro Enclave ──────────────────────────────────────────┐  hardware-attested VM
+│  PCR0 measurement · KMS secrets PCR0-locked                  │  client trusts: "the right binary booted"
+│                                                              │
+│  ┌─ cosigner-runtime (Rust)   native actor per user ─────┐   │  concurrency + fault isolation
+│  │  per-user mailbox · serial commands · keys in-process  │   │  trust: "no cross-user state / races"
+│  │  FROST · DKG · Schnorr run natively here               │   │
+│  └────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────┘
 ```
 
 ### Outer layer: AWS Nitro Enclave
 
-The runtime executes inside an AWS Nitro Enclave — an isolated VM with no persistent storage, no interactive shell, no network except a vsock to the parent EC2 instance. The host's disk is invisible. The host operator can't read enclave RAM.
+The runtime executes inside an AWS Nitro Enclave — an isolated VM with no persistent storage, no interactive shell, and no network except a vsock to the parent EC2 instance. The host's disk is invisible; the host operator can't read enclave RAM.
 
-What the client gets in return: an **attestation document** signed by AWS, binding a `PCR0` measurement (the SHA-384 hash of the booted EIF image) to the enclave's freshly-generated TLS certificate. The client verifies `PCR0` matches a known build before trusting any response. Connecting to a different binary, or to the host itself, fails attestation — the client refuses to send DKG packets.
+What the client gets in return: an **attestation document** signed by AWS, binding a `PCR0` measurement (the SHA-384 hash of the booted EIF image) to the enclave's attestation key. The client verifies `PCR0` matches a known build before trusting any response, and binds the enclave's response-signing key to the attestation (`appKeyHash`). Connecting to a different binary, or to the host itself, fails attestation — the client refuses to send DKG packets.
 
-KMS-encrypted secrets (the FROST share's recovery material) are decrypted inside the enclave by attaching a **PCR0-locked KMS policy**: only an enclave with this exact PCR0 can call `kms:Decrypt`. A modified runtime can't load a user's secrets even if it has the same IAM role.
+KMS-encrypted deployment secrets are decrypted inside the enclave via a **PCR0-locked KMS policy**: only an enclave measuring this exact `PCR0` can call `kms:Decrypt`. A modified runtime can't load secrets even with the same IAM role.
 
 The enclave plumbing — supervisor, attestation server, vsock proxies — is upstream from [introspector-enclave](https://github.com/ArkLabsHQ/introspector-enclave). The cosigner-runtime is the userspace app that boots inside it.
 
-### Middle layer: Per-user actor model
+### Inner layer: Per-user native actor
 
-Inside the runtime, every user gets a dedicated tokio actor task:
+Inside the runtime, every user (keyed by FROST verifying-share / group key) gets a dedicated tokio actor task that owns its keys and state:
 
 ```rust
 // cosigner-runtime/src/cosigner/registry.rs
 const MAILBOX_CAPACITY: usize = 256;
 
 let (tx, rx) = mpsc::channel::<CosignerCommand>(MAILBOX_CAPACITY);
-let user = self.new_user_instance()?;       // fresh Wasmtime store
-let state = CosignerState::new();           // fresh in-memory state
-tokio::spawn(run_actor(user, state, rx, shared, registry));
+tokio::spawn(run_cosigner(rx, shared, registry));
 ```
 
 Properties this gives you:
 
-- **No shared mutable state between users.** Each actor owns its `CosignerInstance` (the WASM store) and `CosignerState` (vtxos, pending DKG packets, settle session, etc.) outright. No `Arc<Mutex<...>>`, no contention, no locks inside hot paths.
-- **Serial command processing per user.** The actor pulls commands one at a time from its mailbox; a DKG step finishes before the next sign-step starts. Removes a class of bugs where two parallel calls from the same user race on shared state.
-- **Slow user can't starve others.** A user holding open a settle session blocks only their own mailbox. Every other user's actor keeps running on its own task.
-- **Routing is constant-time.** [`CosignerRegistry`](cosigner-runtime/src/cosigner/registry.rs) is a `DashMap` from FROST verifying-share → mailbox handle. New gRPC requests just look up the handle and `send().await`. No coordinator thread.
-
-
-
-Handlers run inside `spawn_blocking` so CPU-bound WASM work (FROST round1, DKG part3, etc.) doesn't tie up tokio worker threads. The actor itself is light — millions of idle actors fit in memory.
-
-### Inner layer: WASM sandbox per user
-
-Threshold cryptography (FROST, DKG, Schnorr verify, Taproot tweaking) lives entirely inside [`cosigner/`](cosigner/), a WASI Component Model crate compiled to `wasm32-wasip1`. The Rust runtime never sees raw secret shares — only opaque session handles into the WASM linear memory.
-
-Each user actor instantiates the cosigner component into a fresh `wasmtime::Store`:
-
-```rust
-// cosigner-runtime/src/cosigner/registry.rs (new_user_instance)
-let mut store = Store::new(&engine, view);
-let bindings = self.linker.instantiate(&mut store, &self.component)?;
-// store + bindings = one user's "CosignerInstance"
-```
-
-What this buys you:
-
-- **Memory isolation.** A bug in `cosigner.wasm` that corrupts linear memory affects only that user's `Store`. User A's secret share cannot end up in User B's response — they live in different address spaces.
-- **Fault isolation.** A panic, OOB access, or stack overflow inside WASM doesn't crash the runtime. The host catches the trap, returns an error, the actor moves on or restarts the instance.
-- **Capability-based imports.** WASI gives the WASM no ambient access — no filesystem, no network, no syscalls except what the runtime explicitly imports. The cosigner crate can compute, not exfiltrate.
-- **Deterministic build → PCR0.** The cosigner WASM is part of the EIF, baked into PCR0. A modified WASM means a different PCR0 means clients refuse to attest, full stop.
-
-The runtime's job is plumbing: receive a request, validate auth, hand the request bytes to the WASM via a host call, get a response, route it back. The WASM does the math.
-
-## The Hardware Signer
-
-The recovery identity (2/3) lives on an RP2350 microcontroller. Lives in [`hwsigner-secure/`](hwsigner-secure/) (Secure world) and [`hwsigner/`](hwsigner/) (Non-Secure world).
-
-Two reasons it exists:
-
-1. **The phone is single-purpose hardware running general-purpose software.** A compromised app or OS could exfiltrate the signing share. The hardware signer keeps a separate share on a physically separate device, so a compromise of the phone alone is recoverable.
-2. **Policy changes need a stronger guarantee than day-to-day signing.** Spending limits, refresh, and recovery operations require a recovery signature from the hardware signer. The phone alone cannot raise its own spending limit.
-
-### TrustZone isolation
-
-The RP2350 (Cortex-M33) supports ARM TrustZone. The chip splits flash, RAM, and peripherals into Secure and Non-Secure regions, with hardware enforcement of which side can access which.
-
-```
-┌─ SECURE WORLD  (hwsigner-secure/) ──────────────────────┐
-│  Flash 0x10000000 — 512K  ·  RAM 0x20060000 — 128K      │
-│                                                          │
-│  • FROST share, signing logic, DKG, nonces               │
-│  • TRNG (Secure-only peripheral)                         │
-│  • Key storage in Secure flash (0x103FF000)              │
-│                                                          │
-│  Exposes two NSC (Non-Secure Callable) entry points:     │
-│    nsc_init()    — initialize crypto library             │
-│    nsc_process() — handle JSON crypto request/response   │
-└────────────────────────┬─────────────────────────────────┘
-                         │ SG veneers (Secure Gateway)
-┌────────────────────────┴─────────────────────────────────┐
-│  NON-SECURE WORLD  (hwsigner/) ─────────────────────────┐│
-│  Flash 0x10080000 — 3584K  ·  RAM 0x20000000 — 384K     ││
-│                                                          ││
-│  • Embassy async runtime + USB HID                       ││
-│  • JSON protocol over 64-byte HID reports                ││
-│  • Forwards crypto requests to Secure via nsc_process()  ││
-│  • CANNOT access: Secure flash, Secure RAM, TRNG, keys   ││
-└──────────────────────────────────────────────────────────┘│
-                                                            │
-SAU enforces address-region attributes; ACCESSCTRL          │
-locks peripheral security after configuration.              │
-```
-
-What this gives you: even if the USB stack is compromised — a malicious peer on the bus, a buffer overflow in the HID parser — the attacker is in the Non-Secure world. They can issue crypto requests through the NSC veneers, but **cannot read the FROST share, cannot read the TRNG output, cannot pivot into Secure flash**. The Secure world copies request bytes from NS RAM, processes them in Secure RAM, zeroes the input buffer, and copies the response back. The attack surface from NS to Secure is exactly two function entry points.
-
-### Boot, signing, and provisioning
-
-Firmware is signed with **ECDSA secp256k1 + SHA-256**. The RP2350 boot ROM verifies each signature against a public key hash burned into OTP before executing the image — unsigned or tampered firmware does not boot. Once OTP is provisioned with `SECURE_BOOT_ENABLE`, the operation is irreversible: only firmware signed with the matching private key will ever boot on that chip.
-
-Build, sign, and flash:
-
-```bash
-make hw-build         # builds Secure + NS worlds
-make hw-sign          # signs Secure world via picotool seal
-make hw-flash         # builds, signs, flashes via probe-rs
-make hw-test          # smoke test over USB HID
-```
-
-The full boot sequence (12 stages from boot ROM through `BLXNS` to Embassy), SAU region table, NSC protocol, USB HID framing, and the irreversible OTP provisioning procedure are in [docs/HW_SIGNER.md](docs/HW_SIGNER.md).
+- **No shared mutable state between users.** Each actor owns its `CosignerState` (key package, Ark secret, VTXOs, pending sessions) outright.
+- **Serial command processing per user.** The actor pulls commands one at a time; a DKG step finishes before the next sign-step starts, removing a class of same-user races.
+- **Fault isolation.** Handler work runs inside `spawn_blocking`; a panic on attacker input is caught (`JoinError::is_panic`), the request errors, and the actor is reseated from its snapshot rather than crashing the runtime.
+- **Slow user can't starve others.** A user holding a settle session blocks only their own mailbox.
+- **Constant-time routing.** [`CosignerRegistry`](cosigner-runtime/src/cosigner/registry.rs) is a `DashMap` from group key → mailbox handle; a request just looks up the handle and `send().await`. Idle actors are cheap — an idle actor is memory, not a thread.
 
 ## Other Components
 
 ```
 MPCWallet/
-├── app/                  Flutter mobile app
+├── app/                  Flutter mobile app (Android)
 ├── app-core/             Dart client library (DKG, signing, FFI wrapper, attested transport)
-├── cosigner/             WASI cosigner component (the FROST WASM)
-├── cosigner-runtime/     Enclave runtime (described above)
+├── cosigner-runtime/     Enclave runtime — native per-user actors (described above)
 ├── crates/
-│   ├── ark/              Ark protocol primitives (taproot, VTXOs, send paths)
+│   ├── ark/              Ark protocol: boarding, VTXO send/settle, delegate/auto-settle, checkpoints
 │   ├── threshold/        FROST + DKG core (no_std, secp256k1)
-│   ├── enclave-client/   Attestation verification + signed-response client
-│   └── embassy-rp-fork/  Forked embassy-rp with TrustZone NS support
+│   └── enclave-client/   Nitro attestation verification (COSE/X.509/PCR0) + signed-response client
 ├── ffi/                  Merged C-ABI shared library for Dart FFI (ark + threshold + enclave)
-├── hwsigner/             RP2350 Non-Secure firmware (Embassy, USB HID)
-├── hwsigner-secure/      RP2350 Secure firmware (TrustZone, key storage, TRNG)
 ├── protocol/             gRPC stubs and proto definitions
 ├── infrastructure/       OpenTofu modules for enclave deployment (KMS, EC2, S3, SSM)
-├── e2e/                  End-to-end integration tests
-└── scripts/              Utilities (bitcoin.sh, test_hwsigner.py, udev rules)
+├── e2e/                  End-to-end integration tests + local signer-server
+└── scripts/              Utilities (bitcoin.sh, arkd_init.sh, …)
 ```
 
 ### Flutter app ([app/](app/))
 
-Android wallet UI built with Provider + GoRouter. Onboarding guides server connection, hardware signer pairing, network selection, and DKG. Supports sending/receiving Bitcoin (on-chain + Ark VTXOs), spending policies, and QR codes.
+Android wallet UI built with Provider + GoRouter. Onboarding guides server connection, passkey setup, and DKG. Supports on-chain + Ark (VTXO) send/receive, an **offline mode** that falls back to on-chain-only when the ASP is unavailable, and passkey-gated signing.
 
 ### Dart client ([app-core/](app-core/))
 
-High-level Dart API that orchestrates the full MPC protocol: drives DKG, signing, refresh, and policy operations; communicates with the cosigner runtime over **attested transport** (verifies the enclave's `PCR0` before each request); drives the hardware signer over USB HID; handles Taproot address derivation, UTXO tracking, and PSBT construction.
+High-level Dart API that orchestrates the full protocol: drives DKG, FROST signing, key refresh, Ark boarding/send/settle, and the on-chain single-key path. Talks to the cosigner over **attested transport** (verifies the enclave's `PCR0` and response signatures), and handles Taproot address derivation, UTXO/VTXO tracking, and PSBT construction.
 
 ### Threshold library ([crates/threshold/](crates/threshold/))
 
-`#![no_std]` Rust implementation of FROST over secp256k1. Includes the full 3-round DKG, Pedersen VSS, nonce commitments, signature share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Compiles for four targets: native Rust, `wasm32-wasip1` (cosigner WASM), `thumbv8m.main-none-eabihf` (HW signer Secure world), and Dart FFI.
+`#![no_std]` Rust implementation of FROST over secp256k1: the full 3-round DKG with proof-of-knowledge, Pedersen VSS, single-use nonce commitments, signature-share computation, Lagrange interpolation, Taproot key tweaking, and key refresh. Built for two targets: **native Rust** (the cosigner runtime) and **Dart FFI** (the phone, via `ffi/`).
 
 ## Build & Run
 
 ### Prerequisites
 
 - Dart ≥ 3.3, Flutter ≥ 3.4
-- Rust (stable + nightly toolchains)
+- Rust (stable toolchain)
 - Docker + Docker Compose
-- ARM GNU toolchain (`arm-none-eabi-ld`) — only if building HW signer firmware
-- picotool, probe-rs — only if flashing HW signer
-- Android device with USB OTG (for HW signer testing)
 
 ```bash
-# Rust targets the runtime + cosigner need
-rustup target add wasm32-wasip1                  # cosigner WASM
 rustup target add aarch64-linux-android          # FFI for Android arm64
-rustup target add thumbv8m.main-none-eabihf      # HW signer (only if needed)
-rustup toolchain install nightly                  # TrustZone CMSE features (HW signer only)
-
-cargo install cargo-component   # WASI component building
-cargo install probe-rs-tools    # only for HW signer flashing
 ```
 
 ### Local development (regtest)
 
 ```bash
 make regtest-up        # bitcoind + electrs in Docker
-make bitcoin-init      # mine 150 blocks
-make e2e               # runs the full E2E (build cosigner WASM + runtime + e2e harness)
+make bitcoin-init      # mine blocks
+make e2e               # Ark E2E: builds ffi + cosigner-runtime, starts regtest + arkd, runs the Dart harness
 ```
 
-The local cosigner runtime runs as a plain Rust binary (no enclave, no attestation) — the WASM and actor isolation still apply. Useful for fast iteration.
+The local cosigner runtime runs as a plain Rust binary (no enclave, no attestation) — the per-user native-actor isolation still applies. Useful for fast iteration.
 
 ### Cloud deployment (signet / mutinynet / mainnet)
 
@@ -241,26 +137,15 @@ cd infrastructure/mutiny/tofu
 tofu apply             # provisions Nitro enclave host, KMS key, S3 buckets, SSM params
 ```
 
-The enclave EIF is built by the [release-eif](.github/workflows/release-eif.yml) GitHub Action and published to the repo's GitHub Releases. Tofu pulls the artifact, uploads it to S3, and the EC2 supervisor boots it. The client's `enclave verify` command confirms `PCR0` matches the published build before the wallet trusts the deployment.
-
-### HW signer
-
-If you want the recovery identity on real hardware:
-
-```bash
-make hw-build && make hw-flash    # builds Secure + NS, signs Secure, flashes via debug probe
-make hw-test                       # smoke test over USB HID
-```
-
-For OTP provisioning (Secure Boot enforcement, key invalidation, glitch detection): see [HW_SIGNER.md](docs/HW_SIGNER.md). All OTP writes are permanent.
+The enclave EIF is built by the [release-eif](.github/workflows/release-eif.yml) GitHub Action and published to GitHub Releases. Tofu pulls the artifact, uploads it to S3, and the EC2 supervisor boots it. The [verify](.github/workflows/verify.yml) workflow confirms the published build's `PCR0` before the wallet trusts a deployment.
 
 ### Mobile app
 
 ```bash
 adb pair <ip>:<port>           # pair (wireless debugging)
 adb connect <ip>:<port>
-make adb-reverse               # forward server ports to phone
-cd app && flutter run          # pick "Hardware Signer (USB)" or "Software Signer" in onboarding
+make adb-reverse               # forward server ports to the phone
+cd app && flutter run
 ```
 
 ## Testing
@@ -268,37 +153,178 @@ cd app && flutter run          # pick "Hardware Signer (USB)" or "Software Signe
 ```bash
 make threshold-test               # threshold library unit tests
 make ffi-test                     # merged FFI tests
-make e2e                          # full E2E (regtest + cosigner runtime + Dart e2e)
-make e2e-ark                      # Ark E2E
-make hw-test ARGS="--full-dkg"    # HW signer firmware over USB HID
+make e2e                          # Ark E2E (regtest + arkd + cosigner runtime + Dart harness)
 make crypto-bench                 # cryptography benchmarks (Criterion)
 make stress-test                  # multi-user E2E stress test
 ```
 
 ## Security model summary
 
-- **The full private key never exists on any single device.** 2-of-3 threshold; loss of any one share is recoverable.
-- **The cosigner cannot unilaterally sign.** It always needs cooperation from the phone or hardware signer.
-- **The cosigner runs in a Nitro Enclave with attested boot.** Clients refuse to send DKG packets to a runtime whose `PCR0` doesn't match a known build.
-- **KMS keys are locked to the enclave's `PCR0`.** A modified runtime can't decrypt user secrets even if it has the same IAM role.
-- **Per-user FROST share runs in an isolated WASM sandbox** (Wasmtime) — memory and fault isolation between users.
-- **Per-user actor task** — no shared mutable state, no locks, slow users can't block others.
-- **The hardware signer's share is in TrustZone Secure flash** — inaccessible from the USB attack surface via SAU hardware enforcement.
-- **All MPC requests are authenticated** with Schnorr signatures over timestamped messages (replay window enforced).
-- **Policy changes require a recovery signature** from the hardware signer.
+- **The full private key never exists on any single device.** The Ark owner key is a 2-of-2 FROST split between the phone and the cosigner.
+- **The cosigner cannot unilaterally sign.** It always needs cooperation from the phone.
+- **The phone's FROST share is passkey-gated.** It is stored blinded and reconstructed transiently, only for a sign, from a passkey PRF gesture.
+- **The cosigner runs in a Nitro Enclave with attested boot.** Clients refuse to send DKG packets to a runtime whose `PCR0` doesn't match a known build, and bind its response-signing key to the attestation.
+- **KMS secrets are PCR0-locked.** A modified runtime can't decrypt them even with the same IAM role.
+- **FROST keys are held by an isolated per-user native actor** — no shared mutable state, serial per-user processing, panic-recovered from a sealed snapshot.
+- **MPC requests are authenticated** with Schnorr signatures (or a passkey-minted session token) over timestamped messages, within a replay window.
+- **The on-chain single-key path is wallet-alone.** It works without the cosigner or ASP (offline mode); it is not part of the 2-of-2.
+
+The same 2-of-2 that stops the cosigner signing alone also stops *you* signing alone, which is
+why Ark balances depend on the cosigner being reachable. See
+[Trust assumptions & failure modes](#trust-assumptions--failure-modes) and
+[Emergency exit](#emergency-exit) before relying on this with real money.
+
+## Trust assumptions & failure modes
+
+The security summary above is what holds when everything works. This is what breaks, and who
+you have to trust for it not to.
+
+### The one that matters: the Ark owner key is 2-of-2
+
+Every VTXO and every boarding output is owned by the **FROST group key**, not by the phone's own
+key ([`bitcoin.dart`](app-core/lib/bitcoin.dart#L191-L194) — *"the FROST group key stays the Ark
+owner key (boarding + VTXO)"*). The stock Ark taptree gives a VTXO two spend paths:
+
+```
+forfeit leaf:  <asp_pk> OP_CHECKSIGVERIFY <owner_pk> OP_CHECKSIG
+exit leaf:     <delay>  OP_CSV OP_DROP    <owner_pk> OP_CHECKSIG
+```
+
+(`Vtxo::new_default` → `multisig_script` + `csv_sig_script`, `ark-core/src/{vtxo,script}.rs`.)
+
+Both name `owner_pk`, and here `owner_pk` is the group key. **The exit leaf's timelock controls
+*when* you may leave, not *who* may leave.** So if the cosigner is permanently gone, the phone
+holds one of two required shares and cannot produce a group-key signature at all — the unilateral
+exit path that normally protects Ark users does not protect you. Ark funds and in-flight boarding
+outputs are frozen, permanently. Waiting does not fix it.
+
+**What survives regardless:** the on-chain single-key layer. Its key is the phone's own DKG dealer
+secret, spending a plain BIP-341 key-path taproot address, and the cosigner is never involved.
+Offline mode already routes there when Ark is unreachable. On-chain balance is genuinely
+self-custodial today; Ark balance is not.
+
+### AWS
+
+The cosigner runs on AWS. In production it is a Nitro Enclave whose KMS secrets are PCR0-locked,
+which is what stops *us* from extracting your share — and is also why an account termination,
+a destroyed KMS key, or a lost data volume is unrecoverable **by anyone, including us**. The
+sealing that makes the operator untrusted for confidentiality makes AWS trusted for availability.
+That is a deliberate trade, and it is the whole reason the section below exists.
+
+The mutinynet deployment ([infrastructure/mutinynet/](infrastructure/mutinynet/)) is *not*
+enclave-backed — it runs the cosigner on a plain EC2 host with its shares in plaintext SQLite on
+EBS. It is signet-only for that reason, and the app enforces the split by refusing unattested
+transport for every host except that one.
+
+### The ASP
+
+Liveness for anything Ark: sends, settlements, receiving. If the ASP is down you fall back to
+on-chain. If the ASP is *malicious* it cannot steal — the forfeit leaf needs your signature too —
+but it can refuse service, and refusing service is what makes unilateral exit necessary, which
+loops back to the 2-of-2 problem above. We depend on a third-party ASP
+(`https://mutinynet.arkade.sh` today); we do not run it.
+
+### What Ark's privacy does *not* give you
+
+Ark keeps VTXOs off-chain. That is a scalability property, and it is routinely mistaken for a
+privacy one. It is not CoinJoin and it is not a mixnet:
+
+- **The ASP sees everything** — every VTXO, every amount, and the sender/recipient pairing inside
+  every round. It is a full observer of your transaction graph, by construction.
+- **So does our cosigner.** It persists `vtxo_store`, `ark_tx_history`, `ark_script_to_user`,
+  `boarding_watches`, and your request-to-pay contacts. Enclave sealing keeps that from the
+  *operator*; it does not make the data not exist, and a future compelled-access or
+  implementation-flaw scenario is about that data.
+- **Exiting is public and linking.** A unilateral exit publishes your branch of the VTXO tree
+  on-chain, tying those outputs together for anyone watching.
+- **Boarding and exit are on-chain events** with ordinary on-chain traceability.
+
+Treat Ark here as cheap, fast custody-minimised payments — not as anonymity.
+
+## Emergency exit
+
+**Status: designed, not implemented. This is the first thing grant funding buys.**
+
+As shipped, a permanent cosigner outage freezes Ark balances — see above. The fix is a **third
+taptree leaf spendable by a recovery key the phone controls alone**, after a long CSV delay:
+
+```
+forfeit  leaf:  <asp_pk>       OP_CHECKSIGVERIFY <group_pk>    OP_CHECKSIG   # cooperative, today
+exit     leaf:  <exit_delay>   OP_CSV OP_DROP    <group_pk>    OP_CHECKSIG   # today (still 2-of-2)
+recovery leaf:  <recov_delay>  OP_CSV OP_DROP    <recovery_pk> OP_CHECKSIG   # new
+```
+
+Three things make this cheap rather than speculative, and all three already exist in this
+repository:
+
+**The recovery key already exists and needs no new custody.** `recovery_pk` is the wallet's
+on-chain single key — the DKG dealer secret, which the phone already holds and already backs up
+because it secures the on-chain balance ([`client.dart:93-98`](app-core/lib/client.dart#L93-L98)).
+No new secret, no new backup surface, no extra thing to lose.
+
+**The cosigner already knows it.** That key's public point *is* the DKG `walletVk`, which the
+wallet sends during onboarding and the cosigner already persists as `wallet_vk`
+([`state.rs:192`](cosigner-runtime/src/cosigner/state.rs#L192)). Both sides can derive the same
+three-leaf address today with no new protocol message.
+
+**The ASP does not need to know or approve.** An Ark address is just `(server_key, vtxo_tap_key)`;
+the taptree is committed inside the output key, and arkd mints and co-signs against the
+cooperative path without inspecting the rest. That is not a hope — this project already ships
+contract eVTXOs built exactly this way. [`evtxo_tree`](crates/ark/src/lib.rs#L181-L193) takes the
+cooperative key and the exit-leaf key as **separate parameters**:
+
+```rust
+let cooperative = TapLeaf::new(contract_cooperative_script(commit, server_pk, evtxo_pk));
+let exit        = TapLeaf::new(evtxo_exit_script(exit_delay, owner_pk));   // different key
+```
+
+`ContractPolicy.owner_pk` is literally documented as "user-supplied exit-leaf owner x-only key",
+and the whole path is e2e-verified spending through arkd on regtest. The recovery leaf is the same
+construction with the recovery key in that slot.
+
+The gap is narrow: plain wallet VTXOs still go through `Vtxo::new_default`, which reuses one
+`owner` for both leaves. eVTXOs got the better construction; ordinary VTXOs did not.
+
+The honest costs:
+
+- **A stolen phone gets the balance once `recov_delay` elapses.** Today a thief with the phone
+  cannot touch Ark funds without the cosigner. `recov_delay` must therefore be long — months, not
+  days — so the leaf only fires on genuine abandonment, and it must comfortably exceed the ASP's
+  own exit delay so the ASP's forfeit assumptions are never undercut.
+- **It is forward-only.** Changing the taptree changes the address, so existing VTXOs keep the
+  old script until they are re-settled. Boarding outputs need the same treatment.
+- **It depends on ASPs continuing not to constrain taptrees.** If arkade later requires
+  registering or validating VTXO scripts, this needs their buy-in.
+
+That last risk is why the fallback stays documented rather than discarded: **pre-signed exit
+transactions**. At each settlement the cosigner also co-signs a spend of the current VTXO through
+the *existing* exit leaf, paying to the wallet's on-chain address; the phone stores it and can
+broadcast it unaided. It needs no script change at all, so it works even against an ASP that
+rejects non-default taptrees — at the cost of per-VTXO bookkeeping, reissue on every
+settle/send/receive, and no protection for VTXOs received after the outage begins. We would build
+it only if the recovery leaf turns out to be blocked.
+
+Scope to close it: extend the taptree builder in `crates/ark` to the three-leaf form, thread
+`wallet_vk` through as the recovery key on both sides, add an exit-broadcast flow in the app, and
+a regtest E2E that permanently kills the cosigner *and* the ASP and still drains a wallet
+on-chain.
 
 ## References
 
 - [FROST: Flexible Round-Optimized Schnorr Threshold Signatures](https://eprint.iacr.org/2020/852)
 - [BIP-340: Schnorr Signatures for secp256k1](https://github.com/bitcoin/bips/blob/master/bip-0340.mediawiki)
 - [BIP-341: Taproot](https://github.com/bitcoin/bips/blob/master/bip-0341.mediawiki)
-- [WASI Component Model](https://component-model.bytecodealliance.org/)
-- [Wasmtime](https://wasmtime.dev/)
+- [Ark protocol](https://arkdev.info/) — off-chain VTXOs via an Ark Service Provider
 - [AWS Nitro Enclaves](https://docs.aws.amazon.com/enclaves/latest/user/nitro-enclave.html)
 - [introspector-enclave](https://github.com/ArkLabsHQ/introspector-enclave) — enclave host/runtime plumbing
-- [ARMv8-M TrustZone](https://developer.arm.com/Architectures/TrustZone)
-- [RP2350 Datasheet](https://datasheets.raspberrypi.com/rp2350/rp2350-datasheet.pdf)
 
 ## License
 
-Part of the Bitspend Payment ecosystem.
+[MIT](LICENSE) — use it, fork it, run your own cosigner. Nothing here is licensed in a way that
+lets us strand you: the client, the cosigner runtime, the threshold library, and the deployment
+stack are all in this repository.
+
+Third-party code keeps its own licensing and is not covered by the above:
+`third_party/rust-sdk` is a submodule ([arkade-os/rust-sdk](https://github.com/arkade-os/rust-sdk),
+MIT, see its own `LICENSE`), and the vendored crates under `cosigner-runtime/vendor/`
+remain under the licences of their respective upstreams.

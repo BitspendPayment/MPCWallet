@@ -13,7 +13,6 @@ import 'dart:io';
 
 import 'package:app_core/client.dart';
 import 'package:app_core/bitcoin.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:e2e/mutinynet_funder.dart';
 import 'package:hive/hive.dart';
 
@@ -54,9 +53,7 @@ void main(List<String> args) async {
 
   // 2. DKG
   print('2. DKG...');
-  final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-  await signer.connect();
-  final client = MpcClient.rest(baseUrl, hardwareSigner: signer);
+  final client = MpcClient.rest(baseUrl);
   await client.doDkg();
   print('   DKG complete. userId=${client.userId?.substring(0, 16)}...');
 

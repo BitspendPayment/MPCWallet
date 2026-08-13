@@ -64,6 +64,10 @@ services:
       retries: 30
     restart: unless-stopped
 
+  # NOTE: the `redis` service above belongs to arkd. The cosigner-runtime no longer has a
+  # service here — its KV backend is an embedded SQLite file (`SQLITE_PATH`, see the Makefile's
+  # `db-reset` target), so there is nothing to start or wait on.
+
   # arkd wallet service
   arkd-wallet:
     # Pinned to the digest known to work (2026-03-26 build). Upstream `:latest`
@@ -101,10 +105,10 @@ services:
     environment:
       - ARKD_LOG_LEVEL=5
       - ARKD_NO_MACAROONS=true
-      - ARKD_VTXO_TREE_EXPIRY=512
+      - ARKD_VTXO_TREE_EXPIRY=15360
       - ARKD_SCHEDULER_TYPE=gocron
-      - ARKD_UNILATERAL_EXIT_DELAY=512
-      - ARKD_BOARDING_EXIT_DELAY=1024
+      - ARKD_UNILATERAL_EXIT_DELAY=86016
+      - ARKD_BOARDING_EXIT_DELAY=172032
       - ARKD_CHECKPOINT_EXIT_DELAY=10
       - ARKD_DATADIR=./data/regtest
       - ARKD_WALLET_ADDR=mpc_arkd_wallet:6060

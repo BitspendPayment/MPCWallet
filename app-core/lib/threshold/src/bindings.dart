@@ -64,6 +64,63 @@ final dkgRefreshPart3Ffi = nativeLib
     .lookupFunction<_DkgRefreshPart3Native, _DkgRefreshPart3Dart>(
         'threshold_dkg_refresh_part3');
 
+// eVTXO reshare round 1: deal under an explicit identifier (same signature as
+// refresh_part1: id, max, min, seed_ptr, seed_len).
+typedef _DkgResharePart1Native = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Uint32, Uint32, Pointer<Uint8>, Uint32);
+typedef _DkgResharePart1Dart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, int, int, Pointer<Uint8>, int);
+final dkgResharePart1Ffi = nativeLib
+    .lookupFunction<_DkgResharePart1Native, _DkgResharePart1Dart>(
+        'threshold_dkg_reshare_part1');
+
+// eVTXO reshare finalizer for a DEALER (the author): r2_secret handle, peer
+// round1 pkgs, shares dealt to me, old PKP, old KP, receiver ids.
+typedef _DkgResharePart3Native = Pointer<FfiResult> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>);
+typedef _DkgResharePart3Dart = Pointer<FfiResult> Function(
+    Pointer<Void>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>);
+final dkgResharePart3Ffi = nativeLib
+    .lookupFunction<_DkgResharePart3Native, _DkgResharePart3Dart>(
+        'threshold_dkg_reshare_part3');
+
+// eVTXO reshare finalizer for a pure receiver (the wallet).
+typedef _DkgResharePart3ReceiveNative = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, Uint32);
+typedef _DkgResharePart3ReceiveDart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>,
+    Pointer<Utf8>, int);
+final dkgResharePart3ReceiveFfi = nativeLib
+    .lookupFunction<_DkgResharePart3ReceiveNative, _DkgResharePart3ReceiveDart>(
+        'threshold_dkg_reshare_part3_receive');
+
+// Per-participant key-preserving refresh of a V′ share onto a new participant
+// identifier (multi-user onboarding). Args: holder_kp_json, id_set_json,
+// participant_id_hex, cosigner_id_hex, slope_hex.
+typedef _RefreshShareToIdNative = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+typedef _RefreshShareToIdDart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>);
+final refreshShareToIdFfi = nativeLib
+    .lookupFunction<_RefreshShareToIdNative, _RefreshShareToIdDart>(
+        'threshold_refresh_share_to_id');
+
+// ECIES: encrypt a 32-byte payload to a compressed pubkey; decrypt a 97-byte blob
+// with a secret scalar.
+typedef _EciesEncryptNative = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>);
+typedef _EciesEncryptDart = Pointer<FfiResult> Function(
+    Pointer<Utf8>, Pointer<Utf8>);
+final eciesEncryptFfi = nativeLib
+    .lookupFunction<_EciesEncryptNative, _EciesEncryptDart>(
+        'threshold_ecies_encrypt');
+final eciesDecryptFfi = nativeLib
+    .lookupFunction<_EciesEncryptNative, _EciesEncryptDart>(
+        'threshold_ecies_decrypt');
+
 // ---------------------------------------------------------------------------
 // Signing bindings
 // ---------------------------------------------------------------------------

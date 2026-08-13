@@ -620,6 +620,234 @@ PublicKeyPackage pkpFromCommitment(
   }
 }
 
+/// eVTXO reshare round 1: deal a fresh NON-zero polynomial under the dealer's
+/// EXISTING identifier. The polynomial lives in the returned FFI handle; round 2
+/// uses the regular [dkgPart2].
+(Round1SecretPackage, Round1Package) dkgResharePart1(
+  Identifier identifier,
+  int maxSigners,
+  int minSigners, {
+  List<int>? seed,
+}) {
+  final idHex = _bigIntToHex64(identifier.toScalar());
+  final idPtr = idHex.toNativeUtf8();
+
+  Pointer<Uint8> seedPtr;
+  int seedLen;
+  if (seed != null && seed.isNotEmpty) {
+    seedPtr = toNativeBytes(seed);
+    seedLen = seed.length;
+  } else {
+    seedPtr = Pointer<Uint8>.fromAddress(0);
+    seedLen = 0;
+  }
+
+  try {
+    final (data, handle) = callFfi(
+      dkgResharePart1Ffi(idPtr, maxSigners, minSigners, seedPtr, seedLen),
+    );
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final r1Pkg = Round1Package.fromJson(
+      parsed['round1Package'] as Map<String, dynamic>,
+    );
+    final r1Secret = Round1SecretPackage(
+      identifier,
+      <BigInt>[], // coefficients live in the FFI handle; not needed Dart-side
+      r1Pkg.commitment,
+      minSigners,
+      maxSigners,
+      handle,
+    );
+    return (r1Secret, r1Pkg);
+  } finally {
+    calloc.free(idPtr);
+    if (seedLen > 0) calloc.free(seedPtr);
+  }
+}
+
+/// eVTXO reshare finalizer for a pure receiver (the wallet): combine the
+/// dealers' shares with the old share into a new 2-of-2 `V′` key package + PKP.
+/// `receiverIdentifiers` is the NEW shareholder set ({wallet, cosigner}).
+(KeyPackage, PublicKeyPackage) dkgResharePart3Receive(
+  Identifier myIdentifier,
+  Map<Identifier, Round1Package> dealerRound1Pkgs,
+  Map<Identifier, Round2Package> sharesForMe,
+  PublicKeyPackage oldPkp,
+  KeyPackage oldKp,
+  List<Identifier> receiverIdentifiers,
+  int minSigners,
+) {
+  final myIdHex = _bigIntToHex64(myIdentifier.toScalar());
+  final dealerR1Json = _encodeR1PkgsJson(dealerRound1Pkgs);
+  final sharesJson = _encodeR2PkgsJson(sharesForMe);
+  final receiverIdsJson = _encodeIdentifierListJson(receiverIdentifiers);
+  final oldPkpJson = jsonEncode(oldPkp.toJson());
+  final oldKpJson = jsonEncode(oldKp.toJson());
+
+  final myIdPtr = myIdHex.toNativeUtf8();
+  final dealerR1Ptr = dealerR1Json.toNativeUtf8();
+  final sharesPtr = sharesJson.toNativeUtf8();
+  final oldPkpPtr = oldPkpJson.toNativeUtf8();
+  final oldKpPtr = oldKpJson.toNativeUtf8();
+  final receiverIdsPtr = receiverIdsJson.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      dkgResharePart3ReceiveFfi(
+        myIdPtr,
+        dealerR1Ptr,
+        sharesPtr,
+        oldPkpPtr,
+        oldKpPtr,
+        receiverIdsPtr,
+        minSigners,
+      ),
+    );
+
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final kp = KeyPackage.fromJson(
+      parsed['key_package'] as Map<String, dynamic>,
+    );
+    final pkp = PublicKeyPackage.fromJson(
+      parsed['public_key_package'] as Map<String, dynamic>,
+    );
+
+    return (kp, pkp);
+  } finally {
+    calloc.free(myIdPtr);
+    calloc.free(dealerR1Ptr);
+    calloc.free(sharesPtr);
+    calloc.free(oldPkpPtr);
+    calloc.free(oldKpPtr);
+    calloc.free(receiverIdsPtr);
+  }
+}
+
+/// eVTXO reshare finalizer for a DEALER (the author): combine this dealer's own
+/// dealing ([r2Secret] handle) with the peer dealers' [round1Pkgs] and the shares
+/// dealt to this dealer ([round2Pkgs]), plus the old share, into the new 2-of-2
+/// `V′` key package + PKP. `receiverIdentifiers` is the NEW shareholder set
+/// ({author, cosigner}). Mirrors [dkgResharePart3Receive] for the dealing side.
+(KeyPackage, PublicKeyPackage) dkgResharePart3(
+  Round2SecretPackage r2Secret,
+  Map<Identifier, Round1Package> round1Pkgs,
+  Map<Identifier, Round2Package> round2Pkgs,
+  PublicKeyPackage oldPkp,
+  KeyPackage oldKp,
+  List<Identifier> receiverIdentifiers,
+) {
+  final round1Json = _encodeR1PkgsJson(round1Pkgs);
+  final round2Json = _encodeR2PkgsJson(round2Pkgs);
+  final receiverIdsJson = _encodeIdentifierListJson(receiverIdentifiers);
+  final oldPkpJson = jsonEncode(oldPkp.toJson());
+  final oldKpJson = jsonEncode(oldKp.toJson());
+
+  final round1Ptr = round1Json.toNativeUtf8();
+  final round2Ptr = round2Json.toNativeUtf8();
+  final oldPkpPtr = oldPkpJson.toNativeUtf8();
+  final oldKpPtr = oldKpJson.toNativeUtf8();
+  final receiverIdsPtr = receiverIdsJson.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      dkgResharePart3Ffi(
+        r2Secret.handle,
+        round1Ptr,
+        round2Ptr,
+        oldPkpPtr,
+        oldKpPtr,
+        receiverIdsPtr,
+      ),
+    );
+
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final kp = KeyPackage.fromJson(
+      parsed['key_package'] as Map<String, dynamic>,
+    );
+    final pkp = PublicKeyPackage.fromJson(
+      parsed['public_key_package'] as Map<String, dynamic>,
+    );
+
+    return (kp, pkp);
+  } finally {
+    calloc.free(round1Ptr);
+    calloc.free(round2Ptr);
+    calloc.free(oldPkpPtr);
+    calloc.free(oldKpPtr);
+    calloc.free(receiverIdsPtr);
+  }
+}
+
+/// Per-participant key-preserving REFRESH of [holderKp]'s `V′` share onto a new
+/// participant identifier. The author calls this with its own `V′` key package
+/// ([idSet] = the current `V′` shareholder ids {author, cosigner}; [cosignerId] =
+/// the cosigner's id; [slope] a fresh random scalar). Returns
+/// `(atParticipant, atCosigner)`: the author's half evaluated at the participant's
+/// id and at the cosigner's id. The participant sums the author's + cosigner's
+/// `atParticipant` into `P_i`; the cosigner sums the `atCosigner` halves into `C_i`.
+(BigInt, BigInt) refreshShareToId(
+  KeyPackage holderKp,
+  List<Identifier> idSet,
+  Identifier participantId,
+  Identifier cosignerId,
+  BigInt slope,
+) {
+  final kpJson = jsonEncode(holderKp.toJson());
+  final idSetJson = _encodeIdentifierListJson(idSet);
+  final partHex = _bigIntToHex64(participantId.toScalar());
+  final cosHex = _bigIntToHex64(cosignerId.toScalar());
+  final slopeHex = _bigIntToHex64(slope);
+
+  final kpPtr = kpJson.toNativeUtf8();
+  final idSetPtr = idSetJson.toNativeUtf8();
+  final partPtr = partHex.toNativeUtf8();
+  final cosPtr = cosHex.toNativeUtf8();
+  final slopePtr = slopeHex.toNativeUtf8();
+  try {
+    final data = callFfiData(
+      refreshShareToIdFfi(kpPtr, idSetPtr, partPtr, cosPtr, slopePtr),
+    );
+    final parsed = jsonDecode(data) as Map<String, dynamic>;
+    final atP = bytesToBigInt(
+        Uint8List.fromList(hex.decode(parsed['at_participant'] as String)));
+    final atC = bytesToBigInt(
+        Uint8List.fromList(hex.decode(parsed['at_cosigner'] as String)));
+    return (atP, atC);
+  } finally {
+    calloc.free(kpPtr);
+    calloc.free(idSetPtr);
+    calloc.free(partPtr);
+    calloc.free(cosPtr);
+    calloc.free(slopePtr);
+  }
+}
+
+/// ECIES-encrypt a 32-byte [payload] to [recipientPubkey] (33-byte compressed).
+/// Returns the 97-byte blob.
+Uint8List eciesEncrypt(Uint8List payload, Uint8List recipientPubkey) {
+  final pPtr = hex.encode(payload).toNativeUtf8();
+  final pkPtr = hex.encode(recipientPubkey).toNativeUtf8();
+  try {
+    final data = callFfiData(eciesEncryptFfi(pPtr, pkPtr));
+    return Uint8List.fromList(hex.decode(data));
+  } finally {
+    calloc.free(pPtr);
+    calloc.free(pkPtr);
+  }
+}
+
+/// ECIES-decrypt a 97-byte [blob] with [secret] (the recipient's scalar). Returns
+/// the 32-byte payload. Throws on a MAC mismatch.
+Uint8List eciesDecrypt(Uint8List blob, BigInt secret) {
+  final bPtr = hex.encode(blob).toNativeUtf8();
+  final sPtr = _bigIntToHex64(secret).toNativeUtf8();
+  try {
+    final data = callFfiData(eciesDecryptFfi(bPtr, sPtr));
+    return Uint8List.fromList(hex.decode(data));
+  } finally {
+    calloc.free(bPtr);
+    calloc.free(sPtr);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal JSON helpers
 // ---------------------------------------------------------------------------

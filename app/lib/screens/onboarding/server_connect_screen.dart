@@ -6,6 +6,8 @@ import 'package:provider/provider.dart';
 import '../../services/mpc_service.dart';
 
 const String _regtestHost = '10.0.2.2';
+// Physical phone reaches the host over `adb reverse` at 127.0.0.1 (10.0.2.2 is emulator-only).
+const String _regtestPhoneHost = '127.0.0.1';
 const String _mutinyHost = 'mutiny.vtxos.network';
 
 class ServerConnectionScreen extends StatefulWidget {
@@ -60,7 +62,8 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
               keyName: 'serverPresetMutiny',
               icon: Icons.shield_outlined,
               title: 'Mutiny',
-              subtitle: 'Production enclave at mutiny.vtxos.network',
+              subtitle: 'Mutinynet (signet) at mutiny.vtxos.network — test coins, '
+                  'not enclave-attested',
               busy: _selecting == _mutinyHost,
               disabled: _selecting != null && _selecting != _mutinyHost,
               onTap: () => _pick(_mutinyHost),
@@ -72,10 +75,22 @@ class _ServerConnectionScreenState extends State<ServerConnectionScreen> {
                 icon: Icons.developer_board,
                 title: 'Regtest (local)',
                 subtitle:
-                    'Local cosigner-runtime on $_regtestHost — for development',
+                    'Local cosigner-runtime on $_regtestHost — emulator',
                 busy: _selecting == _regtestHost,
                 disabled: _selecting != null && _selecting != _regtestHost,
                 onTap: () => _pick(_regtestHost),
+              ),
+              const SizedBox(height: 16),
+              _PresetCard(
+                keyName: 'serverPresetRegtestPhone',
+                icon: Icons.phone_android,
+                title: 'Regtest (phone)',
+                subtitle:
+                    'Local cosigner-runtime on $_regtestPhoneHost — physical phone via adb reverse',
+                busy: _selecting == _regtestPhoneHost,
+                disabled:
+                    _selecting != null && _selecting != _regtestPhoneHost,
+                onTap: () => _pick(_regtestPhoneHost),
               ),
             ],
           ],

@@ -91,9 +91,19 @@ class RegtestHelper {
     return await _call('getmempoolentry', [txId]);
   }
 
-  /// Sends raw transaction hex.
-  Future<String> sendRawTransaction(String hex) async {
-    return await _call('sendrawtransaction', [hex]);
+  /// Sends raw transaction hex. Pass [maxFeeRate] (BTC/kvB) to override
+  /// bitcoind's absurd-fee guard — use `0` to disable it (e.g. for a deliberately
+  /// high-fee regtest spend).
+  Future<String> sendRawTransaction(String hex, {double? maxFeeRate}) async {
+    final params = <dynamic>[hex];
+    if (maxFeeRate != null) params.add(maxFeeRate);
+    return await _call('sendrawtransaction', params);
+  }
+
+  /// Returns the unspent tx output at [txId]:[vout], or null if spent/unknown.
+  Future<Map<String, dynamic>?> getTxOut(String txId, int vout) async {
+    final result = await _call('gettxout', [txId, vout]);
+    return result == null ? null : (result as Map<String, dynamic>);
   }
 
   /// Scans the UTXO set for an address.

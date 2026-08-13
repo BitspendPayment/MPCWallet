@@ -17,7 +17,6 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
 import 'package:app_core/client.dart';
-import 'package:app_core/hardware_signer.dart';
 import 'package:hive/hive.dart';
 
 /// HTTP client that accepts self-signed certs (for Nitro enclave TLS).
@@ -60,14 +59,12 @@ void main(List<String> args) async {
   }
 
   // 2. DKG
-  print('2. DKG (requires signer-server on localhost:9090)...');
+  print('2. DKG...');
   final tempDir = await Directory.systemTemp.createTemp('enclave_smoke_');
   Hive.init(tempDir.path);
 
   try {
-    final signer = TcpHardwareSigner(host: '127.0.0.1', port: 9090);
-    await signer.connect();
-    final client = MpcClient.rest(baseUrl, hardwareSigner: signer, storageId: 'enclave_smoke', httpClient: httpClient);
+    final client = MpcClient.rest(baseUrl, storageId: 'enclave_smoke', httpClient: httpClient);
     await client.doDkg();
     print('   OK: DKG complete, userId=${client.userId?.substring(0, 16)}...');
 

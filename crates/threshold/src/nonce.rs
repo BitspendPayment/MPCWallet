@@ -14,11 +14,18 @@ pub struct SigningCommitments {
 }
 
 /// A signing nonce (secret scalars + public commitments).
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SigningNonce {
     pub hiding: Scalar,
     pub binding: Scalar,
     pub commitments: SigningCommitments,
+}
+
+// Redacting Debug: `hiding`/`binding` are secret nonce scalars — never print them.
+impl core::fmt::Debug for SigningNonce {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("SigningNonce { <redacted> }")
+    }
 }
 
 /// Generate a single FROST nonce: h3(random_32 || secret_bytes).

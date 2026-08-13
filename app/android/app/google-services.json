@@ -12,10 +12,46 @@
           "package_name": "com.example.ap"
         }
       },
+      "oauth_client": [
+        {
+          "client_id": "575541915148-ainh9fgbf1nao7bvo2g50uou9jaqk89i.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ap",
+            "certificate_hash": "c539f7552de7645d5103252826b64c697f302084"
+          }
+        },
+        {
+          "client_id": "575541915148-plgm1tdku82dt3nlpc2p428acgu5mmli.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.example.ap",
+            "certificate_hash": "66b9c90c1cbc976d51e93e7d2d6e58bc13e2b3c2"
+          }
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCAP2ECcyasENtweohMkkQHhrf5Sn0bZQA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:575541915148:android:03d0cade16cd0393378829",
+        "android_client_info": {
+          "package_name": "com.vtxos.app"
+        }
+      },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyDr3wlKcGDo90lzqCctChmbrMwuwFemNh0"
+          "current_key": "AIzaSyCAP2ECcyasENtweohMkkQHhrf5Sn0bZQA"
         }
       ],
       "services": {

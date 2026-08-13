@@ -1,890 +1,1114 @@
-///
+//
 //  Generated code. Do not modify.
 //  source: mpc_wallet.proto
 //
 // @dart = 2.12
-// ignore_for_file: annotate_overrides,camel_case_types,constant_identifier_names,deprecated_member_use_from_same_package,directives_ordering,library_prefixes,non_constant_identifier_names,prefer_final_fields,return_of_invalid_type,unnecessary_const,unnecessary_import,unnecessary_this,unused_import,unused_shown_name
 
-import 'dart:core' as $core;
+// ignore_for_file: annotate_overrides, camel_case_types, comment_references
+// ignore_for_file: constant_identifier_names, library_prefixes
+// ignore_for_file: non_constant_identifier_names, prefer_final_fields
+// ignore_for_file: unnecessary_import, unnecessary_this, unused_import
+
 import 'dart:convert' as $convert;
+import 'dart:core' as $core;
 import 'dart:typed_data' as $typed_data;
+
 @$core.Deprecated('Use dKGStep1RequestDescriptor instead')
-const DKGStep1Request$json = const {
+const DKGStep1Request$json = {
   '1': 'DKGStep1Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    const {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
-    const {'1': 'is_restore', '3': 4, '4': 1, '5': 8, '10': 'isRestore'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
+    {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
+  ],
+  '9': [
+    {'1': 4, '2': 5},
   ],
 };
 
 /// Descriptor for `DKGStep1Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep1RequestDescriptor = $convert.base64Decode('Cg9ES0dTdGVwMVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZXIYAiABKAxSCmlkZW50aWZpZXISJQoOcm91bmQxX3BhY2thZ2UYAyABKAlSDXJvdW5kMVBhY2thZ2USHQoKaXNfcmVzdG9yZRgEIAEoCFIJaXNSZXN0b3Jl');
+final $typed_data.Uint8List dKGStep1RequestDescriptor = $convert.base64Decode(
+    'Cg9ES0dTdGVwMVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZX'
+    'IYAiABKAxSCmlkZW50aWZpZXISJQoOcm91bmQxX3BhY2thZ2UYAyABKAlSDXJvdW5kMVBhY2th'
+    'Z2VKBAgEEAU=');
+
 @$core.Deprecated('Use dKGStep1ResponseDescriptor instead')
-const DKGStep1Response$json = const {
+const DKGStep1Response$json = {
   '1': 'DKGStep1Response',
-  '2': const [
-    const {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
+  '2': [
+    {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
   ],
-  '3': const [DKGStep1Response_Round1PackagesEntry$json],
+  '3': [DKGStep1Response_Round1PackagesEntry$json],
 };
 
 @$core.Deprecated('Use dKGStep1ResponseDescriptor instead')
-const DKGStep1Response_Round1PackagesEntry$json = const {
+const DKGStep1Response_Round1PackagesEntry$json = {
   '1': 'Round1PackagesEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
   ],
-  '7': const {'7': true},
+  '7': {'7': true},
 };
 
 /// Descriptor for `DKGStep1Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep1ResponseDescriptor = $convert.base64Decode('ChBES0dTdGVwMVJlc3BvbnNlElkKD3JvdW5kMV9wYWNrYWdlcxgBIAMoCzIwLm1wY193YWxsZXQuREtHU3RlcDFSZXNwb25zZS5Sb3VuZDFQYWNrYWdlc0VudHJ5Ug5yb3VuZDFQYWNrYWdlcxpBChNSb3VuZDFQYWNrYWdlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
+final $typed_data.Uint8List dKGStep1ResponseDescriptor = $convert.base64Decode(
+    'ChBES0dTdGVwMVJlc3BvbnNlElkKD3JvdW5kMV9wYWNrYWdlcxgBIAMoCzIwLm1wY193YWxsZX'
+    'QuREtHU3RlcDFSZXNwb25zZS5Sb3VuZDFQYWNrYWdlc0VudHJ5Ug5yb3VuZDFQYWNrYWdlcxpB'
+    'ChNSb3VuZDFQYWNrYWdlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUg'
+    'V2YWx1ZToCOAE=');
+
 @$core.Deprecated('Use dKGStep2RequestDescriptor instead')
-const DKGStep2Request$json = const {
+const DKGStep2Request$json = {
   '1': 'DKGStep2Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    const {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
+    {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
   ],
 };
 
 /// Descriptor for `DKGStep2Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep2RequestDescriptor = $convert.base64Decode('Cg9ES0dTdGVwMlJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZXIYAiABKAxSCmlkZW50aWZpZXISJQoOcm91bmQxX3BhY2thZ2UYAyABKAlSDXJvdW5kMVBhY2thZ2U=');
+final $typed_data.Uint8List dKGStep2RequestDescriptor = $convert.base64Decode(
+    'Cg9ES0dTdGVwMlJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZX'
+    'IYAiABKAxSCmlkZW50aWZpZXISJQoOcm91bmQxX3BhY2thZ2UYAyABKAlSDXJvdW5kMVBhY2th'
+    'Z2U=');
+
 @$core.Deprecated('Use dKGStep2ResponseDescriptor instead')
-const DKGStep2Response$json = const {
+const DKGStep2Response$json = {
   '1': 'DKGStep2Response',
-  '2': const [
-    const {'1': 'all_round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep2Response.AllRound1PackagesEntry', '10': 'allRound1Packages'},
+  '2': [
+    {'1': 'all_round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep2Response.AllRound1PackagesEntry', '10': 'allRound1Packages'},
   ],
-  '3': const [DKGStep2Response_AllRound1PackagesEntry$json],
+  '3': [DKGStep2Response_AllRound1PackagesEntry$json],
 };
 
 @$core.Deprecated('Use dKGStep2ResponseDescriptor instead')
-const DKGStep2Response_AllRound1PackagesEntry$json = const {
+const DKGStep2Response_AllRound1PackagesEntry$json = {
   '1': 'AllRound1PackagesEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
   ],
-  '7': const {'7': true},
+  '7': {'7': true},
 };
 
 /// Descriptor for `DKGStep2Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep2ResponseDescriptor = $convert.base64Decode('ChBES0dTdGVwMlJlc3BvbnNlEmMKE2FsbF9yb3VuZDFfcGFja2FnZXMYASADKAsyMy5tcGNfd2FsbGV0LkRLR1N0ZXAyUmVzcG9uc2UuQWxsUm91bmQxUGFja2FnZXNFbnRyeVIRYWxsUm91bmQxUGFja2FnZXMaRAoWQWxsUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
+final $typed_data.Uint8List dKGStep2ResponseDescriptor = $convert.base64Decode(
+    'ChBES0dTdGVwMlJlc3BvbnNlEmMKE2FsbF9yb3VuZDFfcGFja2FnZXMYASADKAsyMy5tcGNfd2'
+    'FsbGV0LkRLR1N0ZXAyUmVzcG9uc2UuQWxsUm91bmQxUGFja2FnZXNFbnRyeVIRYWxsUm91bmQx'
+    'UGFja2FnZXMaRAoWQWxsUm91bmQxUGFja2FnZXNFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCg'
+    'V2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
+
 @$core.Deprecated('Use dKGStep3RequestDescriptor instead')
-const DKGStep3Request$json = const {
+const DKGStep3Request$json = {
   '1': 'DKGStep3Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
-    const {'1': 'round2_packages_for_others', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Request.Round2PackagesForOthersEntry', '10': 'round2PackagesForOthers'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
+    {'1': 'round2_packages_for_others', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Request.Round2PackagesForOthersEntry', '10': 'round2PackagesForOthers'},
   ],
-  '3': const [DKGStep3Request_Round2PackagesForOthersEntry$json],
+  '3': [DKGStep3Request_Round2PackagesForOthersEntry$json],
 };
 
 @$core.Deprecated('Use dKGStep3RequestDescriptor instead')
-const DKGStep3Request_Round2PackagesForOthersEntry$json = const {
+const DKGStep3Request_Round2PackagesForOthersEntry$json = {
   '1': 'Round2PackagesForOthersEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
   ],
-  '7': const {'7': true},
+  '7': {'7': true},
 };
 
 /// Descriptor for `DKGStep3Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep3RequestDescriptor = $convert.base64Decode('Cg9ES0dTdGVwM1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZXIYAiABKAxSCmlkZW50aWZpZXISdQoacm91bmQyX3BhY2thZ2VzX2Zvcl9vdGhlcnMYAyADKAsyOC5tcGNfd2FsbGV0LkRLR1N0ZXAzUmVxdWVzdC5Sb3VuZDJQYWNrYWdlc0Zvck90aGVyc0VudHJ5Uhdyb3VuZDJQYWNrYWdlc0Zvck90aGVycxpKChxSb3VuZDJQYWNrYWdlc0Zvck90aGVyc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
+final $typed_data.Uint8List dKGStep3RequestDescriptor = $convert.base64Decode(
+    'Cg9ES0dTdGVwM1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW50aWZpZX'
+    'IYAiABKAxSCmlkZW50aWZpZXISdQoacm91bmQyX3BhY2thZ2VzX2Zvcl9vdGhlcnMYAyADKAsy'
+    'OC5tcGNfd2FsbGV0LkRLR1N0ZXAzUmVxdWVzdC5Sb3VuZDJQYWNrYWdlc0Zvck90aGVyc0VudH'
+    'J5Uhdyb3VuZDJQYWNrYWdlc0Zvck90aGVycxpKChxSb3VuZDJQYWNrYWdlc0Zvck90aGVyc0Vu'
+    'dHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
+
 @$core.Deprecated('Use dKGStep3ResponseDescriptor instead')
-const DKGStep3Response$json = const {
+const DKGStep3Response$json = {
   '1': 'DKGStep3Response',
-  '2': const [
-    const {'1': 'round2_packages_for_me', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Response.Round2PackagesForMeEntry', '10': 'round2PackagesForMe'},
+  '2': [
+    {'1': 'round2_packages_for_me', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.DKGStep3Response.Round2PackagesForMeEntry', '10': 'round2PackagesForMe'},
   ],
-  '3': const [DKGStep3Response_Round2PackagesForMeEntry$json],
+  '3': [DKGStep3Response_Round2PackagesForMeEntry$json],
 };
 
 @$core.Deprecated('Use dKGStep3ResponseDescriptor instead')
-const DKGStep3Response_Round2PackagesForMeEntry$json = const {
+const DKGStep3Response_Round2PackagesForMeEntry$json = {
   '1': 'Round2PackagesForMeEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
   ],
-  '7': const {'7': true},
+  '7': {'7': true},
 };
 
 /// Descriptor for `DKGStep3Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List dKGStep3ResponseDescriptor = $convert.base64Decode('ChBES0dTdGVwM1Jlc3BvbnNlEmoKFnJvdW5kMl9wYWNrYWdlc19mb3JfbWUYASADKAsyNS5tcGNfd2FsbGV0LkRLR1N0ZXAzUmVzcG9uc2UuUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5UhNyb3VuZDJQYWNrYWdlc0Zvck1lGkYKGFJvdW5kMlBhY2thZ2VzRm9yTWVFbnRyeRIQCgNrZXkYASABKAlSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
+final $typed_data.Uint8List dKGStep3ResponseDescriptor = $convert.base64Decode(
+    'ChBES0dTdGVwM1Jlc3BvbnNlEmoKFnJvdW5kMl9wYWNrYWdlc19mb3JfbWUYASADKAsyNS5tcG'
+    'Nfd2FsbGV0LkRLR1N0ZXAzUmVzcG9uc2UuUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5UhNyb3Vu'
+    'ZDJQYWNrYWdlc0Zvck1lGkYKGFJvdW5kMlBhY2thZ2VzRm9yTWVFbnRyeRIQCgNrZXkYASABKA'
+    'lSA2tleRIUCgV2YWx1ZRgCIAEoCVIFdmFsdWU6AjgB');
+
 @$core.Deprecated('Use signStep1RequestDescriptor instead')
-const SignStep1Request$json = const {
+const SignStep1Request$json = {
   '1': 'SignStep1Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'hiding_commitment', '3': 2, '4': 1, '5': 12, '10': 'hidingCommitment'},
-    const {'1': 'binding_commitment', '3': 3, '4': 1, '5': 12, '10': 'bindingCommitment'},
-    const {'1': 'message_to_sign', '3': 4, '4': 1, '5': 12, '10': 'messageToSign'},
-    const {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'full_transaction', '3': 6, '4': 1, '5': 12, '10': 'fullTransaction'},
-    const {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'script_path_spend', '3': 8, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'hiding_commitment', '3': 2, '4': 1, '5': 12, '10': 'hidingCommitment'},
+    {'1': 'binding_commitment', '3': 3, '4': 1, '5': 12, '10': 'bindingCommitment'},
+    {'1': 'message_to_sign', '3': 4, '4': 1, '5': 12, '10': 'messageToSign'},
+    {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'full_transaction', '3': 6, '4': 1, '5': 12, '10': 'fullTransaction'},
+    {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'script_path_spend', '3': 8, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+    {'1': 'ark_tx', '3': 10, '4': 1, '5': 12, '10': 'arkTx'},
+  ],
+  '9': [
+    {'1': 9, '2': 10},
   ],
 };
 
 /// Descriptor for `SignStep1Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List signStep1RequestDescriptor = $convert.base64Decode('ChBTaWduU3RlcDFSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIrChFoaWRpbmdfY29tbWl0bWVudBgCIAEoDFIQaGlkaW5nQ29tbWl0bWVudBItChJiaW5kaW5nX2NvbW1pdG1lbnQYAyABKAxSEWJpbmRpbmdDb21taXRtZW50EiYKD21lc3NhZ2VfdG9fc2lnbhgEIAEoDFINbWVzc2FnZVRvU2lnbhIcCglzaWduYXR1cmUYBSABKAxSCXNpZ25hdHVyZRIpChBmdWxsX3RyYW5zYWN0aW9uGAYgASgMUg9mdWxsVHJhbnNhY3Rpb24SIQoMdGltZXN0YW1wX21zGAcgASgDUgt0aW1lc3RhbXBNcxIqChFzY3JpcHRfcGF0aF9zcGVuZBgIIAEoCFIPc2NyaXB0UGF0aFNwZW5k');
+final $typed_data.Uint8List signStep1RequestDescriptor = $convert.base64Decode(
+    'ChBTaWduU3RlcDFSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIrChFoaWRpbmdfY2'
+    '9tbWl0bWVudBgCIAEoDFIQaGlkaW5nQ29tbWl0bWVudBItChJiaW5kaW5nX2NvbW1pdG1lbnQY'
+    'AyABKAxSEWJpbmRpbmdDb21taXRtZW50EiYKD21lc3NhZ2VfdG9fc2lnbhgEIAEoDFINbWVzc2'
+    'FnZVRvU2lnbhIcCglzaWduYXR1cmUYBSABKAxSCXNpZ25hdHVyZRIpChBmdWxsX3RyYW5zYWN0'
+    'aW9uGAYgASgMUg9mdWxsVHJhbnNhY3Rpb24SIQoMdGltZXN0YW1wX21zGAcgASgDUgt0aW1lc3'
+    'RhbXBNcxIqChFzY3JpcHRfcGF0aF9zcGVuZBgIIAEoCFIPc2NyaXB0UGF0aFNwZW5kEhUKBmFy'
+    'a190eBgKIAEoDFIFYXJrVHhKBAgJEAo=');
+
 @$core.Deprecated('Use signStep1ResponseDescriptor instead')
-const SignStep1Response$json = const {
+const SignStep1Response$json = {
   '1': 'SignStep1Response',
-  '2': const [
-    const {'1': 'commitments', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.SignStep1Response.CommitmentsEntry', '10': 'commitments'},
-    const {'1': 'message_to_sign', '3': 2, '4': 1, '5': 12, '10': 'messageToSign'},
-    const {'1': 'used_key_index', '3': 3, '4': 1, '5': 5, '10': 'usedKeyIndex'},
+  '2': [
+    {'1': 'commitments', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.SignStep1Response.CommitmentsEntry', '10': 'commitments'},
+    {'1': 'message_to_sign', '3': 2, '4': 1, '5': 12, '10': 'messageToSign'},
+    {'1': 'used_key_index', '3': 3, '4': 1, '5': 5, '10': 'usedKeyIndex'},
   ],
-  '3': const [SignStep1Response_Commitment$json, SignStep1Response_CommitmentsEntry$json],
+  '3': [SignStep1Response_Commitment$json, SignStep1Response_CommitmentsEntry$json],
 };
 
 @$core.Deprecated('Use signStep1ResponseDescriptor instead')
-const SignStep1Response_Commitment$json = const {
+const SignStep1Response_Commitment$json = {
   '1': 'Commitment',
-  '2': const [
-    const {'1': 'hiding', '3': 1, '4': 1, '5': 12, '10': 'hiding'},
-    const {'1': 'binding', '3': 2, '4': 1, '5': 12, '10': 'binding'},
+  '2': [
+    {'1': 'hiding', '3': 1, '4': 1, '5': 12, '10': 'hiding'},
+    {'1': 'binding', '3': 2, '4': 1, '5': 12, '10': 'binding'},
   ],
 };
 
 @$core.Deprecated('Use signStep1ResponseDescriptor instead')
-const SignStep1Response_CommitmentsEntry$json = const {
+const SignStep1Response_CommitmentsEntry$json = {
   '1': 'CommitmentsEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 11, '6': '.mpc_wallet.SignStep1Response.Commitment', '10': 'value'},
+  '2': [
+    {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
+    {'1': 'value', '3': 2, '4': 1, '5': 11, '6': '.mpc_wallet.SignStep1Response.Commitment', '10': 'value'},
   ],
-  '7': const {'7': true},
+  '7': {'7': true},
 };
 
 /// Descriptor for `SignStep1Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List signStep1ResponseDescriptor = $convert.base64Decode('ChFTaWduU3RlcDFSZXNwb25zZRJQCgtjb21taXRtZW50cxgBIAMoCzIuLm1wY193YWxsZXQuU2lnblN0ZXAxUmVzcG9uc2UuQ29tbWl0bWVudHNFbnRyeVILY29tbWl0bWVudHMSJgoPbWVzc2FnZV90b19zaWduGAIgASgMUg1tZXNzYWdlVG9TaWduEiQKDnVzZWRfa2V5X2luZGV4GAMgASgFUgx1c2VkS2V5SW5kZXgaPgoKQ29tbWl0bWVudBIWCgZoaWRpbmcYASABKAxSBmhpZGluZxIYCgdiaW5kaW5nGAIgASgMUgdiaW5kaW5nGmgKEENvbW1pdG1lbnRzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSPgoFdmFsdWUYAiABKAsyKC5tcGNfd2FsbGV0LlNpZ25TdGVwMVJlc3BvbnNlLkNvbW1pdG1lbnRSBXZhbHVlOgI4AQ==');
+final $typed_data.Uint8List signStep1ResponseDescriptor = $convert.base64Decode(
+    'ChFTaWduU3RlcDFSZXNwb25zZRJQCgtjb21taXRtZW50cxgBIAMoCzIuLm1wY193YWxsZXQuU2'
+    'lnblN0ZXAxUmVzcG9uc2UuQ29tbWl0bWVudHNFbnRyeVILY29tbWl0bWVudHMSJgoPbWVzc2Fn'
+    'ZV90b19zaWduGAIgASgMUg1tZXNzYWdlVG9TaWduEiQKDnVzZWRfa2V5X2luZGV4GAMgASgFUg'
+    'x1c2VkS2V5SW5kZXgaPgoKQ29tbWl0bWVudBIWCgZoaWRpbmcYASABKAxSBmhpZGluZxIYCgdi'
+    'aW5kaW5nGAIgASgMUgdiaW5kaW5nGmgKEENvbW1pdG1lbnRzRW50cnkSEAoDa2V5GAEgASgJUg'
+    'NrZXkSPgoFdmFsdWUYAiABKAsyKC5tcGNfd2FsbGV0LlNpZ25TdGVwMVJlc3BvbnNlLkNvbW1p'
+    'dG1lbnRSBXZhbHVlOgI4AQ==');
+
 @$core.Deprecated('Use signStep2RequestDescriptor instead')
-const SignStep2Request$json = const {
+const SignStep2Request$json = {
   '1': 'SignStep2Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature_share', '3': 3, '4': 1, '5': 12, '10': 'signatureShare'},
-    const {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature_share', '3': 3, '4': 1, '5': 12, '10': 'signatureShare'},
+    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+  '9': [
+    {'1': 6, '2': 7},
   ],
 };
 
 /// Descriptor for `SignStep2Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List signStep2RequestDescriptor = $convert.base64Decode('ChBTaWduU3RlcDJSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBInCg9zaWduYXR1cmVfc2hhcmUYAyABKAxSDnNpZ25hdHVyZVNoYXJlEhwKCXNpZ25hdHVyZRgEIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgFIAEoA1ILdGltZXN0YW1wTXM=');
-@$core.Deprecated('Use utxoInfoDescriptor instead')
-const UtxoInfo$json = const {
-  '1': 'UtxoInfo',
-  '2': const [
-    const {'1': 'tx_hash', '3': 1, '4': 1, '5': 9, '10': 'txHash'},
-    const {'1': 'vout', '3': 2, '4': 1, '5': 5, '10': 'vout'},
-    const {'1': 'amount', '3': 3, '4': 1, '5': 3, '10': 'amount'},
-  ],
-};
+final $typed_data.Uint8List signStep2RequestDescriptor = $convert.base64Decode(
+    'ChBTaWduU3RlcDJSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBInCg9zaWduYXR1cm'
+    'Vfc2hhcmUYAyABKAxSDnNpZ25hdHVyZVNoYXJlEhwKCXNpZ25hdHVyZRgEIAEoDFIJc2lnbmF0'
+    'dXJlEiEKDHRpbWVzdGFtcF9tcxgFIAEoA1ILdGltZXN0YW1wTXNKBAgGEAc=');
 
-/// Descriptor for `UtxoInfo`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List utxoInfoDescriptor = $convert.base64Decode('CghVdHhvSW5mbxIXCgd0eF9oYXNoGAEgASgJUgZ0eEhhc2gSEgoEdm91dBgCIAEoBVIEdm91dBIWCgZhbW91bnQYAyABKANSBmFtb3VudA==');
 @$core.Deprecated('Use signStep2ResponseDescriptor instead')
-const SignStep2Response$json = const {
+const SignStep2Response$json = {
   '1': 'SignStep2Response',
-  '2': const [
-    const {'1': 'r_point', '3': 1, '4': 1, '5': 12, '10': 'rPoint'},
-    const {'1': 'z_scalar', '3': 2, '4': 1, '5': 12, '10': 'zScalar'},
+  '2': [
+    {'1': 'r_point', '3': 1, '4': 1, '5': 12, '10': 'rPoint'},
+    {'1': 'z_scalar', '3': 2, '4': 1, '5': 12, '10': 'zScalar'},
   ],
 };
 
 /// Descriptor for `SignStep2Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List signStep2ResponseDescriptor = $convert.base64Decode('ChFTaWduU3RlcDJSZXNwb25zZRIXCgdyX3BvaW50GAEgASgMUgZyUG9pbnQSGQoIel9zY2FsYXIYAiABKAxSB3pTY2FsYXI=');
-@$core.Deprecated('Use refreshStep1RequestDescriptor instead')
-const RefreshStep1Request$json = const {
-  '1': 'RefreshStep1Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
-    const {'1': 'threshold_amount', '3': 4, '4': 1, '5': 3, '10': 'thresholdAmount'},
-    const {'1': 'interval', '3': 5, '4': 1, '5': 3, '10': 'interval'},
-    const {'1': 'signature', '3': 6, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
+final $typed_data.Uint8List signStep2ResponseDescriptor = $convert.base64Decode(
+    'ChFTaWduU3RlcDJSZXNwb25zZRIXCgdyX3BvaW50GAEgASgMUgZyUG9pbnQSGQoIel9zY2FsYX'
+    'IYAiABKAxSB3pTY2FsYXI=');
 
-/// Descriptor for `RefreshStep1Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep1RequestDescriptor = $convert.base64Decode('ChNSZWZyZXNoU3RlcDFSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIlCg5yb3VuZDFfcGFja2FnZRgDIAEoCVINcm91bmQxUGFja2FnZRIpChB0aHJlc2hvbGRfYW1vdW50GAQgASgDUg90aHJlc2hvbGRBbW91bnQSGgoIaW50ZXJ2YWwYBSABKANSCGludGVydmFsEhwKCXNpZ25hdHVyZRgGIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgHIAEoA1ILdGltZXN0YW1wTXM=');
-@$core.Deprecated('Use refreshStep1ResponseDescriptor instead')
-const RefreshStep1Response$json = const {
-  '1': 'RefreshStep1Response',
-  '2': const [
-    const {'1': 'round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.RefreshStep1Response.Round1PackagesEntry', '10': 'round1Packages'},
-    const {'1': 'policy_id', '3': 2, '4': 1, '5': 9, '10': 'policyId'},
-    const {'1': 'start_time', '3': 3, '4': 1, '5': 3, '10': 'startTime'},
-  ],
-  '3': const [RefreshStep1Response_Round1PackagesEntry$json],
-};
-
-@$core.Deprecated('Use refreshStep1ResponseDescriptor instead')
-const RefreshStep1Response_Round1PackagesEntry$json = const {
-  '1': 'Round1PackagesEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
-  ],
-  '7': const {'7': true},
-};
-
-/// Descriptor for `RefreshStep1Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep1ResponseDescriptor = $convert.base64Decode('ChRSZWZyZXNoU3RlcDFSZXNwb25zZRJdCg9yb3VuZDFfcGFja2FnZXMYASADKAsyNC5tcGNfd2FsbGV0LlJlZnJlc2hTdGVwMVJlc3BvbnNlLlJvdW5kMVBhY2thZ2VzRW50cnlSDnJvdW5kMVBhY2thZ2VzEhsKCXBvbGljeV9pZBgCIAEoCVIIcG9saWN5SWQSHQoKc3RhcnRfdGltZRgDIAEoA1IJc3RhcnRUaW1lGkEKE1JvdW5kMVBhY2thZ2VzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AQ==');
-@$core.Deprecated('Use refreshStep2RequestDescriptor instead')
-const RefreshStep2Request$json = const {
-  '1': 'RefreshStep2Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'round1_package', '3': 3, '4': 1, '5': 9, '10': 'round1Package'},
-    const {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `RefreshStep2Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep2RequestDescriptor = $convert.base64Decode('ChNSZWZyZXNoU3RlcDJSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIlCg5yb3VuZDFfcGFja2FnZRgDIAEoCVINcm91bmQxUGFja2FnZRIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBSABKANSC3RpbWVzdGFtcE1z');
-@$core.Deprecated('Use refreshStep2ResponseDescriptor instead')
-const RefreshStep2Response$json = const {
-  '1': 'RefreshStep2Response',
-  '2': const [
-    const {'1': 'all_round1_packages', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.RefreshStep2Response.AllRound1PackagesEntry', '10': 'allRound1Packages'},
-  ],
-  '3': const [RefreshStep2Response_AllRound1PackagesEntry$json],
-};
-
-@$core.Deprecated('Use refreshStep2ResponseDescriptor instead')
-const RefreshStep2Response_AllRound1PackagesEntry$json = const {
-  '1': 'AllRound1PackagesEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
-  ],
-  '7': const {'7': true},
-};
-
-/// Descriptor for `RefreshStep2Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep2ResponseDescriptor = $convert.base64Decode('ChRSZWZyZXNoU3RlcDJSZXNwb25zZRJnChNhbGxfcm91bmQxX3BhY2thZ2VzGAEgAygLMjcubXBjX3dhbGxldC5SZWZyZXNoU3RlcDJSZXNwb25zZS5BbGxSb3VuZDFQYWNrYWdlc0VudHJ5UhFhbGxSb3VuZDFQYWNrYWdlcxpEChZBbGxSb3VuZDFQYWNrYWdlc0VudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
-@$core.Deprecated('Use refreshStep3RequestDescriptor instead')
-const RefreshStep3Request$json = const {
-  '1': 'RefreshStep3Request',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'round2_packages_for_others', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.RefreshStep3Request.Round2PackagesForOthersEntry', '10': 'round2PackagesForOthers'},
-    const {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-  '3': const [RefreshStep3Request_Round2PackagesForOthersEntry$json],
-};
-
-@$core.Deprecated('Use refreshStep3RequestDescriptor instead')
-const RefreshStep3Request_Round2PackagesForOthersEntry$json = const {
-  '1': 'Round2PackagesForOthersEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
-  ],
-  '7': const {'7': true},
-};
-
-/// Descriptor for `RefreshStep3Request`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep3RequestDescriptor = $convert.base64Decode('ChNSZWZyZXNoU3RlcDNSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBJ5Chpyb3VuZDJfcGFja2FnZXNfZm9yX290aGVycxgDIAMoCzI8Lm1wY193YWxsZXQuUmVmcmVzaFN0ZXAzUmVxdWVzdC5Sb3VuZDJQYWNrYWdlc0Zvck90aGVyc0VudHJ5Uhdyb3VuZDJQYWNrYWdlc0Zvck90aGVycxIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBSABKANSC3RpbWVzdGFtcE1zGkoKHFJvdW5kMlBhY2thZ2VzRm9yT3RoZXJzRW50cnkSEAoDa2V5GAEgASgJUgNrZXkSFAoFdmFsdWUYAiABKAlSBXZhbHVlOgI4AQ==');
-@$core.Deprecated('Use refreshStep3ResponseDescriptor instead')
-const RefreshStep3Response$json = const {
-  '1': 'RefreshStep3Response',
-  '2': const [
-    const {'1': 'round2_packages_for_me', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.RefreshStep3Response.Round2PackagesForMeEntry', '10': 'round2PackagesForMe'},
-  ],
-  '3': const [RefreshStep3Response_Round2PackagesForMeEntry$json],
-};
-
-@$core.Deprecated('Use refreshStep3ResponseDescriptor instead')
-const RefreshStep3Response_Round2PackagesForMeEntry$json = const {
-  '1': 'Round2PackagesForMeEntry',
-  '2': const [
-    const {'1': 'key', '3': 1, '4': 1, '5': 9, '10': 'key'},
-    const {'1': 'value', '3': 2, '4': 1, '5': 9, '10': 'value'},
-  ],
-  '7': const {'7': true},
-};
-
-/// Descriptor for `RefreshStep3Response`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List refreshStep3ResponseDescriptor = $convert.base64Decode('ChRSZWZyZXNoU3RlcDNSZXNwb25zZRJuChZyb3VuZDJfcGFja2FnZXNfZm9yX21lGAEgAygLMjkubXBjX3dhbGxldC5SZWZyZXNoU3RlcDNSZXNwb25zZS5Sb3VuZDJQYWNrYWdlc0Zvck1lRW50cnlSE3JvdW5kMlBhY2thZ2VzRm9yTWUaRgoYUm91bmQyUGFja2FnZXNGb3JNZUVudHJ5EhAKA2tleRgBIAEoCVIDa2V5EhQKBXZhbHVlGAIgASgJUgV2YWx1ZToCOAE=');
-@$core.Deprecated('Use getPolicyIdRequestDescriptor instead')
-const GetPolicyIdRequest$json = const {
-  '1': 'GetPolicyIdRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'tx_message', '3': 2, '4': 1, '5': 12, '10': 'txMessage'},
-    const {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `GetPolicyIdRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getPolicyIdRequestDescriptor = $convert.base64Decode('ChJHZXRQb2xpY3lJZFJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh0KCnR4X21lc3NhZ2UYAiABKAxSCXR4TWVzc2FnZRIcCglzaWduYXR1cmUYAyABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBCABKANSC3RpbWVzdGFtcE1z');
-@$core.Deprecated('Use getPolicyIdResponseDescriptor instead')
-const GetPolicyIdResponse$json = const {
-  '1': 'GetPolicyIdResponse',
-  '2': const [
-    const {'1': 'policy_id', '3': 1, '4': 1, '5': 9, '10': 'policyId'},
-  ],
-};
-
-/// Descriptor for `GetPolicyIdResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getPolicyIdResponseDescriptor = $convert.base64Decode('ChNHZXRQb2xpY3lJZFJlc3BvbnNlEhsKCXBvbGljeV9pZBgBIAEoCVIIcG9saWN5SWQ=');
-@$core.Deprecated('Use updatePolicyRequestDescriptor instead')
-const UpdatePolicyRequest$json = const {
-  '1': 'UpdatePolicyRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'policy_id', '3': 2, '4': 1, '5': 9, '10': 'policyId'},
-    const {'1': 'threshold_sats', '3': 3, '4': 1, '5': 3, '10': 'thresholdSats'},
-    const {'1': 'interval_seconds', '3': 4, '4': 1, '5': 3, '10': 'intervalSeconds'},
-    const {'1': 'frost_signature_r', '3': 5, '4': 1, '5': 12, '10': 'frostSignatureR'},
-    const {'1': 'frost_signature_z', '3': 6, '4': 1, '5': 12, '10': 'frostSignatureZ'},
-    const {'1': 'timestamp_ms', '3': 7, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `UpdatePolicyRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List updatePolicyRequestDescriptor = $convert.base64Decode('ChNVcGRhdGVQb2xpY3lSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIbCglwb2xpY3lfaWQYAiABKAlSCHBvbGljeUlkEiUKDnRocmVzaG9sZF9zYXRzGAMgASgDUg10aHJlc2hvbGRTYXRzEikKEGludGVydmFsX3NlY29uZHMYBCABKANSD2ludGVydmFsU2Vjb25kcxIqChFmcm9zdF9zaWduYXR1cmVfchgFIAEoDFIPZnJvc3RTaWduYXR1cmVSEioKEWZyb3N0X3NpZ25hdHVyZV96GAYgASgMUg9mcm9zdFNpZ25hdHVyZVoSIQoMdGltZXN0YW1wX21zGAcgASgDUgt0aW1lc3RhbXBNcw==');
-@$core.Deprecated('Use updatePolicyResponseDescriptor instead')
-const UpdatePolicyResponse$json = const {
-  '1': 'UpdatePolicyResponse',
-  '2': const [
-    const {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
-  ],
-};
-
-/// Descriptor for `UpdatePolicyResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List updatePolicyResponseDescriptor = $convert.base64Decode('ChRVcGRhdGVQb2xpY3lSZXNwb25zZRIYCgdzdWNjZXNzGAEgASgIUgdzdWNjZXNz');
-@$core.Deprecated('Use deletePolicyRequestDescriptor instead')
-const DeletePolicyRequest$json = const {
-  '1': 'DeletePolicyRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'policy_id', '3': 2, '4': 1, '5': 9, '10': 'policyId'},
-    const {'1': 'frost_signature_r', '3': 3, '4': 1, '5': 12, '10': 'frostSignatureR'},
-    const {'1': 'frost_signature_z', '3': 4, '4': 1, '5': 12, '10': 'frostSignatureZ'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `DeletePolicyRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List deletePolicyRequestDescriptor = $convert.base64Decode('ChNEZWxldGVQb2xpY3lSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIbCglwb2xpY3lfaWQYAiABKAlSCHBvbGljeUlkEioKEWZyb3N0X3NpZ25hdHVyZV9yGAMgASgMUg9mcm9zdFNpZ25hdHVyZVISKgoRZnJvc3Rfc2lnbmF0dXJlX3oYBCABKAxSD2Zyb3N0U2lnbmF0dXJlWhIhCgx0aW1lc3RhbXBfbXMYBSABKANSC3RpbWVzdGFtcE1z');
-@$core.Deprecated('Use deletePolicyResponseDescriptor instead')
-const DeletePolicyResponse$json = const {
-  '1': 'DeletePolicyResponse',
-  '2': const [
-    const {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
-  ],
-};
-
-/// Descriptor for `DeletePolicyResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List deletePolicyResponseDescriptor = $convert.base64Decode('ChREZWxldGVQb2xpY3lSZXNwb25zZRIYCgdzdWNjZXNzGAEgASgIUgdzdWNjZXNz');
-@$core.Deprecated('Use broadcastTransactionRequestDescriptor instead')
-const BroadcastTransactionRequest$json = const {
-  '1': 'BroadcastTransactionRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'tx_hex', '3': 2, '4': 1, '5': 9, '10': 'txHex'},
-  ],
-};
-
-/// Descriptor for `BroadcastTransactionRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List broadcastTransactionRequestDescriptor = $convert.base64Decode('ChtCcm9hZGNhc3RUcmFuc2FjdGlvblJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhUKBnR4X2hleBgCIAEoCVIFdHhIZXg=');
-@$core.Deprecated('Use broadcastTransactionResponseDescriptor instead')
-const BroadcastTransactionResponse$json = const {
-  '1': 'BroadcastTransactionResponse',
-  '2': const [
-    const {'1': 'tx_id', '3': 1, '4': 1, '5': 9, '10': 'txId'},
-  ],
-};
-
-/// Descriptor for `BroadcastTransactionResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List broadcastTransactionResponseDescriptor = $convert.base64Decode('ChxCcm9hZGNhc3RUcmFuc2FjdGlvblJlc3BvbnNlEhMKBXR4X2lkGAEgASgJUgR0eElk');
-@$core.Deprecated('Use fetchHistoryRequestDescriptor instead')
-const FetchHistoryRequest$json = const {
-  '1': 'FetchHistoryRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `FetchHistoryRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchHistoryRequestDescriptor = $convert.base64Decode('ChNGZXRjaEhpc3RvcnlSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1z');
-@$core.Deprecated('Use fetchHistoryResponseDescriptor instead')
-const FetchHistoryResponse$json = const {
-  '1': 'FetchHistoryResponse',
-  '2': const [
-    const {'1': 'utxos', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'utxos'},
-  ],
-};
-
-/// Descriptor for `FetchHistoryResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchHistoryResponseDescriptor = $convert.base64Decode('ChRGZXRjaEhpc3RvcnlSZXNwb25zZRIqCgV1dHhvcxgBIAMoCzIULm1wY193YWxsZXQuVXR4b0luZm9SBXV0eG9z');
-@$core.Deprecated('Use fetchRecentTransactionsRequestDescriptor instead')
-const FetchRecentTransactionsRequest$json = const {
-  '1': 'FetchRecentTransactionsRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `FetchRecentTransactionsRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchRecentTransactionsRequestDescriptor = $convert.base64Decode('Ch5GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1wTXM=');
-@$core.Deprecated('Use fetchRecentTransactionsResponseDescriptor instead')
-const FetchRecentTransactionsResponse$json = const {
-  '1': 'FetchRecentTransactionsResponse',
-  '2': const [
-    const {'1': 'transactions', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.TransactionSummary', '10': 'transactions'},
-  ],
-};
-
-/// Descriptor for `FetchRecentTransactionsResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List fetchRecentTransactionsResponseDescriptor = $convert.base64Decode('Ch9GZXRjaFJlY2VudFRyYW5zYWN0aW9uc1Jlc3BvbnNlEkIKDHRyYW5zYWN0aW9ucxgBIAMoCzIeLm1wY193YWxsZXQuVHJhbnNhY3Rpb25TdW1tYXJ5Ugx0cmFuc2FjdGlvbnM=');
-@$core.Deprecated('Use transactionSummaryDescriptor instead')
-const TransactionSummary$json = const {
-  '1': 'TransactionSummary',
-  '2': const [
-    const {'1': 'tx_hash', '3': 1, '4': 1, '5': 9, '10': 'txHash'},
-    const {'1': 'amount_sats', '3': 2, '4': 1, '5': 3, '10': 'amountSats'},
-    const {'1': 'timestamp', '3': 3, '4': 1, '5': 3, '10': 'timestamp'},
-    const {'1': 'is_pending', '3': 4, '4': 1, '5': 8, '10': 'isPending'},
-  ],
-};
-
-/// Descriptor for `TransactionSummary`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List transactionSummaryDescriptor = $convert.base64Decode('ChJUcmFuc2FjdGlvblN1bW1hcnkSFwoHdHhfaGFzaBgBIAEoCVIGdHhIYXNoEh8KC2Ftb3VudF9zYXRzGAIgASgDUgphbW91bnRTYXRzEhwKCXRpbWVzdGFtcBgDIAEoA1IJdGltZXN0YW1wEh0KCmlzX3BlbmRpbmcYBCABKAhSCWlzUGVuZGluZw==');
-@$core.Deprecated('Use subscribeToHistoryRequestDescriptor instead')
-const SubscribeToHistoryRequest$json = const {
-  '1': 'SubscribeToHistoryRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
-
-/// Descriptor for `SubscribeToHistoryRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List subscribeToHistoryRequestDescriptor = $convert.base64Decode('ChlTdWJzY3JpYmVUb0hpc3RvcnlSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1z');
-@$core.Deprecated('Use transactionNotificationDescriptor instead')
-const TransactionNotification$json = const {
-  '1': 'TransactionNotification',
-  '2': const [
-    const {'1': 'tx_hash', '3': 1, '4': 1, '5': 9, '10': 'txHash'},
-    const {'1': 'height', '3': 2, '4': 1, '5': 5, '10': 'height'},
-    const {'1': 'added_utxos', '3': 3, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'addedUtxos'},
-    const {'1': 'spent_utxos', '3': 4, '4': 3, '5': 11, '6': '.mpc_wallet.UtxoInfo', '10': 'spentUtxos'},
-  ],
-};
-
-/// Descriptor for `TransactionNotification`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List transactionNotificationDescriptor = $convert.base64Decode('ChdUcmFuc2FjdGlvbk5vdGlmaWNhdGlvbhIXCgd0eF9oYXNoGAEgASgJUgZ0eEhhc2gSFgoGaGVpZ2h0GAIgASgFUgZoZWlnaHQSNQoLYWRkZWRfdXR4b3MYAyADKAsyFC5tcGNfd2FsbGV0LlV0eG9JbmZvUgphZGRlZFV0eG9zEjUKC3NwZW50X3V0eG9zGAQgAygLMhQubXBjX3dhbGxldC5VdHhvSW5mb1IKc3BlbnRVdHhvcw==');
 @$core.Deprecated('Use getArkInfoRequestDescriptor instead')
-const GetArkInfoRequest$json = const {
+const GetArkInfoRequest$json = {
   '1': 'GetArkInfoRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `GetArkInfoRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getArkInfoRequestDescriptor = $convert.base64Decode('ChFHZXRBcmtJbmZvUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcw==');
+final $typed_data.Uint8List getArkInfoRequestDescriptor = $convert.base64Decode(
+    'ChFHZXRBcmtJbmZvUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dX'
+    'JlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcw==');
+
 @$core.Deprecated('Use getArkInfoResponseDescriptor instead')
-const GetArkInfoResponse$json = const {
+const GetArkInfoResponse$json = {
   '1': 'GetArkInfoResponse',
-  '2': const [
-    const {'1': 'signer_pubkey', '3': 1, '4': 1, '5': 9, '10': 'signerPubkey'},
-    const {'1': 'forfeit_pubkey', '3': 2, '4': 1, '5': 9, '10': 'forfeitPubkey'},
-    const {'1': 'network', '3': 3, '4': 1, '5': 9, '10': 'network'},
-    const {'1': 'session_duration', '3': 4, '4': 1, '5': 3, '10': 'sessionDuration'},
-    const {'1': 'unilateral_exit_delay', '3': 5, '4': 1, '5': 3, '10': 'unilateralExitDelay'},
-    const {'1': 'boarding_exit_delay', '3': 6, '4': 1, '5': 3, '10': 'boardingExitDelay'},
-    const {'1': 'vtxo_min_amount', '3': 7, '4': 1, '5': 3, '10': 'vtxoMinAmount'},
-    const {'1': 'dust', '3': 8, '4': 1, '5': 3, '10': 'dust'},
-    const {'1': 'checkpoint_tapscript', '3': 9, '4': 1, '5': 9, '10': 'checkpointTapscript'},
-    const {'1': 'forfeit_address', '3': 10, '4': 1, '5': 9, '10': 'forfeitAddress'},
-    const {'1': 'auto_settle_safety_margin_secs', '3': 11, '4': 1, '5': 3, '10': 'autoSettleSafetyMarginSecs'},
+  '2': [
+    {'1': 'signer_pubkey', '3': 1, '4': 1, '5': 9, '10': 'signerPubkey'},
+    {'1': 'forfeit_pubkey', '3': 2, '4': 1, '5': 9, '10': 'forfeitPubkey'},
+    {'1': 'network', '3': 3, '4': 1, '5': 9, '10': 'network'},
+    {'1': 'session_duration', '3': 4, '4': 1, '5': 3, '10': 'sessionDuration'},
+    {'1': 'unilateral_exit_delay', '3': 5, '4': 1, '5': 3, '10': 'unilateralExitDelay'},
+    {'1': 'boarding_exit_delay', '3': 6, '4': 1, '5': 3, '10': 'boardingExitDelay'},
+    {'1': 'vtxo_min_amount', '3': 7, '4': 1, '5': 3, '10': 'vtxoMinAmount'},
+    {'1': 'dust', '3': 8, '4': 1, '5': 3, '10': 'dust'},
+    {'1': 'checkpoint_tapscript', '3': 9, '4': 1, '5': 9, '10': 'checkpointTapscript'},
+    {'1': 'forfeit_address', '3': 10, '4': 1, '5': 9, '10': 'forfeitAddress'},
+    {'1': 'auto_settle_safety_margin_secs', '3': 11, '4': 1, '5': 3, '10': 'autoSettleSafetyMarginSecs'},
   ],
 };
 
 /// Descriptor for `GetArkInfoResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getArkInfoResponseDescriptor = $convert.base64Decode('ChJHZXRBcmtJbmZvUmVzcG9uc2USIwoNc2lnbmVyX3B1YmtleRgBIAEoCVIMc2lnbmVyUHVia2V5EiUKDmZvcmZlaXRfcHVia2V5GAIgASgJUg1mb3JmZWl0UHVia2V5EhgKB25ldHdvcmsYAyABKAlSB25ldHdvcmsSKQoQc2Vzc2lvbl9kdXJhdGlvbhgEIAEoA1IPc2Vzc2lvbkR1cmF0aW9uEjIKFXVuaWxhdGVyYWxfZXhpdF9kZWxheRgFIAEoA1ITdW5pbGF0ZXJhbEV4aXREZWxheRIuChNib2FyZGluZ19leGl0X2RlbGF5GAYgASgDUhFib2FyZGluZ0V4aXREZWxheRImCg92dHhvX21pbl9hbW91bnQYByABKANSDXZ0eG9NaW5BbW91bnQSEgoEZHVzdBgIIAEoA1IEZHVzdBIxChRjaGVja3BvaW50X3RhcHNjcmlwdBgJIAEoCVITY2hlY2twb2ludFRhcHNjcmlwdBInCg9mb3JmZWl0X2FkZHJlc3MYCiABKAlSDmZvcmZlaXRBZGRyZXNzEkIKHmF1dG9fc2V0dGxlX3NhZmV0eV9tYXJnaW5fc2VjcxgLIAEoA1IaYXV0b1NldHRsZVNhZmV0eU1hcmdpblNlY3M=');
+final $typed_data.Uint8List getArkInfoResponseDescriptor = $convert.base64Decode(
+    'ChJHZXRBcmtJbmZvUmVzcG9uc2USIwoNc2lnbmVyX3B1YmtleRgBIAEoCVIMc2lnbmVyUHVia2'
+    'V5EiUKDmZvcmZlaXRfcHVia2V5GAIgASgJUg1mb3JmZWl0UHVia2V5EhgKB25ldHdvcmsYAyAB'
+    'KAlSB25ldHdvcmsSKQoQc2Vzc2lvbl9kdXJhdGlvbhgEIAEoA1IPc2Vzc2lvbkR1cmF0aW9uEj'
+    'IKFXVuaWxhdGVyYWxfZXhpdF9kZWxheRgFIAEoA1ITdW5pbGF0ZXJhbEV4aXREZWxheRIuChNi'
+    'b2FyZGluZ19leGl0X2RlbGF5GAYgASgDUhFib2FyZGluZ0V4aXREZWxheRImCg92dHhvX21pbl'
+    '9hbW91bnQYByABKANSDXZ0eG9NaW5BbW91bnQSEgoEZHVzdBgIIAEoA1IEZHVzdBIxChRjaGVj'
+    'a3BvaW50X3RhcHNjcmlwdBgJIAEoCVITY2hlY2twb2ludFRhcHNjcmlwdBInCg9mb3JmZWl0X2'
+    'FkZHJlc3MYCiABKAlSDmZvcmZlaXRBZGRyZXNzEkIKHmF1dG9fc2V0dGxlX3NhZmV0eV9tYXJn'
+    'aW5fc2VjcxgLIAEoA1IaYXV0b1NldHRsZVNhZmV0eU1hcmdpblNlY3M=');
+
 @$core.Deprecated('Use getArkAddressRequestDescriptor instead')
-const GetArkAddressRequest$json = const {
+const GetArkAddressRequest$json = {
   '1': 'GetArkAddressRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `GetArkAddressRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getArkAddressRequestDescriptor = $convert.base64Decode('ChRHZXRBcmtBZGRyZXNzUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcw==');
+final $typed_data.Uint8List getArkAddressRequestDescriptor = $convert.base64Decode(
+    'ChRHZXRBcmtBZGRyZXNzUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbm'
+    'F0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBN'
+    'cw==');
+
 @$core.Deprecated('Use getArkAddressResponseDescriptor instead')
-const GetArkAddressResponse$json = const {
+const GetArkAddressResponse$json = {
   '1': 'GetArkAddressResponse',
-  '2': const [
-    const {'1': 'ark_address', '3': 1, '4': 1, '5': 9, '10': 'arkAddress'},
+  '2': [
+    {'1': 'ark_address', '3': 1, '4': 1, '5': 9, '10': 'arkAddress'},
   ],
 };
 
 /// Descriptor for `GetArkAddressResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getArkAddressResponseDescriptor = $convert.base64Decode('ChVHZXRBcmtBZGRyZXNzUmVzcG9uc2USHwoLYXJrX2FkZHJlc3MYASABKAlSCmFya0FkZHJlc3M=');
+final $typed_data.Uint8List getArkAddressResponseDescriptor = $convert.base64Decode(
+    'ChVHZXRBcmtBZGRyZXNzUmVzcG9uc2USHwoLYXJrX2FkZHJlc3MYASABKAlSCmFya0FkZHJlc3'
+    'M=');
+
 @$core.Deprecated('Use getBoardingAddressRequestDescriptor instead')
-const GetBoardingAddressRequest$json = const {
+const GetBoardingAddressRequest$json = {
   '1': 'GetBoardingAddressRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `GetBoardingAddressRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getBoardingAddressRequestDescriptor = $convert.base64Decode('ChlHZXRCb2FyZGluZ0FkZHJlc3NSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1z');
+final $typed_data.Uint8List getBoardingAddressRequestDescriptor = $convert.base64Decode(
+    'ChlHZXRCb2FyZGluZ0FkZHJlc3NSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
+    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
+    'dGFtcE1z');
+
 @$core.Deprecated('Use getBoardingAddressResponseDescriptor instead')
-const GetBoardingAddressResponse$json = const {
+const GetBoardingAddressResponse$json = {
   '1': 'GetBoardingAddressResponse',
-  '2': const [
-    const {'1': 'boarding_address', '3': 1, '4': 1, '5': 9, '10': 'boardingAddress'},
+  '2': [
+    {'1': 'boarding_address', '3': 1, '4': 1, '5': 9, '10': 'boardingAddress'},
   ],
 };
 
 /// Descriptor for `GetBoardingAddressResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getBoardingAddressResponseDescriptor = $convert.base64Decode('ChpHZXRCb2FyZGluZ0FkZHJlc3NSZXNwb25zZRIpChBib2FyZGluZ19hZGRyZXNzGAEgASgJUg9ib2FyZGluZ0FkZHJlc3M=');
+final $typed_data.Uint8List getBoardingAddressResponseDescriptor = $convert.base64Decode(
+    'ChpHZXRCb2FyZGluZ0FkZHJlc3NSZXNwb25zZRIpChBib2FyZGluZ19hZGRyZXNzGAEgASgJUg'
+    '9ib2FyZGluZ0FkZHJlc3M=');
+
 @$core.Deprecated('Use vtxoInfoDescriptor instead')
-const VtxoInfo$json = const {
+const VtxoInfo$json = {
   '1': 'VtxoInfo',
-  '2': const [
-    const {'1': 'txid', '3': 1, '4': 1, '5': 9, '10': 'txid'},
-    const {'1': 'vout', '3': 2, '4': 1, '5': 13, '10': 'vout'},
-    const {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
-    const {'1': 'created_at', '3': 4, '4': 1, '5': 3, '10': 'createdAt'},
-    const {'1': 'expires_at', '3': 5, '4': 1, '5': 3, '10': 'expiresAt'},
-    const {'1': 'status', '3': 6, '4': 1, '5': 9, '10': 'status'},
-    const {'1': 'is_preconfirmed', '3': 7, '4': 1, '5': 8, '10': 'isPreconfirmed'},
-    const {'1': 'exit_delay', '3': 8, '4': 1, '5': 13, '10': 'exitDelay'},
-    const {'1': 'script', '3': 9, '4': 1, '5': 9, '10': 'script'},
+  '2': [
+    {'1': 'txid', '3': 1, '4': 1, '5': 9, '10': 'txid'},
+    {'1': 'vout', '3': 2, '4': 1, '5': 13, '10': 'vout'},
+    {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
+    {'1': 'created_at', '3': 4, '4': 1, '5': 3, '10': 'createdAt'},
+    {'1': 'expires_at', '3': 5, '4': 1, '5': 3, '10': 'expiresAt'},
+    {'1': 'status', '3': 6, '4': 1, '5': 9, '10': 'status'},
+    {'1': 'is_preconfirmed', '3': 7, '4': 1, '5': 8, '10': 'isPreconfirmed'},
+    {'1': 'exit_delay', '3': 8, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'script', '3': 9, '4': 1, '5': 9, '10': 'script'},
   ],
 };
 
 /// Descriptor for `VtxoInfo`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List vtxoInfoDescriptor = $convert.base64Decode('CghWdHhvSW5mbxISCgR0eGlkGAEgASgJUgR0eGlkEhIKBHZvdXQYAiABKA1SBHZvdXQSFgoGYW1vdW50GAMgASgEUgZhbW91bnQSHQoKY3JlYXRlZF9hdBgEIAEoA1IJY3JlYXRlZEF0Eh0KCmV4cGlyZXNfYXQYBSABKANSCWV4cGlyZXNBdBIWCgZzdGF0dXMYBiABKAlSBnN0YXR1cxInCg9pc19wcmVjb25maXJtZWQYByABKAhSDmlzUHJlY29uZmlybWVkEh0KCmV4aXRfZGVsYXkYCCABKA1SCWV4aXREZWxheRIWCgZzY3JpcHQYCSABKAlSBnNjcmlwdA==');
+final $typed_data.Uint8List vtxoInfoDescriptor = $convert.base64Decode(
+    'CghWdHhvSW5mbxISCgR0eGlkGAEgASgJUgR0eGlkEhIKBHZvdXQYAiABKA1SBHZvdXQSFgoGYW'
+    '1vdW50GAMgASgEUgZhbW91bnQSHQoKY3JlYXRlZF9hdBgEIAEoA1IJY3JlYXRlZEF0Eh0KCmV4'
+    'cGlyZXNfYXQYBSABKANSCWV4cGlyZXNBdBIWCgZzdGF0dXMYBiABKAlSBnN0YXR1cxInCg9pc1'
+    '9wcmVjb25maXJtZWQYByABKAhSDmlzUHJlY29uZmlybWVkEh0KCmV4aXRfZGVsYXkYCCABKA1S'
+    'CWV4aXREZWxheRIWCgZzY3JpcHQYCSABKAlSBnNjcmlwdA==');
+
 @$core.Deprecated('Use listVtxosRequestDescriptor instead')
-const ListVtxosRequest$json = const {
+const ListVtxosRequest$json = {
   '1': 'ListVtxosRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `ListVtxosRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listVtxosRequestDescriptor = $convert.base64Decode('ChBMaXN0VnR4b3NSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1z');
+final $typed_data.Uint8List listVtxosRequestDescriptor = $convert.base64Decode(
+    'ChBMaXN0VnR4b3NSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cm'
+    'UYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1z');
+
 @$core.Deprecated('Use listVtxosResponseDescriptor instead')
-const ListVtxosResponse$json = const {
+const ListVtxosResponse$json = {
   '1': 'ListVtxosResponse',
-  '2': const [
-    const {'1': 'vtxos', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.VtxoInfo', '10': 'vtxos'},
-    const {'1': 'total_balance', '3': 2, '4': 1, '5': 4, '10': 'totalBalance'},
-    const {'1': 'has_active_delegate', '3': 3, '4': 1, '5': 8, '10': 'hasActiveDelegate'},
+  '2': [
+    {'1': 'vtxos', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.VtxoInfo', '10': 'vtxos'},
+    {'1': 'total_balance', '3': 2, '4': 1, '5': 4, '10': 'totalBalance'},
+    {'1': 'has_active_delegate', '3': 3, '4': 1, '5': 8, '10': 'hasActiveDelegate'},
   ],
 };
 
 /// Descriptor for `ListVtxosResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listVtxosResponseDescriptor = $convert.base64Decode('ChFMaXN0VnR4b3NSZXNwb25zZRIqCgV2dHhvcxgBIAMoCzIULm1wY193YWxsZXQuVnR4b0luZm9SBXZ0eG9zEiMKDXRvdGFsX2JhbGFuY2UYAiABKARSDHRvdGFsQmFsYW5jZRIuChNoYXNfYWN0aXZlX2RlbGVnYXRlGAMgASgIUhFoYXNBY3RpdmVEZWxlZ2F0ZQ==');
-@$core.Deprecated('Use checkBoardingBalanceRequestDescriptor instead')
-const CheckBoardingBalanceRequest$json = const {
-  '1': 'CheckBoardingBalanceRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-  ],
-};
+final $typed_data.Uint8List listVtxosResponseDescriptor = $convert.base64Decode(
+    'ChFMaXN0VnR4b3NSZXNwb25zZRIqCgV2dHhvcxgBIAMoCzIULm1wY193YWxsZXQuVnR4b0luZm'
+    '9SBXZ0eG9zEiMKDXRvdGFsX2JhbGFuY2UYAiABKARSDHRvdGFsQmFsYW5jZRIuChNoYXNfYWN0'
+    'aXZlX2RlbGVnYXRlGAMgASgIUhFoYXNBY3RpdmVEZWxlZ2F0ZQ==');
 
-/// Descriptor for `CheckBoardingBalanceRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List checkBoardingBalanceRequestDescriptor = $convert.base64Decode('ChtDaGVja0JvYXJkaW5nQmFsYW5jZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1wTXM=');
-@$core.Deprecated('Use checkBoardingBalanceResponseDescriptor instead')
-const CheckBoardingBalanceResponse$json = const {
-  '1': 'CheckBoardingBalanceResponse',
-  '2': const [
-    const {'1': 'balance', '3': 1, '4': 1, '5': 4, '10': 'balance'},
-    const {'1': 'utxo_count', '3': 2, '4': 1, '5': 13, '10': 'utxoCount'},
-  ],
-};
-
-/// Descriptor for `CheckBoardingBalanceResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List checkBoardingBalanceResponseDescriptor = $convert.base64Decode('ChxDaGVja0JvYXJkaW5nQmFsYW5jZVJlc3BvbnNlEhgKB2JhbGFuY2UYASABKARSB2JhbGFuY2USHQoKdXR4b19jb3VudBgCIAEoDVIJdXR4b0NvdW50');
 @$core.Deprecated('Use arkTransactionSummaryDescriptor instead')
-const ArkTransactionSummary$json = const {
+const ArkTransactionSummary$json = {
   '1': 'ArkTransactionSummary',
-  '2': const [
-    const {'1': 'tx_type', '3': 1, '4': 1, '5': 9, '10': 'txType'},
-    const {'1': 'amount_sats', '3': 2, '4': 1, '5': 3, '10': 'amountSats'},
-    const {'1': 'txid', '3': 3, '4': 1, '5': 9, '10': 'txid'},
-    const {'1': 'timestamp', '3': 4, '4': 1, '5': 3, '10': 'timestamp'},
+  '2': [
+    {'1': 'tx_type', '3': 1, '4': 1, '5': 9, '10': 'txType'},
+    {'1': 'amount_sats', '3': 2, '4': 1, '5': 3, '10': 'amountSats'},
+    {'1': 'txid', '3': 3, '4': 1, '5': 9, '10': 'txid'},
+    {'1': 'timestamp', '3': 4, '4': 1, '5': 3, '10': 'timestamp'},
   ],
 };
 
 /// Descriptor for `ArkTransactionSummary`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List arkTransactionSummaryDescriptor = $convert.base64Decode('ChVBcmtUcmFuc2FjdGlvblN1bW1hcnkSFwoHdHhfdHlwZRgBIAEoCVIGdHhUeXBlEh8KC2Ftb3VudF9zYXRzGAIgASgDUgphbW91bnRTYXRzEhIKBHR4aWQYAyABKAlSBHR4aWQSHAoJdGltZXN0YW1wGAQgASgDUgl0aW1lc3RhbXA=');
+final $typed_data.Uint8List arkTransactionSummaryDescriptor = $convert.base64Decode(
+    'ChVBcmtUcmFuc2FjdGlvblN1bW1hcnkSFwoHdHhfdHlwZRgBIAEoCVIGdHhUeXBlEh8KC2Ftb3'
+    'VudF9zYXRzGAIgASgDUgphbW91bnRTYXRzEhIKBHR4aWQYAyABKAlSBHR4aWQSHAoJdGltZXN0'
+    'YW1wGAQgASgDUgl0aW1lc3RhbXA=');
+
 @$core.Deprecated('Use listArkTransactionsRequestDescriptor instead')
-const ListArkTransactionsRequest$json = const {
+const ListArkTransactionsRequest$json = {
   '1': 'ListArkTransactionsRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `ListArkTransactionsRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listArkTransactionsRequestDescriptor = $convert.base64Decode('ChpMaXN0QXJrVHJhbnNhY3Rpb25zUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcw==');
+final $typed_data.Uint8List listArkTransactionsRequestDescriptor = $convert.base64Decode(
+    'ChpMaXN0QXJrVHJhbnNhY3Rpb25zUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHA'
+    'oJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1l'
+    'c3RhbXBNcw==');
+
 @$core.Deprecated('Use listArkTransactionsResponseDescriptor instead')
-const ListArkTransactionsResponse$json = const {
+const ListArkTransactionsResponse$json = {
   '1': 'ListArkTransactionsResponse',
-  '2': const [
-    const {'1': 'transactions', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.ArkTransactionSummary', '10': 'transactions'},
+  '2': [
+    {'1': 'transactions', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.ArkTransactionSummary', '10': 'transactions'},
   ],
 };
 
 /// Descriptor for `ListArkTransactionsResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List listArkTransactionsResponseDescriptor = $convert.base64Decode('ChtMaXN0QXJrVHJhbnNhY3Rpb25zUmVzcG9uc2USRQoMdHJhbnNhY3Rpb25zGAEgAygLMiEubXBjX3dhbGxldC5BcmtUcmFuc2FjdGlvblN1bW1hcnlSDHRyYW5zYWN0aW9ucw==');
+final $typed_data.Uint8List listArkTransactionsResponseDescriptor = $convert.base64Decode(
+    'ChtMaXN0QXJrVHJhbnNhY3Rpb25zUmVzcG9uc2USRQoMdHJhbnNhY3Rpb25zGAEgAygLMiEubX'
+    'BjX3dhbGxldC5BcmtUcmFuc2FjdGlvblN1bW1hcnlSDHRyYW5zYWN0aW9ucw==');
+
 @$core.Deprecated('Use sendVtxoRequestDescriptor instead')
-const SendVtxoRequest$json = const {
+const SendVtxoRequest$json = {
   '1': 'SendVtxoRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'recipient_ark_address', '3': 2, '4': 1, '5': 9, '10': 'recipientArkAddress'},
-    const {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
-    const {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'signed_messages', '3': 6, '4': 3, '5': 12, '10': 'signedMessages'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'recipient_ark_address', '3': 2, '4': 1, '5': 9, '10': 'recipientArkAddress'},
+    {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
+    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'signed_messages', '3': 6, '4': 3, '5': 12, '10': 'signedMessages'},
   ],
 };
 
 /// Descriptor for `SendVtxoRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List sendVtxoRequestDescriptor = $convert.base64Decode('Cg9TZW5kVnR4b1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEjIKFXJlY2lwaWVudF9hcmtfYWRkcmVzcxgCIAEoCVITcmVjaXBpZW50QXJrQWRkcmVzcxIWCgZhbW91bnQYAyABKARSBmFtb3VudBIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBSABKANSC3RpbWVzdGFtcE1zEicKD3NpZ25lZF9tZXNzYWdlcxgGIAMoDFIOc2lnbmVkTWVzc2FnZXM=');
+final $typed_data.Uint8List sendVtxoRequestDescriptor = $convert.base64Decode(
+    'Cg9TZW5kVnR4b1JlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEjIKFXJlY2lwaWVudF'
+    '9hcmtfYWRkcmVzcxgCIAEoCVITcmVjaXBpZW50QXJrQWRkcmVzcxIWCgZhbW91bnQYAyABKARS'
+    'BmFtb3VudBIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBS'
+    'ABKANSC3RpbWVzdGFtcE1zEicKD3NpZ25lZF9tZXNzYWdlcxgGIAMoDFIOc2lnbmVkTWVzc2Fn'
+    'ZXM=');
+
 @$core.Deprecated('Use sendVtxoResponseDescriptor instead')
-const SendVtxoResponse$json = const {
+const SendVtxoResponse$json = {
   '1': 'SendVtxoResponse',
-  '2': const [
-    const {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SendVtxoResponse.Status', '10': 'status'},
-    const {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
-    const {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
-    const {'1': 'ark_txid', '3': 4, '4': 1, '5': 9, '10': 'arkTxid'},
-    const {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
-    const {'1': 'policy_id', '3': 6, '4': 1, '5': 9, '10': 'policyId'},
+  '2': [
+    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SendVtxoResponse.Status', '10': 'status'},
+    {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
+    {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+    {'1': 'ark_txid', '3': 4, '4': 1, '5': 9, '10': 'arkTxid'},
+    {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
   ],
-  '4': const [SendVtxoResponse_Status$json],
+  '4': [SendVtxoResponse_Status$json],
 };
 
 @$core.Deprecated('Use sendVtxoResponseDescriptor instead')
-const SendVtxoResponse_Status$json = const {
+const SendVtxoResponse_Status$json = {
   '1': 'Status',
-  '2': const [
-    const {'1': 'SIGNING_REQUIRED', '2': 0},
-    const {'1': 'SETTLED', '2': 1},
-    const {'1': 'ERROR', '2': 2},
+  '2': [
+    {'1': 'SIGNING_REQUIRED', '2': 0},
+    {'1': 'SETTLED', '2': 1},
+    {'1': 'ERROR', '2': 2},
   ],
 };
 
 /// Descriptor for `SendVtxoResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List sendVtxoResponseDescriptor = $convert.base64Decode('ChBTZW5kVnR4b1Jlc3BvbnNlEjsKBnN0YXR1cxgBIAEoDjIjLm1wY193YWxsZXQuU2VuZFZ0eG9SZXNwb25zZS5TdGF0dXNSBnN0YXR1cxIoChBtZXNzYWdlc190b19zaWduGAIgAygMUg5tZXNzYWdlc1RvU2lnbhIqChFzY3JpcHRfcGF0aF9zcGVuZBgDIAEoCFIPc2NyaXB0UGF0aFNwZW5kEhkKCGFya190eGlkGAQgASgJUgdhcmtUeGlkEiMKDWVycm9yX21lc3NhZ2UYBSABKAlSDGVycm9yTWVzc2FnZRIbCglwb2xpY3lfaWQYBiABKAlSCHBvbGljeUlkIjYKBlN0YXR1cxIUChBTSUdOSU5HX1JFUVVJUkVEEAASCwoHU0VUVExFRBABEgkKBUVSUk9SEAI=');
+final $typed_data.Uint8List sendVtxoResponseDescriptor = $convert.base64Decode(
+    'ChBTZW5kVnR4b1Jlc3BvbnNlEjsKBnN0YXR1cxgBIAEoDjIjLm1wY193YWxsZXQuU2VuZFZ0eG'
+    '9SZXNwb25zZS5TdGF0dXNSBnN0YXR1cxIoChBtZXNzYWdlc190b19zaWduGAIgAygMUg5tZXNz'
+    'YWdlc1RvU2lnbhIqChFzY3JpcHRfcGF0aF9zcGVuZBgDIAEoCFIPc2NyaXB0UGF0aFNwZW5kEh'
+    'kKCGFya190eGlkGAQgASgJUgdhcmtUeGlkEiMKDWVycm9yX21lc3NhZ2UYBSABKAlSDGVycm9y'
+    'TWVzc2FnZSI2CgZTdGF0dXMSFAoQU0lHTklOR19SRVFVSVJFRBAAEgsKB1NFVFRMRUQQARIJCg'
+    'VFUlJPUhAC');
+
 @$core.Deprecated('Use redeemVtxoRequestDescriptor instead')
-const RedeemVtxoRequest$json = const {
+const RedeemVtxoRequest$json = {
   '1': 'RedeemVtxoRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'on_chain_address', '3': 2, '4': 1, '5': 9, '10': 'onChainAddress'},
-    const {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
-    const {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'on_chain_address', '3': 2, '4': 1, '5': 9, '10': 'onChainAddress'},
+    {'1': 'amount', '3': 3, '4': 1, '5': 4, '10': 'amount'},
+    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
   ],
 };
 
 /// Descriptor for `RedeemVtxoRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List redeemVtxoRequestDescriptor = $convert.base64Decode('ChFSZWRlZW1WdHhvUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSKAoQb25fY2hhaW5fYWRkcmVzcxgCIAEoCVIOb25DaGFpbkFkZHJlc3MSFgoGYW1vdW50GAMgASgEUgZhbW91bnQSHAoJc2lnbmF0dXJlGAQgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAUgASgDUgt0aW1lc3RhbXBNcw==');
+final $typed_data.Uint8List redeemVtxoRequestDescriptor = $convert.base64Decode(
+    'ChFSZWRlZW1WdHhvUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSKAoQb25fY2hhaW'
+    '5fYWRkcmVzcxgCIAEoCVIOb25DaGFpbkFkZHJlc3MSFgoGYW1vdW50GAMgASgEUgZhbW91bnQS'
+    'HAoJc2lnbmF0dXJlGAQgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAUgASgDUgt0aW'
+    '1lc3RhbXBNcw==');
+
 @$core.Deprecated('Use redeemVtxoResponseDescriptor instead')
-const RedeemVtxoResponse$json = const {
+const RedeemVtxoResponse$json = {
   '1': 'RedeemVtxoResponse',
-  '2': const [
-    const {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
-    const {'1': 'txid', '3': 2, '4': 1, '5': 9, '10': 'txid'},
+  '2': [
+    {'1': 'success', '3': 1, '4': 1, '5': 8, '10': 'success'},
+    {'1': 'txid', '3': 2, '4': 1, '5': 9, '10': 'txid'},
   ],
 };
 
 /// Descriptor for `RedeemVtxoResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List redeemVtxoResponseDescriptor = $convert.base64Decode('ChJSZWRlZW1WdHhvUmVzcG9uc2USGAoHc3VjY2VzcxgBIAEoCFIHc3VjY2VzcxISCgR0eGlkGAIgASgJUgR0eGlk');
+final $typed_data.Uint8List redeemVtxoResponseDescriptor = $convert.base64Decode(
+    'ChJSZWRlZW1WdHhvUmVzcG9uc2USGAoHc3VjY2VzcxgBIAEoCFIHc3VjY2VzcxISCgR0eGlkGA'
+    'IgASgJUgR0eGlk');
+
+@$core.Deprecated('Use boardingUtxoDescriptor instead')
+const BoardingUtxo$json = {
+  '1': 'BoardingUtxo',
+  '2': [
+    {'1': 'txid', '3': 1, '4': 1, '5': 9, '10': 'txid'},
+    {'1': 'vout', '3': 2, '4': 1, '5': 13, '10': 'vout'},
+    {'1': 'amount_sats', '3': 3, '4': 1, '5': 4, '10': 'amountSats'},
+  ],
+};
+
+/// Descriptor for `BoardingUtxo`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List boardingUtxoDescriptor = $convert.base64Decode(
+    'CgxCb2FyZGluZ1V0eG8SEgoEdHhpZBgBIAEoCVIEdHhpZBISCgR2b3V0GAIgASgNUgR2b3V0Eh'
+    '8KC2Ftb3VudF9zYXRzGAMgASgEUgphbW91bnRTYXRz');
+
 @$core.Deprecated('Use settleRequestDescriptor instead')
-const SettleRequest$json = const {
+const SettleRequest$json = {
   '1': 'SettleRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'signed_messages', '3': 4, '4': 3, '5': 12, '10': 'signedMessages'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'signed_messages', '3': 4, '4': 3, '5': 12, '10': 'signedMessages'},
+    {'1': 'boarding_utxos', '3': 5, '4': 3, '5': 11, '6': '.mpc_wallet.BoardingUtxo', '10': 'boardingUtxos'},
   ],
 };
 
 /// Descriptor for `SettleRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List settleRequestDescriptor = $convert.base64Decode('Cg1TZXR0bGVSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1zEicKD3NpZ25lZF9tZXNzYWdlcxgEIAMoDFIOc2lnbmVkTWVzc2FnZXM=');
+final $typed_data.Uint8List settleRequestDescriptor = $convert.base64Decode(
+    'Cg1TZXR0bGVSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCglzaWduYXR1cmUYAi'
+    'ABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVzdGFtcE1zEicKD3Np'
+    'Z25lZF9tZXNzYWdlcxgEIAMoDFIOc2lnbmVkTWVzc2FnZXMSPwoOYm9hcmRpbmdfdXR4b3MYBS'
+    'ADKAsyGC5tcGNfd2FsbGV0LkJvYXJkaW5nVXR4b1INYm9hcmRpbmdVdHhvcw==');
+
 @$core.Deprecated('Use settleResponseDescriptor instead')
-const SettleResponse$json = const {
+const SettleResponse$json = {
   '1': 'SettleResponse',
-  '2': const [
-    const {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleResponse.Status', '10': 'status'},
-    const {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
-    const {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
-    const {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
-    const {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
+  '2': [
+    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleResponse.Status', '10': 'status'},
+    {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
+    {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+    {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
+    {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
   ],
-  '4': const [SettleResponse_Status$json],
+  '4': [SettleResponse_Status$json],
 };
 
 @$core.Deprecated('Use settleResponseDescriptor instead')
-const SettleResponse_Status$json = const {
+const SettleResponse_Status$json = {
   '1': 'Status',
-  '2': const [
-    const {'1': 'SIGNING_REQUIRED', '2': 0},
-    const {'1': 'WAITING_FOR_BATCH', '2': 1},
-    const {'1': 'SETTLED', '2': 2},
-    const {'1': 'ERROR', '2': 3},
+  '2': [
+    {'1': 'SIGNING_REQUIRED', '2': 0},
+    {'1': 'WAITING_FOR_BATCH', '2': 1},
+    {'1': 'SETTLED', '2': 2},
+    {'1': 'ERROR', '2': 3},
   ],
 };
 
 /// Descriptor for `SettleResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List settleResponseDescriptor = $convert.base64Decode('Cg5TZXR0bGVSZXNwb25zZRI5CgZzdGF0dXMYASABKA4yIS5tcGNfd2FsbGV0LlNldHRsZVJlc3BvbnNlLlN0YXR1c1IGc3RhdHVzEigKEG1lc3NhZ2VzX3RvX3NpZ24YAiADKAxSDm1lc3NhZ2VzVG9TaWduEioKEXNjcmlwdF9wYXRoX3NwZW5kGAMgASgIUg9zY3JpcHRQYXRoU3BlbmQSJwoPY29tbWl0bWVudF90eGlkGAQgASgJUg5jb21taXRtZW50VHhpZBIjCg1lcnJvcl9tZXNzYWdlGAUgASgJUgxlcnJvck1lc3NhZ2UiTQoGU3RhdHVzEhQKEFNJR05JTkdfUkVRVUlSRUQQABIVChFXQUlUSU5HX0ZPUl9CQVRDSBABEgsKB1NFVFRMRUQQAhIJCgVFUlJPUhAD');
+final $typed_data.Uint8List settleResponseDescriptor = $convert.base64Decode(
+    'Cg5TZXR0bGVSZXNwb25zZRI5CgZzdGF0dXMYASABKA4yIS5tcGNfd2FsbGV0LlNldHRsZVJlc3'
+    'BvbnNlLlN0YXR1c1IGc3RhdHVzEigKEG1lc3NhZ2VzX3RvX3NpZ24YAiADKAxSDm1lc3NhZ2Vz'
+    'VG9TaWduEioKEXNjcmlwdF9wYXRoX3NwZW5kGAMgASgIUg9zY3JpcHRQYXRoU3BlbmQSJwoPY2'
+    '9tbWl0bWVudF90eGlkGAQgASgJUg5jb21taXRtZW50VHhpZBIjCg1lcnJvcl9tZXNzYWdlGAUg'
+    'ASgJUgxlcnJvck1lc3NhZ2UiTQoGU3RhdHVzEhQKEFNJR05JTkdfUkVRVUlSRUQQABIVChFXQU'
+    'lUSU5HX0ZPUl9CQVRDSBABEgsKB1NFVFRMRUQQAhIJCgVFUlJPUhAD');
+
 @$core.Deprecated('Use settleDelegateRequestDescriptor instead')
-const SettleDelegateRequest$json = const {
+const SettleDelegateRequest$json = {
   '1': 'SettleDelegateRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'signed_messages', '3': 4, '4': 3, '5': 12, '10': 'signedMessages'},
-    const {'1': 'store_only', '3': 5, '4': 1, '5': 8, '10': 'storeOnly'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'signed_messages', '3': 4, '4': 3, '5': 12, '10': 'signedMessages'},
+    {'1': 'store_only', '3': 5, '4': 1, '5': 8, '10': 'storeOnly'},
   ],
 };
 
 /// Descriptor for `SettleDelegateRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List settleDelegateRequestDescriptor = $convert.base64Decode('ChVTZXR0bGVEZWxlZ2F0ZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ25hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1wTXMSJwoPc2lnbmVkX21lc3NhZ2VzGAQgAygMUg5zaWduZWRNZXNzYWdlcxIdCgpzdG9yZV9vbmx5GAUgASgIUglzdG9yZU9ubHk=');
+final $typed_data.Uint8List settleDelegateRequestDescriptor = $convert.base64Decode(
+    'ChVTZXR0bGVEZWxlZ2F0ZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ2'
+    '5hdHVyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1w'
+    'TXMSJwoPc2lnbmVkX21lc3NhZ2VzGAQgAygMUg5zaWduZWRNZXNzYWdlcxIdCgpzdG9yZV9vbm'
+    'x5GAUgASgIUglzdG9yZU9ubHk=');
+
 @$core.Deprecated('Use settleDelegateResponseDescriptor instead')
-const SettleDelegateResponse$json = const {
+const SettleDelegateResponse$json = {
   '1': 'SettleDelegateResponse',
-  '2': const [
-    const {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleDelegateResponse.Status', '10': 'status'},
-    const {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
-    const {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
-    const {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
-    const {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
+  '2': [
+    {'1': 'status', '3': 1, '4': 1, '5': 14, '6': '.mpc_wallet.SettleDelegateResponse.Status', '10': 'status'},
+    {'1': 'messages_to_sign', '3': 2, '4': 3, '5': 12, '10': 'messagesToSign'},
+    {'1': 'script_path_spend', '3': 3, '4': 1, '5': 8, '10': 'scriptPathSpend'},
+    {'1': 'commitment_txid', '3': 4, '4': 1, '5': 9, '10': 'commitmentTxid'},
+    {'1': 'error_message', '3': 5, '4': 1, '5': 9, '10': 'errorMessage'},
   ],
-  '4': const [SettleDelegateResponse_Status$json],
+  '4': [SettleDelegateResponse_Status$json],
 };
 
 @$core.Deprecated('Use settleDelegateResponseDescriptor instead')
-const SettleDelegateResponse_Status$json = const {
+const SettleDelegateResponse_Status$json = {
   '1': 'Status',
-  '2': const [
-    const {'1': 'SIGNING_REQUIRED', '2': 0},
-    const {'1': 'SETTLED', '2': 1},
-    const {'1': 'ERROR', '2': 2},
-    const {'1': 'DELEGATED', '2': 3},
+  '2': [
+    {'1': 'SIGNING_REQUIRED', '2': 0},
+    {'1': 'SETTLED', '2': 1},
+    {'1': 'ERROR', '2': 2},
+    {'1': 'DELEGATED', '2': 3},
   ],
 };
 
 /// Descriptor for `SettleDelegateResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List settleDelegateResponseDescriptor = $convert.base64Decode('ChZTZXR0bGVEZWxlZ2F0ZVJlc3BvbnNlEkEKBnN0YXR1cxgBIAEoDjIpLm1wY193YWxsZXQuU2V0dGxlRGVsZWdhdGVSZXNwb25zZS5TdGF0dXNSBnN0YXR1cxIoChBtZXNzYWdlc190b19zaWduGAIgAygMUg5tZXNzYWdlc1RvU2lnbhIqChFzY3JpcHRfcGF0aF9zcGVuZBgDIAEoCFIPc2NyaXB0UGF0aFNwZW5kEicKD2NvbW1pdG1lbnRfdHhpZBgEIAEoCVIOY29tbWl0bWVudFR4aWQSIwoNZXJyb3JfbWVzc2FnZRgFIAEoCVIMZXJyb3JNZXNzYWdlIkUKBlN0YXR1cxIUChBTSUdOSU5HX1JFUVVJUkVEEAASCwoHU0VUVExFRBABEgkKBUVSUk9SEAISDQoJREVMRUdBVEVEEAM=');
+final $typed_data.Uint8List settleDelegateResponseDescriptor = $convert.base64Decode(
+    'ChZTZXR0bGVEZWxlZ2F0ZVJlc3BvbnNlEkEKBnN0YXR1cxgBIAEoDjIpLm1wY193YWxsZXQuU2'
+    'V0dGxlRGVsZWdhdGVSZXNwb25zZS5TdGF0dXNSBnN0YXR1cxIoChBtZXNzYWdlc190b19zaWdu'
+    'GAIgAygMUg5tZXNzYWdlc1RvU2lnbhIqChFzY3JpcHRfcGF0aF9zcGVuZBgDIAEoCFIPc2NyaX'
+    'B0UGF0aFNwZW5kEicKD2NvbW1pdG1lbnRfdHhpZBgEIAEoCVIOY29tbWl0bWVudFR4aWQSIwoN'
+    'ZXJyb3JfbWVzc2FnZRgFIAEoCVIMZXJyb3JNZXNzYWdlIkUKBlN0YXR1cxIUChBTSUdOSU5HX1'
+    'JFUVVJUkVEEAASCwoHU0VUVExFRBABEgkKBUVSUk9SEAISDQoJREVMRUdBVEVEEAM=');
+
 @$core.Deprecated('Use submitArkSendRequestDescriptor instead')
-const SubmitArkSendRequest$json = const {
+const SubmitArkSendRequest$json = {
   '1': 'SubmitArkSendRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'signed_ark_tx_b64', '3': 4, '4': 1, '5': 9, '10': 'signedArkTxB64'},
-    const {'1': 'signed_checkpoint_txs_b64', '3': 5, '4': 3, '5': 9, '10': 'signedCheckpointTxsB64'},
-    const {'1': 'spent_outpoints', '3': 6, '4': 3, '5': 9, '10': 'spentOutpoints'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'signed_ark_tx_b64', '3': 4, '4': 1, '5': 9, '10': 'signedArkTxB64'},
+    {'1': 'signed_checkpoint_txs_b64', '3': 5, '4': 3, '5': 9, '10': 'signedCheckpointTxsB64'},
+    {'1': 'spent_outpoints', '3': 6, '4': 3, '5': 9, '10': 'spentOutpoints'},
   ],
 };
 
 /// Descriptor for `SubmitArkSendRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List submitArkSendRequestDescriptor = $convert.base64Decode('ChRTdWJtaXRBcmtTZW5kUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcxIpChFzaWduZWRfYXJrX3R4X2I2NBgEIAEoCVIOc2lnbmVkQXJrVHhCNjQSOQoZc2lnbmVkX2NoZWNrcG9pbnRfdHhzX2I2NBgFIAMoCVIWc2lnbmVkQ2hlY2twb2ludFR4c0I2NBInCg9zcGVudF9vdXRwb2ludHMYBiADKAlSDnNwZW50T3V0cG9pbnRz');
+final $typed_data.Uint8List submitArkSendRequestDescriptor = $convert.base64Decode(
+    'ChRTdWJtaXRBcmtTZW5kUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbm'
+    'F0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBN'
+    'cxIpChFzaWduZWRfYXJrX3R4X2I2NBgEIAEoCVIOc2lnbmVkQXJrVHhCNjQSOQoZc2lnbmVkX2'
+    'NoZWNrcG9pbnRfdHhzX2I2NBgFIAMoCVIWc2lnbmVkQ2hlY2twb2ludFR4c0I2NBInCg9zcGVu'
+    'dF9vdXRwb2ludHMYBiADKAlSDnNwZW50T3V0cG9pbnRz');
+
 @$core.Deprecated('Use submitArkSendResponseDescriptor instead')
-const SubmitArkSendResponse$json = const {
+const SubmitArkSendResponse$json = {
   '1': 'SubmitArkSendResponse',
-  '2': const [
-    const {'1': 'ark_txid', '3': 1, '4': 1, '5': 9, '10': 'arkTxid'},
-    const {'1': 'change_txid', '3': 2, '4': 1, '5': 9, '10': 'changeTxid'},
-    const {'1': 'change_vout', '3': 3, '4': 1, '5': 13, '10': 'changeVout'},
-    const {'1': 'change_amount', '3': 4, '4': 1, '5': 4, '10': 'changeAmount'},
+  '2': [
+    {'1': 'ark_txid', '3': 1, '4': 1, '5': 9, '10': 'arkTxid'},
+    {'1': 'change_txid', '3': 2, '4': 1, '5': 9, '10': 'changeTxid'},
+    {'1': 'change_vout', '3': 3, '4': 1, '5': 13, '10': 'changeVout'},
+    {'1': 'change_amount', '3': 4, '4': 1, '5': 4, '10': 'changeAmount'},
   ],
 };
 
 /// Descriptor for `SubmitArkSendResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List submitArkSendResponseDescriptor = $convert.base64Decode('ChVTdWJtaXRBcmtTZW5kUmVzcG9uc2USGQoIYXJrX3R4aWQYASABKAlSB2Fya1R4aWQSHwoLY2hhbmdlX3R4aWQYAiABKAlSCmNoYW5nZVR4aWQSHwoLY2hhbmdlX3ZvdXQYAyABKA1SCmNoYW5nZVZvdXQSIwoNY2hhbmdlX2Ftb3VudBgEIAEoBFIMY2hhbmdlQW1vdW50');
+final $typed_data.Uint8List submitArkSendResponseDescriptor = $convert.base64Decode(
+    'ChVTdWJtaXRBcmtTZW5kUmVzcG9uc2USGQoIYXJrX3R4aWQYASABKAlSB2Fya1R4aWQSHwoLY2'
+    'hhbmdlX3R4aWQYAiABKAlSCmNoYW5nZVR4aWQSHwoLY2hhbmdlX3ZvdXQYAyABKA1SCmNoYW5n'
+    'ZVZvdXQSIwoNY2hhbmdlX2Ftb3VudBgEIAEoBFIMY2hhbmdlQW1vdW50');
+
 @$core.Deprecated('Use getServerInfoRequestDescriptor instead')
-const GetServerInfoRequest$json = const {
+const GetServerInfoRequest$json = {
   '1': 'GetServerInfoRequest',
 };
 
 /// Descriptor for `GetServerInfoRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getServerInfoRequestDescriptor = $convert.base64Decode('ChRHZXRTZXJ2ZXJJbmZvUmVxdWVzdA==');
+final $typed_data.Uint8List getServerInfoRequestDescriptor = $convert.base64Decode(
+    'ChRHZXRTZXJ2ZXJJbmZvUmVxdWVzdA==');
+
 @$core.Deprecated('Use getServerInfoResponseDescriptor instead')
-const GetServerInfoResponse$json = const {
+const GetServerInfoResponse$json = {
   '1': 'GetServerInfoResponse',
-  '2': const [
-    const {'1': 'bitcoin_network', '3': 1, '4': 1, '5': 9, '10': 'bitcoinNetwork'},
+  '2': [
+    {'1': 'bitcoin_network', '3': 1, '4': 1, '5': 9, '10': 'bitcoinNetwork'},
   ],
 };
 
 /// Descriptor for `GetServerInfoResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List getServerInfoResponseDescriptor = $convert.base64Decode('ChVHZXRTZXJ2ZXJJbmZvUmVzcG9uc2USJwoPYml0Y29pbl9uZXR3b3JrGAEgASgJUg5iaXRjb2luTmV0d29yaw==');
+final $typed_data.Uint8List getServerInfoResponseDescriptor = $convert.base64Decode(
+    'ChVHZXRTZXJ2ZXJJbmZvUmVzcG9uc2USJwoPYml0Y29pbl9uZXR3b3JrGAEgASgJUg5iaXRjb2'
+    'luTmV0d29yaw==');
+
 @$core.Deprecated('Use registerDeviceTokenRequestDescriptor instead')
-const RegisterDeviceTokenRequest$json = const {
+const RegisterDeviceTokenRequest$json = {
   '1': 'RegisterDeviceTokenRequest',
-  '2': const [
-    const {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
-    const {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
-    const {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
-    const {'1': 'fcm_token', '3': 4, '4': 1, '5': 9, '10': 'fcmToken'},
-    const {'1': 'platform', '3': 5, '4': 1, '5': 9, '10': 'platform'},
-    const {'1': 'app_version', '3': 6, '4': 1, '5': 9, '10': 'appVersion'},
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'fcm_token', '3': 4, '4': 1, '5': 9, '10': 'fcmToken'},
+    {'1': 'platform', '3': 5, '4': 1, '5': 9, '10': 'platform'},
+    {'1': 'app_version', '3': 6, '4': 1, '5': 9, '10': 'appVersion'},
   ],
 };
 
 /// Descriptor for `RegisterDeviceTokenRequest`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List registerDeviceTokenRequestDescriptor = $convert.base64Decode('ChpSZWdpc3RlckRldmljZVRva2VuUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHAoJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1lc3RhbXBNcxIbCglmY21fdG9rZW4YBCABKAlSCGZjbVRva2VuEhoKCHBsYXRmb3JtGAUgASgJUghwbGF0Zm9ybRIfCgthcHBfdmVyc2lvbhgGIAEoCVIKYXBwVmVyc2lvbg==');
+final $typed_data.Uint8List registerDeviceTokenRequestDescriptor = $convert.base64Decode(
+    'ChpSZWdpc3RlckRldmljZVRva2VuUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSHA'
+    'oJc2lnbmF0dXJlGAIgASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAMgASgDUgt0aW1l'
+    'c3RhbXBNcxIbCglmY21fdG9rZW4YBCABKAlSCGZjbVRva2VuEhoKCHBsYXRmb3JtGAUgASgJUg'
+    'hwbGF0Zm9ybRIfCgthcHBfdmVyc2lvbhgGIAEoCVIKYXBwVmVyc2lvbg==');
+
 @$core.Deprecated('Use registerDeviceTokenResponseDescriptor instead')
-const RegisterDeviceTokenResponse$json = const {
+const RegisterDeviceTokenResponse$json = {
   '1': 'RegisterDeviceTokenResponse',
-  '2': const [
-    const {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
   ],
 };
 
 /// Descriptor for `RegisterDeviceTokenResponse`. Decode as a `google.protobuf.DescriptorProto`.
-final $typed_data.Uint8List registerDeviceTokenResponseDescriptor = $convert.base64Decode('ChtSZWdpc3RlckRldmljZVRva2VuUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+final $typed_data.Uint8List registerDeviceTokenResponseDescriptor = $convert.base64Decode(
+    'ChtSZWdpc3RlckRldmljZVRva2VuUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contractCreateRequestDescriptor instead')
+const ContractCreateRequest$json = {
+  '1': 'ContractCreateRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'identifier', '3': 2, '4': 1, '5': 12, '10': 'identifier'},
+    {'1': 'contract_id', '3': 3, '4': 1, '5': 12, '10': 'contractId'},
+    {'1': 'contract_wasm', '3': 4, '4': 1, '5': 12, '10': 'contractWasm'},
+    {'1': 'server_pk', '3': 5, '4': 1, '5': 12, '10': 'serverPk'},
+    {'1': 'exit_delay', '3': 6, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'owner_pk', '3': 7, '4': 1, '5': 12, '10': 'ownerPk'},
+    {'1': 'receiver_vk', '3': 8, '4': 1, '5': 12, '10': 'receiverVk'},
+    {'1': 'a_at_cosigner', '3': 9, '4': 1, '5': 12, '10': 'aAtCosigner'},
+    {'1': 'a_at_receiver_point', '3': 10, '4': 1, '5': 12, '10': 'aAtReceiverPoint'},
+    {'1': 'signature', '3': 11, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 12, '4': 1, '5': 3, '10': 'timestampMs'},
+    {'1': 'ecies_a_at_receiver', '3': 13, '4': 1, '5': 12, '10': 'eciesAAtReceiver'},
+    {'1': 'template_id', '3': 14, '4': 1, '5': 9, '10': 'templateId'},
+    {'1': 'stub_id', '3': 15, '4': 1, '5': 9, '10': 'stubId'},
+    {'1': 'config_blob', '3': 16, '4': 1, '5': 12, '10': 'configBlob'},
+  ],
+};
+
+/// Descriptor for `ContractCreateRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateRequestDescriptor = $convert.base64Decode(
+    'ChVDb250cmFjdENyZWF0ZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh4KCmlkZW'
+    '50aWZpZXIYAiABKAxSCmlkZW50aWZpZXISHwoLY29udHJhY3RfaWQYAyABKAxSCmNvbnRyYWN0'
+    'SWQSIwoNY29udHJhY3Rfd2FzbRgEIAEoDFIMY29udHJhY3RXYXNtEhsKCXNlcnZlcl9waxgFIA'
+    'EoDFIIc2VydmVyUGsSHQoKZXhpdF9kZWxheRgGIAEoDVIJZXhpdERlbGF5EhkKCG93bmVyX3Br'
+    'GAcgASgMUgdvd25lclBrEh8KC3JlY2VpdmVyX3ZrGAggASgMUgpyZWNlaXZlclZrEiIKDWFfYX'
+    'RfY29zaWduZXIYCSABKAxSC2FBdENvc2lnbmVyEi0KE2FfYXRfcmVjZWl2ZXJfcG9pbnQYCiAB'
+    'KAxSEGFBdFJlY2VpdmVyUG9pbnQSHAoJc2lnbmF0dXJlGAsgASgMUglzaWduYXR1cmUSIQoMdG'
+    'ltZXN0YW1wX21zGAwgASgDUgt0aW1lc3RhbXBNcxItChNlY2llc19hX2F0X3JlY2VpdmVyGA0g'
+    'ASgMUhBlY2llc0FBdFJlY2VpdmVyEh8KC3RlbXBsYXRlX2lkGA4gASgJUgp0ZW1wbGF0ZUlkEh'
+    'cKB3N0dWJfaWQYDyABKAlSBnN0dWJJZBIfCgtjb25maWdfYmxvYhgQIAEoDFIKY29uZmlnQmxv'
+    'Yg==');
+
+@$core.Deprecated('Use contractCreateResponseDescriptor instead')
+const ContractCreateResponse$json = {
+  '1': 'ContractCreateResponse',
+  '2': [
+    {'1': 'contract_script_pubkey', '3': 1, '4': 1, '5': 12, '10': 'contractScriptPubkey'},
+    {'1': 'contract_id', '3': 2, '4': 1, '5': 12, '10': 'contractId'},
+  ],
+};
+
+/// Descriptor for `ContractCreateResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contractCreateResponseDescriptor = $convert.base64Decode(
+    'ChZDb250cmFjdENyZWF0ZVJlc3BvbnNlEjQKFmNvbnRyYWN0X3NjcmlwdF9wdWJrZXkYASABKA'
+    'xSFGNvbnRyYWN0U2NyaXB0UHVia2V5Eh8KC2NvbnRyYWN0X2lkGAIgASgMUgpjb250cmFjdElk');
+
+@$core.Deprecated('Use evtxoPendingSharesRequestDescriptor instead')
+const EvtxoPendingSharesRequest$json = {
+  '1': 'EvtxoPendingSharesRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `EvtxoPendingSharesRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoPendingSharesRequestDescriptor = $convert.base64Decode(
+    'ChlFdnR4b1BlbmRpbmdTaGFyZXNSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
+    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
+    'dGFtcE1z');
+
+@$core.Deprecated('Use evtxoPendingSharesResponseDescriptor instead')
+const EvtxoPendingSharesResponse$json = {
+  '1': 'EvtxoPendingSharesResponse',
+  '2': [
+    {'1': 'shares', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.PendingContractShare', '10': 'shares'},
+  ],
+};
+
+/// Descriptor for `EvtxoPendingSharesResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoPendingSharesResponseDescriptor = $convert.base64Decode(
+    'ChpFdnR4b1BlbmRpbmdTaGFyZXNSZXNwb25zZRI4CgZzaGFyZXMYASADKAsyIC5tcGNfd2FsbG'
+    'V0LlBlbmRpbmdDb250cmFjdFNoYXJlUgZzaGFyZXM=');
+
+@$core.Deprecated('Use pendingContractShareDescriptor instead')
+const PendingContractShare$json = {
+  '1': 'PendingContractShare',
+  '2': [
+    {'1': 'evtxo_script_pubkey', '3': 1, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {'1': 'contract_id', '3': 2, '4': 1, '5': 12, '10': 'contractId'},
+    {'1': 'ecies_half_author', '3': 3, '4': 1, '5': 12, '10': 'eciesHalfAuthor'},
+    {'1': 'ecies_half_cosigner', '3': 4, '4': 1, '5': 12, '10': 'eciesHalfCosigner'},
+    {'1': 'public_key_package_json', '3': 5, '4': 1, '5': 9, '10': 'publicKeyPackageJson'},
+    {'1': 'exit_delay', '3': 6, '4': 1, '5': 13, '10': 'exitDelay'},
+    {'1': 'server_pk', '3': 7, '4': 1, '5': 12, '10': 'serverPk'},
+    {'1': 'owner_pk', '3': 8, '4': 1, '5': 12, '10': 'ownerPk'},
+  ],
+};
+
+/// Descriptor for `PendingContractShare`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List pendingContractShareDescriptor = $convert.base64Decode(
+    'ChRQZW5kaW5nQ29udHJhY3RTaGFyZRIuChNldnR4b19zY3JpcHRfcHVia2V5GAEgASgMUhFldn'
+    'R4b1NjcmlwdFB1YmtleRIfCgtjb250cmFjdF9pZBgCIAEoDFIKY29udHJhY3RJZBIqChFlY2ll'
+    'c19oYWxmX2F1dGhvchgDIAEoDFIPZWNpZXNIYWxmQXV0aG9yEi4KE2VjaWVzX2hhbGZfY29zaW'
+    'duZXIYBCABKAxSEWVjaWVzSGFsZkNvc2lnbmVyEjUKF3B1YmxpY19rZXlfcGFja2FnZV9qc29u'
+    'GAUgASgJUhRwdWJsaWNLZXlQYWNrYWdlSnNvbhIdCgpleGl0X2RlbGF5GAYgASgNUglleGl0RG'
+    'VsYXkSGwoJc2VydmVyX3BrGAcgASgMUghzZXJ2ZXJQaxIZCghvd25lcl9waxgIIAEoDFIHb3du'
+    'ZXJQaw==');
+
+@$core.Deprecated('Use evtxoAckShareRequestDescriptor instead')
+const EvtxoAckShareRequest$json = {
+  '1': 'EvtxoAckShareRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'evtxo_script_pubkey', '3': 2, '4': 1, '5': 12, '10': 'evtxoScriptPubkey'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `EvtxoAckShareRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoAckShareRequestDescriptor = $convert.base64Decode(
+    'ChRFdnR4b0Fja1NoYXJlUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSLgoTZXZ0eG'
+    '9fc2NyaXB0X3B1YmtleRgCIAEoDFIRZXZ0eG9TY3JpcHRQdWJrZXkSHAoJc2lnbmF0dXJlGAMg'
+    'ASgMUglzaWduYXR1cmUSIQoMdGltZXN0YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcw==');
+
+@$core.Deprecated('Use evtxoAckShareResponseDescriptor instead')
+const EvtxoAckShareResponse$json = {
+  '1': 'EvtxoAckShareResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `EvtxoAckShareResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List evtxoAckShareResponseDescriptor = $convert.base64Decode(
+    'ChVFdnR4b0Fja1NoYXJlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contactDescriptor instead')
+const Contact$json = {
+  '1': 'Contact',
+  '2': [
+    {'1': 'verifying_key', '3': 1, '4': 1, '5': 12, '10': 'verifyingKey'},
+    {'1': 'label', '3': 2, '4': 1, '5': 9, '10': 'label'},
+    {'1': 'added_at', '3': 3, '4': 1, '5': 3, '10': 'addedAt'},
+  ],
+};
+
+/// Descriptor for `Contact`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactDescriptor = $convert.base64Decode(
+    'CgdDb250YWN0EiMKDXZlcmlmeWluZ19rZXkYASABKAxSDHZlcmlmeWluZ0tleRIUCgVsYWJlbB'
+    'gCIAEoCVIFbGFiZWwSGQoIYWRkZWRfYXQYAyABKANSB2FkZGVkQXQ=');
+
+@$core.Deprecated('Use contactAddRequestDescriptor instead')
+const ContactAddRequest$json = {
+  '1': 'ContactAddRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'contact_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'contactVerifyingKey'},
+    {'1': 'label', '3': 3, '4': 1, '5': 9, '10': 'label'},
+    {'1': 'signature', '3': 4, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 5, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactAddRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactAddRequestDescriptor = $convert.base64Decode(
+    'ChFDb250YWN0QWRkUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSMgoVY29udGFjdF'
+    '92ZXJpZnlpbmdfa2V5GAIgASgMUhNjb250YWN0VmVyaWZ5aW5nS2V5EhQKBWxhYmVsGAMgASgJ'
+    'UgVsYWJlbBIcCglzaWduYXR1cmUYBCABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYBS'
+    'ABKANSC3RpbWVzdGFtcE1z');
+
+@$core.Deprecated('Use contactAddResponseDescriptor instead')
+const ContactAddResponse$json = {
+  '1': 'ContactAddResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `ContactAddResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactAddResponseDescriptor = $convert.base64Decode(
+    'ChJDb250YWN0QWRkUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contactRemoveRequestDescriptor instead')
+const ContactRemoveRequest$json = {
+  '1': 'ContactRemoveRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'contact_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'contactVerifyingKey'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactRemoveRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactRemoveRequestDescriptor = $convert.base64Decode(
+    'ChRDb250YWN0UmVtb3ZlUmVxdWVzdBIXCgd1c2VyX2lkGAEgASgMUgZ1c2VySWQSMgoVY29udG'
+    'FjdF92ZXJpZnlpbmdfa2V5GAIgASgMUhNjb250YWN0VmVyaWZ5aW5nS2V5EhwKCXNpZ25hdHVy'
+    'ZRgDIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgEIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use contactRemoveResponseDescriptor instead')
+const ContactRemoveResponse$json = {
+  '1': 'ContactRemoveResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `ContactRemoveResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactRemoveResponseDescriptor = $convert.base64Decode(
+    'ChVDb250YWN0UmVtb3ZlUmVzcG9uc2USDgoCb2sYASABKAhSAm9r');
+
+@$core.Deprecated('Use contactListRequestDescriptor instead')
+const ContactListRequest$json = {
+  '1': 'ContactListRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `ContactListRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactListRequestDescriptor = $convert.base64Decode(
+    'ChJDb250YWN0TGlzdFJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEhwKCXNpZ25hdH'
+    'VyZRgCIAEoDFIJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgDIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use contactListResponseDescriptor instead')
+const ContactListResponse$json = {
+  '1': 'ContactListResponse',
+  '2': [
+    {'1': 'contacts', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.Contact', '10': 'contacts'},
+  ],
+};
+
+/// Descriptor for `ContactListResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List contactListResponseDescriptor = $convert.base64Decode(
+    'ChNDb250YWN0TGlzdFJlc3BvbnNlEi8KCGNvbnRhY3RzGAEgAygLMhMubXBjX3dhbGxldC5Db2'
+    '50YWN0Ughjb250YWN0cw==');
+
+@$core.Deprecated('Use paymentIntentDescriptor instead')
+const PaymentIntent$json = {
+  '1': 'PaymentIntent',
+  '2': [
+    {'1': 'id', '3': 1, '4': 1, '5': 9, '10': 'id'},
+    {'1': 'from_verifying_key', '3': 2, '4': 1, '5': 12, '10': 'fromVerifyingKey'},
+    {'1': 'to_ark_address', '3': 3, '4': 1, '5': 9, '10': 'toArkAddress'},
+    {'1': 'amount_sats', '3': 4, '4': 1, '5': 4, '10': 'amountSats'},
+    {'1': 'memo', '3': 5, '4': 1, '5': 9, '10': 'memo'},
+    {'1': 'created_at', '3': 6, '4': 1, '5': 3, '10': 'createdAt'},
+    {'1': 'expires_at', '3': 7, '4': 1, '5': 3, '10': 'expiresAt'},
+    {'1': 'status', '3': 8, '4': 1, '5': 9, '10': 'status'},
+    {'1': 'ark_txid', '3': 9, '4': 1, '5': 9, '10': 'arkTxid'},
+  ],
+};
+
+/// Descriptor for `PaymentIntent`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentIntentDescriptor = $convert.base64Decode(
+    'Cg1QYXltZW50SW50ZW50Eg4KAmlkGAEgASgJUgJpZBIsChJmcm9tX3ZlcmlmeWluZ19rZXkYAi'
+    'ABKAxSEGZyb21WZXJpZnlpbmdLZXkSJAoOdG9fYXJrX2FkZHJlc3MYAyABKAlSDHRvQXJrQWRk'
+    'cmVzcxIfCgthbW91bnRfc2F0cxgEIAEoBFIKYW1vdW50U2F0cxISCgRtZW1vGAUgASgJUgRtZW'
+    '1vEh0KCmNyZWF0ZWRfYXQYBiABKANSCWNyZWF0ZWRBdBIdCgpleHBpcmVzX2F0GAcgASgDUgll'
+    'eHBpcmVzQXQSFgoGc3RhdHVzGAggASgJUgZzdGF0dXMSGQoIYXJrX3R4aWQYCSABKAlSB2Fya1'
+    'R4aWQ=');
+
+@$core.Deprecated('Use paymentRequestCreateRequestDescriptor instead')
+const PaymentRequestCreateRequest$json = {
+  '1': 'PaymentRequestCreateRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'amount_sats', '3': 2, '4': 1, '5': 4, '10': 'amountSats'},
+    {'1': 'memo', '3': 3, '4': 1, '5': 9, '10': 'memo'},
+    {'1': 'expires_in_secs', '3': 4, '4': 1, '5': 3, '10': 'expiresInSecs'},
+    {'1': 'signature', '3': 5, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 6, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestCreateRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestCreateRequestDescriptor = $convert.base64Decode(
+    'ChtQYXltZW50UmVxdWVzdENyZWF0ZVJlcXVlc3QSFwoHdXNlcl9pZBgBIAEoDFIGdXNlcklkEh'
+    '8KC2Ftb3VudF9zYXRzGAIgASgEUgphbW91bnRTYXRzEhIKBG1lbW8YAyABKAlSBG1lbW8SJgoP'
+    'ZXhwaXJlc19pbl9zZWNzGAQgASgDUg1leHBpcmVzSW5TZWNzEhwKCXNpZ25hdHVyZRgFIAEoDF'
+    'IJc2lnbmF0dXJlEiEKDHRpbWVzdGFtcF9tcxgGIAEoA1ILdGltZXN0YW1wTXM=');
+
+@$core.Deprecated('Use paymentRequestCreateResponseDescriptor instead')
+const PaymentRequestCreateResponse$json = {
+  '1': 'PaymentRequestCreateResponse',
+  '2': [
+    {'1': 'intent', '3': 1, '4': 1, '5': 11, '6': '.mpc_wallet.PaymentIntent', '10': 'intent'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestCreateResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestCreateResponseDescriptor = $convert.base64Decode(
+    'ChxQYXltZW50UmVxdWVzdENyZWF0ZVJlc3BvbnNlEjEKBmludGVudBgBIAEoCzIZLm1wY193YW'
+    'xsZXQuUGF5bWVudEludGVudFIGaW50ZW50');
+
+@$core.Deprecated('Use paymentRequestListRequestDescriptor instead')
+const PaymentRequestListRequest$json = {
+  '1': 'PaymentRequestListRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'signature', '3': 2, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 3, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestListRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestListRequestDescriptor = $convert.base64Decode(
+    'ChlQYXltZW50UmVxdWVzdExpc3RSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZBIcCg'
+    'lzaWduYXR1cmUYAiABKAxSCXNpZ25hdHVyZRIhCgx0aW1lc3RhbXBfbXMYAyABKANSC3RpbWVz'
+    'dGFtcE1z');
+
+@$core.Deprecated('Use paymentRequestListResponseDescriptor instead')
+const PaymentRequestListResponse$json = {
+  '1': 'PaymentRequestListResponse',
+  '2': [
+    {'1': 'intents', '3': 1, '4': 3, '5': 11, '6': '.mpc_wallet.PaymentIntent', '10': 'intents'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestListResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestListResponseDescriptor = $convert.base64Decode(
+    'ChpQYXltZW50UmVxdWVzdExpc3RSZXNwb25zZRIzCgdpbnRlbnRzGAEgAygLMhkubXBjX3dhbG'
+    'xldC5QYXltZW50SW50ZW50UgdpbnRlbnRz');
+
+@$core.Deprecated('Use paymentRequestDeclineRequestDescriptor instead')
+const PaymentRequestDeclineRequest$json = {
+  '1': 'PaymentRequestDeclineRequest',
+  '2': [
+    {'1': 'user_id', '3': 1, '4': 1, '5': 12, '10': 'userId'},
+    {'1': 'id', '3': 2, '4': 1, '5': 9, '10': 'id'},
+    {'1': 'signature', '3': 3, '4': 1, '5': 12, '10': 'signature'},
+    {'1': 'timestamp_ms', '3': 4, '4': 1, '5': 3, '10': 'timestampMs'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestDeclineRequest`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestDeclineRequestDescriptor = $convert.base64Decode(
+    'ChxQYXltZW50UmVxdWVzdERlY2xpbmVSZXF1ZXN0EhcKB3VzZXJfaWQYASABKAxSBnVzZXJJZB'
+    'IOCgJpZBgCIAEoCVICaWQSHAoJc2lnbmF0dXJlGAMgASgMUglzaWduYXR1cmUSIQoMdGltZXN0'
+    'YW1wX21zGAQgASgDUgt0aW1lc3RhbXBNcw==');
+
+@$core.Deprecated('Use paymentRequestDeclineResponseDescriptor instead')
+const PaymentRequestDeclineResponse$json = {
+  '1': 'PaymentRequestDeclineResponse',
+  '2': [
+    {'1': 'ok', '3': 1, '4': 1, '5': 8, '10': 'ok'},
+  ],
+};
+
+/// Descriptor for `PaymentRequestDeclineResponse`. Decode as a `google.protobuf.DescriptorProto`.
+final $typed_data.Uint8List paymentRequestDeclineResponseDescriptor = $convert.base64Decode(
+    'Ch1QYXltZW50UmVxdWVzdERlY2xpbmVSZXNwb25zZRIOCgJvaxgBIAEoCFICb2s=');
+

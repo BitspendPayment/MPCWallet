@@ -75,21 +75,14 @@ class AttestedWalletApi implements WalletApi {
   @override Future<DKGStep1Response> dKGStep1(DKGStep1Request r) => _inner.dKGStep1(r);
   @override Future<DKGStep2Response> dKGStep2(DKGStep2Request r) => _inner.dKGStep2(r);
   @override Future<DKGStep3Response> dKGStep3(DKGStep3Request r) => _inner.dKGStep3(r);
-  @override Future<SignStep1Response> signStep1(SignStep1Request r) => _inner.signStep1(r);
-  @override Future<SignStep2Response> signStep2(SignStep2Request r) => _inner.signStep2(r);
-  @override Future<RefreshStep1Response> refreshStep1(RefreshStep1Request r) => _inner.refreshStep1(r);
-  @override Future<RefreshStep2Response> refreshStep2(RefreshStep2Request r) => _inner.refreshStep2(r);
-  @override Future<RefreshStep3Response> refreshStep3(RefreshStep3Request r) => _inner.refreshStep3(r);
-  @override Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest r) => _inner.getPolicyId(r);
-  @override Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest r) => _inner.updatePolicy(r);
-  @override Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest r) => _inner.deletePolicy(r);
-  @override Future<BroadcastTransactionResponse> broadcastTransaction(BroadcastTransactionRequest r) => _inner.broadcastTransaction(r);
-  @override Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest r) => _inner.fetchHistory(r);
-  @override Future<FetchRecentTransactionsResponse> fetchRecentTransactions(FetchRecentTransactionsRequest r) => _inner.fetchRecentTransactions(r);
+  @override Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) => _inner.contractCreate(r);
+  @override Future<EvtxoPendingSharesResponse> evtxoPendingShares(EvtxoPendingSharesRequest r) => _inner.evtxoPendingShares(r);
+  @override Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) => _inner.evtxoAckShare(r);
+  @override Future<SignStep1Response> signStep1(SignStep1Request r, {String? routeGroupKeyHex}) => _inner.signStep1(r, routeGroupKeyHex: routeGroupKeyHex);
+  @override Future<SignStep2Response> signStep2(SignStep2Request r, {String? routeGroupKeyHex}) => _inner.signStep2(r, routeGroupKeyHex: routeGroupKeyHex);
   @override Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest r) => _inner.getArkInfo(r);
   @override Future<GetArkAddressResponse> getArkAddress(GetArkAddressRequest r) => _inner.getArkAddress(r);
   @override Future<GetBoardingAddressResponse> getBoardingAddress(GetBoardingAddressRequest r) => _inner.getBoardingAddress(r);
-  @override Future<CheckBoardingBalanceResponse> checkBoardingBalance(CheckBoardingBalanceRequest r) => _inner.checkBoardingBalance(r);
   @override Future<ListVtxosResponse> listVtxos(ListVtxosRequest r) => _inner.listVtxos(r);
   @override Future<ListArkTransactionsResponse> listArkTransactions(ListArkTransactionsRequest r) => _inner.listArkTransactions(r);
   @override Future<SendVtxoResponse> sendVtxo(SendVtxoRequest r) => _inner.sendVtxo(r);
@@ -97,6 +90,13 @@ class AttestedWalletApi implements WalletApi {
   @override Future<SettleResponse> settle(SettleRequest r) => _inner.settle(r);
   @override Future<SettleDelegateResponse> settleDelegate(SettleDelegateRequest r) => _inner.settleDelegate(r);
   @override Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) => _inner.submitArkSend(r);
+  // Request-to-pay — plain delegation; the attestation guarantees apply to the transport.
+  @override Future<ContactAddResponse> contactAdd(ContactAddRequest r) => _inner.contactAdd(r);
+  @override Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) => _inner.contactRemove(r);
+  @override Future<ContactListResponse> contactList(ContactListRequest r) => _inner.contactList(r);
+  @override Future<PaymentRequestCreateResponse> createPaymentRequest(PaymentRequestCreateRequest r, String payerGroupKeyHex) => _inner.createPaymentRequest(r, payerGroupKeyHex);
+  @override Future<PaymentRequestListResponse> paymentRequestList(PaymentRequestListRequest r) => _inner.paymentRequestList(r);
+  @override Future<PaymentRequestDeclineResponse> paymentRequestDecline(PaymentRequestDeclineRequest r) => _inner.paymentRequestDecline(r);
   @override Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest r) => _inner.getServerInfo(r);
   @override Future<RegisterDeviceTokenResponse> registerDeviceToken(RegisterDeviceTokenRequest r) => _inner.registerDeviceToken(r);
 
@@ -221,14 +221,22 @@ class _Attested {
     if (pubkeyHex.isEmpty) {
       throw Exception('enclave reports no attestation pubkey');
     }
-    if (v.appKeyHash.isNotEmpty) {
-      final expected =
-          sha256.convert(_unhex(pubkeyHex)).bytes;
-      final got = _unhex(v.appKeyHash);
-      if (!_constantTimeEq(expected, got)) {
-        throw Exception(
-            'appKeyHash mismatch: SHA256($pubkeyHex) != ${v.appKeyHash}');
-      }
+    // SECURITY: the appKeyHash binds the response-signing pubkey to the attested
+    // enclave image (SHA256(attestation_pubkey) must equal the appKeyHash embedded
+    // in the signed attestation UserData). This MUST fail closed: an empty /
+    // unextractable appKeyHash previously skipped the check, which would let a
+    // server present any `attestation_pubkey` and MITM every "attested" response.
+    if (v.appKeyHash.isEmpty) {
+      throw Exception(
+          'attestation has no appKeyHash binding — refusing to trust the '
+          'response-signing key (enclave must publish the sha256:tls;sha256:app '
+          'UserData binding)');
+    }
+    final expected = sha256.convert(_unhex(pubkeyHex)).bytes;
+    final got = _unhex(v.appKeyHash);
+    if (!_constantTimeEq(expected, got)) {
+      throw Exception(
+          'appKeyHash mismatch: SHA256($pubkeyHex) != ${v.appKeyHash}');
     }
 
     final cache = _AttestationCache(

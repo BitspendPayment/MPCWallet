@@ -9,15 +9,6 @@ pub const MAX_TIMESTAMP_DRIFT_MS: i64 = 5 * 60 * 1000; // 5 minutes
 // Operation constants (must match client-side values in auth_message.dart)
 pub const OP_SIGN_STEP1: &str = "SIGN_STEP1";
 pub const OP_SIGN_STEP2: &str = "SIGN_STEP2";
-pub const OP_REFRESH_STEP1: &str = "REFRESH_STEP1";
-pub const OP_REFRESH_STEP2: &str = "REFRESH_STEP2";
-pub const OP_REFRESH_STEP3: &str = "REFRESH_STEP3";
-pub const OP_GET_POLICY_ID: &str = "GET_POLICY_ID";
-pub const OP_FETCH_HISTORY: &str = "FETCH_HISTORY";
-pub const OP_FETCH_RECENT_TXS: &str = "FETCH_RECENT_TXS";
-pub const OP_SUBSCRIBE_HISTORY: &str = "SUBSCRIBE_HISTORY";
-pub const OP_UPDATE_POLICY: &str = "UPDATE_POLICY";
-pub const OP_DELETE_POLICY: &str = "DELETE_POLICY";
 pub const OP_GET_ARK_INFO: &str = "GET_ARK_INFO";
 pub const OP_GET_ARK_ADDRESS: &str = "GET_ARK_ADDRESS";
 pub const OP_GET_BOARDING_ADDRESS: &str = "GET_BOARDING_ADDRESS";
@@ -27,45 +18,31 @@ pub const OP_REDEEM_VTXO: &str = "REDEEM_VTXO";
 pub const OP_SETTLE: &str = "SETTLE";
 pub const OP_SETTLE_DELEGATE: &str = "SETTLE_DELEGATE";
 pub const OP_LIST_ARK_TXS: &str = "LIST_ARK_TXS";
-pub const OP_CHECK_BOARDING_BALANCE: &str = "CHECK_BOARDING_BALANCE";
 pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
-
-const RECOVERY_PREFIX: &str = "MPC_WALLET_RECOVERY_V1";
+pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
+pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
+pub const OP_EVENTS_SUBSCRIBE: &str = "EVENTS_SUBSCRIBE";
+/// Attaching a passkey to a wallet. Signed with the wallet's own signing key —
+/// NOT satisfiable by a session token, which would be circular (a token is what
+/// a passkey mints) and would let a stolen token add an attacker's authenticator.
+pub const OP_PASSKEY_REGISTER: &str = "PASSKEY_REGISTER";
+// Request-to-pay. All are signed by the wallet that owns the actor EXCEPT `OP_PAYREQ_CREATE`,
+// which is signed by the REQUESTER and routed to the PAYER's actor — the payer's contact
+// allowlist is what authorizes it.
+pub const OP_CONTACT_ADD: &str = "CONTACT_ADD";
+pub const OP_CONTACT_REMOVE: &str = "CONTACT_REMOVE";
+pub const OP_CONTACT_LIST: &str = "CONTACT_LIST";
+pub const OP_PAYREQ_CREATE: &str = "PAYREQ_CREATE";
+pub const OP_PAYREQ_LIST: &str = "PAYREQ_LIST";
+pub const OP_PAYREQ_DECLINE: &str = "PAYREQ_DECLINE";
 
 /// Build the auth message bytes that should have been signed.
 /// Returns SHA-256 hash of the canonical message (matches Dart client's AuthMessage.messageBytes).
 pub fn build_auth_message(operation: &str, timestamp_ms: i64, user_id_hex: &str) -> Vec<u8> {
     use sha2::{Digest, Sha256};
-    let msg = format!("{}:{}:{}:{}", AUTH_PREFIX, operation, timestamp_ms, user_id_hex);
+    let msg = format!(
+        "{}:{}:{}:{}",
+        AUTH_PREFIX, operation, timestamp_ms, user_id_hex
+    );
     Sha256::digest(msg.as_bytes()).to_vec()
-}
-
-/// Build the update-policy recovery message (SHA-256 hashed).
-pub fn build_update_policy_message(
-    policy_id: &str,
-    threshold_sats: i64,
-    interval_seconds: i64,
-    timestamp_ms: i64,
-    user_id_hex: &str,
-) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-    let canonical = format!(
-        "{}:UPDATE_POLICY:{}:{}:{}:{}:{}",
-        RECOVERY_PREFIX, policy_id, threshold_sats, interval_seconds, timestamp_ms, user_id_hex
-    );
-    Sha256::digest(canonical.as_bytes()).to_vec()
-}
-
-/// Build the delete-policy recovery message (SHA-256 hashed).
-pub fn build_delete_policy_message(
-    policy_id: &str,
-    timestamp_ms: i64,
-    user_id_hex: &str,
-) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-    let canonical = format!(
-        "{}:DELETE_POLICY:{}:{}:{}",
-        RECOVERY_PREFIX, policy_id, timestamp_ms, user_id_hex
-    );
-    Sha256::digest(canonical.as_bytes()).to_vec()
 }

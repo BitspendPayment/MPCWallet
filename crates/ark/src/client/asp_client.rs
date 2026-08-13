@@ -30,6 +30,49 @@ impl AspClient {
         })
     }
 
+    /// Build a client whose channel connects lazily (on first RPC) instead of eagerly. Useful for
+    /// contexts that must construct the client before the ASP is reachable, or that never issue an
+    /// RPC at all (e.g. pure-FROST signing paths + integration tests).
+    pub fn connect_lazy(url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mut endpoint = Channel::from_shared(url.to_string())?;
+        if url.starts_with("https://") {
+            endpoint = endpoint.tls_config(tonic::transport::ClientTlsConfig::new().with_webpki_roots())?;
+        }
+        let channel = endpoint.connect_lazy();
+        Ok(Self {
+            inner: ArkServiceClient::new(channel.clone()),
+            indexer: IndexerServiceClient::new(channel),
+            info: None,
+        })
+    }
+
+    /// Ask the indexer about SPECIFIC outpoints (`txid:vout`), whatever their status.
+    ///
+    /// Unlike the script query this needs no key/exit-delay derivation — you ask about outpoints
+    /// you already hold, so the answer can be trusted to be about exactly those.
+    pub async fn get_vtxos_by_outpoints(
+        &mut self,
+        outpoints: &[String],
+    ) -> Result<Vec<proto::IndexerVtxo>, Box<dyn std::error::Error + Send + Sync>> {
+        if outpoints.is_empty() {
+            return Ok(Vec::new());
+        }
+        let response = self
+            .indexer
+            .get_vtxos(proto::GetVtxosRequest {
+                scripts: Vec::new(),
+                outpoints: outpoints.to_vec(),
+                spendable_only: false,
+                spent_only: false,
+                recoverable_only: false,
+                page: None,
+                pending_only: false,
+            })
+            .await?
+            .into_inner();
+        Ok(response.vtxos)
+    }
+
     /// Query the indexer for spendable VTXOs matching the given scriptPubKeys.
     pub async fn get_vtxos_by_scripts(
         &mut self,

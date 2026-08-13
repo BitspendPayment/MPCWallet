@@ -23,6 +23,7 @@ use bitcoin::{
     XOnlyPublicKey,
 };
 
+#[cfg(feature = "client")]
 use crate::client::asp_client::AspClient;
 use crate::client::types::ArkInfo;
 
@@ -35,6 +36,11 @@ pub struct SendVtxoInput {
     pub txid: String,
     pub vout: u32,
     pub amount_sats: u64,
+    /// This VTXO's OWN unilateral-exit delay, which is part of its taproot tree
+    /// and therefore of its scriptPubKey. A wallet legitimately holds a mix: a
+    /// boarding-settled VTXO carries `boarding_exit_delay` while a received one
+    /// carries `unilateral_exit_delay`, so one delay cannot stand in for all.
+    pub exit_delay: u32,
 }
 
 /// Tracks which transaction and input index a sighash belongs to.
@@ -93,7 +99,6 @@ impl SendSession {
         recipient_ark_address: &str,
         amount_sats: u64,
         change_ark_address: Option<&str>,
-        exit_delay: u32,
         ark_info: &ArkInfo,
     ) -> Result<(Self, Vec<[u8; 32]>), String> {
         let secp = Secp256k1::new();
@@ -102,17 +107,37 @@ impl SendSession {
         let owner_pk = parse_xonly(owner_pk_hex)?;
         let asp_pk = parse_xonly(&ark_info.signer_pubkey)?;
 
-        let exit_seq = server::parse_sequence_number(exit_delay as i64)
-            .map_err(|e| format!("invalid exit_delay: {e}"))?;
-
-        // Reconstruct default VTXO for spend info (cooperative/forfeit path).
-        let vtxo = ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, exit_seq, network)
-            .map_err(|e| format!("Vtxo::new_default: {e}"))?;
-        let (spend_script, control_block) = vtxo
-            .forfeit_spend_info()
-            .map_err(|e| format!("forfeit_spend_info: {e}"))?;
-        let tapscripts = vtxo.tapscripts();
-        let vtxo_script_pubkey = vtxo.script_pubkey();
+        // Derive the spend info from EACH input's own exit delay, not from one
+        // shared value. The delay is part of the VTXO's taproot tree, so reusing
+        // one input's script/control block for the rest yields a wrong
+        // scriptPubKey and a sighash computed over the wrong prevout — the ASP
+        // rejects such a send. `generate_delegate` already builds one Vtxo per
+        // distinct delay; this is the same treatment for the send path.
+        //
+        // Cached by delay: a mixed set is usually just two distinct values
+        // (boarding vs unilateral), and Vtxo::new_default does real taproot work.
+        let mut spend_info_by_delay: HashMap<u32, _> = HashMap::new();
+        for vi in vtxo_inputs {
+            if spend_info_by_delay.contains_key(&vi.exit_delay) {
+                continue;
+            }
+            let exit_seq = server::parse_sequence_number(vi.exit_delay as i64)
+                .map_err(|e| format!("invalid exit_delay {}: {e}", vi.exit_delay))?;
+            let vtxo = ark_core::Vtxo::new_default(&secp, asp_pk, owner_pk, exit_seq, network)
+                .map_err(|e| format!("Vtxo::new_default: {e}"))?;
+            let (spend_script, control_block) = vtxo
+                .forfeit_spend_info()
+                .map_err(|e| format!("forfeit_spend_info: {e}"))?;
+            spend_info_by_delay.insert(
+                vi.exit_delay,
+                (
+                    spend_script,
+                    control_block,
+                    vtxo.tapscripts(),
+                    vtxo.script_pubkey(),
+                ),
+            );
+        }
 
         // Build VtxoInput for each input VTXO.
         let send_inputs: Vec<VtxoInput> = vtxo_inputs
@@ -122,6 +147,10 @@ impl SendSession {
                     txid: vi.txid.parse().map_err(|e| format!("invalid txid: {e}"))?,
                     vout: vi.vout,
                 };
+                let (spend_script, control_block, tapscripts, vtxo_script_pubkey) =
+                    spend_info_by_delay
+                        .get(&vi.exit_delay)
+                        .ok_or("missing spend info for exit delay")?;
                 Ok(VtxoInput::new(
                     spend_script.clone(),
                     None, // no locktime for default VTXOs
@@ -227,10 +256,10 @@ impl SendSession {
 // ---------------------------------------------------------------------------
 
 impl SendSession {
-    /// Submit the signed transaction to the ASP and finalize.
-    ///
-    /// Returns the Ark transaction ID.
-    pub async fn submit(&mut self, asp: &mut AspClient) -> Result<String, String> {
+    /// Insert the stored FROST signatures into the PSBTs and produce the base64 payloads
+    /// to submit: `(signed_ark_tx, unsigned_checkpoint_txs)`. Pure signing-side prep — no
+    /// ASP. Callable from the wasm guest (the guest drives submission via host imports).
+    pub fn prepare_submit(&mut self) -> Result<(String, Vec<String>), String> {
         if !matches!(self.phase, SendPhase::ReadyToSubmit) {
             return Err("submit called in wrong phase".into());
         }
@@ -240,7 +269,7 @@ impl SendSession {
             .take()
             .ok_or("missing FROST signatures")?;
 
-        // Insert FROST signatures into the ark tx inputs.
+        // Insert FROST signatures into the ark tx + checkpoint inputs.
         for (sig_bytes, entry) in signatures.iter().zip(self.sighash_entries.iter()) {
             let schnorr_sig = bitcoin::secp256k1::schnorr::Signature::from_slice(sig_bytes)
                 .map_err(|e| format!("invalid schnorr sig: {e}"))?;
@@ -257,7 +286,6 @@ impl SendSession {
                         .insert((self.owner_pk, entry.leaf_hash), sig);
                 }
                 SighashTarget::Checkpoint(cp_idx) => {
-                    // Store in checkpoint PSBTs (used for counter-signing later).
                     self.checkpoint_txs[*cp_idx].inputs[0]
                         .tap_script_sigs
                         .insert((self.owner_pk, entry.leaf_hash), sig);
@@ -265,11 +293,8 @@ impl SendSession {
             }
         }
 
-        // Submit signed ark tx + unsigned checkpoints to ASP.
-        // We send our checkpoints WITHOUT signatures so the ASP can add its own.
+        // Signed ark tx + checkpoints WITHOUT our sigs (the ASP adds its own first).
         let signed_ark_b64 = encode_psbt_b64(&self.ark_tx);
-
-        // Clone unsigned checkpoints for submission (strip our sigs).
         let unsigned_checkpoint_b64s: Vec<String> = self
             .checkpoint_txs
             .iter()
@@ -282,17 +307,17 @@ impl SendSession {
             })
             .collect();
 
-        let response = asp
-            .submit_tx(signed_ark_b64, unsigned_checkpoint_b64s)
-            .await
-            .map_err(|e| format!("submit_tx: {e}"))?;
+        Ok((signed_ark_b64, unsigned_checkpoint_b64s))
+    }
 
-        let ark_txid = response.ark_txid;
-
-        // Counter-sign the ASP-returned checkpoints.
-        // The ASP has added its signature; now we add ours.
+    /// Counter-sign the ASP-returned checkpoints with our FROST signatures, returning the
+    /// fully-signed checkpoint PSBTs (base64) to finalize. Pure PSBT math — guest-callable.
+    pub fn finalize_checkpoints(
+        &self,
+        signed_checkpoint_txs_b64: &[String],
+    ) -> Result<Vec<String>, String> {
         let mut final_checkpoints = Vec::new();
-        for asp_cp_b64 in &response.signed_checkpoint_txs {
+        for asp_cp_b64 in signed_checkpoint_txs_b64 {
             let mut asp_cp = decode_psbt_b64(asp_cp_b64)?;
 
             // Find matching original checkpoint by unsigned_tx txid.
@@ -301,16 +326,12 @@ impl SendSession {
                 .checkpoint_txs
                 .iter()
                 .find(|cp| cp.unsigned_tx.compute_txid() == cp_txid)
-                .ok_or_else(|| {
-                    format!("ASP returned unknown checkpoint txid: {cp_txid}")
-                })?;
+                .ok_or_else(|| format!("ASP returned unknown checkpoint txid: {cp_txid}"))?;
 
-            // Restore witness_script (may be stripped by ASP).
+            // Restore witness_script / tap_scripts (may be stripped by ASP).
             if let Some(ws) = &original.inputs[0].witness_script {
                 asp_cp.inputs[0].witness_script = Some(ws.clone());
             }
-
-            // Restore tap_scripts if needed.
             if asp_cp.inputs[0].tap_scripts.is_empty() {
                 asp_cp.inputs[0].tap_scripts = original.inputs[0].tap_scripts.clone();
             }
@@ -324,14 +345,32 @@ impl SendSession {
 
             final_checkpoints.push(encode_psbt_b64(&asp_cp));
         }
+        Ok(final_checkpoints)
+    }
 
-        // Finalize with fully signed checkpoints.
-        asp.finalize_tx(ark_txid.clone(), final_checkpoints)
+    /// Mark the session complete after finalization succeeds.
+    pub fn mark_done(&mut self) {
+        self.phase = SendPhase::Done;
+    }
+
+    /// Submit the signed transaction to the ASP and finalize. ASP transport — host only.
+    /// Thin wrapper over `prepare_submit` + `finalize_checkpoints` (which the guest calls
+    /// directly, driving the two ASP round-trips via host imports).
+    ///
+    /// Returns the Ark transaction ID.
+    #[cfg(feature = "client")]
+    pub async fn submit(&mut self, asp: &mut AspClient) -> Result<String, String> {
+        let (signed_ark_b64, unsigned_checkpoint_b64s) = self.prepare_submit()?;
+        let response = asp
+            .submit_tx(signed_ark_b64, unsigned_checkpoint_b64s)
+            .await
+            .map_err(|e| format!("submit_tx: {e}"))?;
+        let final_checkpoints = self.finalize_checkpoints(&response.signed_checkpoint_txs)?;
+        asp.finalize_tx(response.ark_txid.clone(), final_checkpoints)
             .await
             .map_err(|e| format!("finalize_tx: {e}"))?;
-
-        self.phase = SendPhase::Done;
-        Ok(ark_txid)
+        self.mark_done();
+        Ok(response.ark_txid)
     }
 
     /// Returns the change VTXO outpoint `(txid, vout, amount_sats)` if the

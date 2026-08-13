@@ -1,10 +1,10 @@
+use clap::Parser;
 use mpc_wallet::mpc_wallet_client::MpcWalletClient;
 use mpc_wallet::{DkgStep1Request, DkgStep2Request, DkgStep3Request};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 use tokio::task;
 use tonic::transport::Channel;
-use clap::Parser;
-use std::collections::HashMap;
 
 pub mod mpc_wallet {
     tonic::include_proto!("mpc_wallet");
@@ -26,20 +26,19 @@ struct Args {
 type ResultAny<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 async fn run_participant(
-    server_url: String, 
-    user_id: Vec<u8>, 
-    participant_id: usize
+    server_url: String,
+    user_id: Vec<u8>,
+    participant_id: usize,
 ) -> ResultAny<()> {
     let mut client = MpcWalletClient::connect(server_url).await?;
-    
+
     let identifier = vec![participant_id as u8; 32];
-    
+
     // Step 1: DKG Round 1
     let req1 = DkgStep1Request {
         user_id: user_id.clone(),
         identifier: identifier.clone(),
         round1_package: "{}".to_string(), // Mock
-        is_restore: false,
     };
     let _res1 = client.dkg_step1(req1).await?.into_inner();
 
@@ -64,27 +63,30 @@ async fn run_participant(
 
 async fn run_session(server_url: String, session_id: usize) -> ResultAny<()> {
     let user_id = format!("user_stress_{}", session_id).into_bytes();
-    
+
     // We need 2 participants to join the server's session (Total 3)
     let p1 = run_participant(server_url.clone(), user_id.clone(), 1);
     let p2 = run_participant(server_url.clone(), user_id.clone(), 2);
-    
+
     let (r1, r2) = tokio::join!(p1, p2);
     r1?;
     r2?;
-    
+
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> ResultAny<()> {
     let args = Args::parse();
-    
-    println!("Starting load test with {} concurrent sessions, {} total sessions...", args.concurrency, args.sessions);
-    
+
+    println!(
+        "Starting load test with {} concurrent sessions, {} total sessions...",
+        args.concurrency, args.sessions
+    );
+
     let start = Instant::now();
     let mut handles = vec![];
-    
+
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(args.concurrency));
 
     for i in 0..args.sessions {
@@ -105,7 +107,10 @@ async fn main() -> ResultAny<()> {
 
     let duration = start.elapsed();
     println!("Load test complete in {:?}", duration);
-    println!("Sessions/sec: {:.2}", args.sessions as f64 / duration.as_secs_f64());
+    println!(
+        "Sessions/sec: {:.2}",
+        args.sessions as f64 / duration.as_secs_f64()
+    );
 
     Ok(())
 }

@@ -9,6 +9,8 @@ use std::ptr;
 
 use ark::taptree::TapLeaf;
 
+mod evtxo_address;
+mod evtxo_spend;
 mod send;
 
 // ---------------------------------------------------------------------------
@@ -82,16 +84,9 @@ fn read_cstr(ptr: *const c_char) -> Option<String> {
 
 /// Helper: decode hex string to bytes.
 fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 {
-        return Err("odd-length hex string".into());
-    }
-    let mut out = Vec::with_capacity(s.len() / 2);
-    for i in (0..s.len()).step_by(2) {
-        let byte = u8::from_str_radix(&s[i..i + 2], 16)
-            .map_err(|_| format!("invalid hex at offset {i}"))?;
-        out.push(byte);
-    }
-    Ok(out)
+    // `hex::decode` rejects odd length + invalid chars and never panics (the old
+    // `&s[i..i+2]` slicing could panic on a non-char-boundary multi-byte UTF-8 input).
+    hex::decode(s).map_err(|e| format!("invalid hex: {e}"))
 }
 
 /// Helper: decode hex to 32-byte array.
@@ -324,6 +319,75 @@ pub extern "C" fn ark_get_change_vtxo(handle: u64) -> *mut FfiResult {
 #[no_mangle]
 pub extern "C" fn ark_free_send_session(handle: u64) {
     send::free_send_session(handle);
+}
+
+// ---------------------------------------------------------------------------
+// eVTXO cooperative-spend FFI functions
+// ---------------------------------------------------------------------------
+
+/// Build an on-chain spend of an eVTXO's cooperative (contract-gated) leaf.
+///
+/// Input: JSON string with `BuildEvtxoSpendParams`.
+/// Returns JSON: `{"handle": <u64>, "sighash": "hex", "psbt": "hex", "evtxo_spk": "hex"}`.
+/// Pass `psbt` to the cosigner's `sign` as `fullTransaction` (it carries the
+/// eVTXO `witness_utxo` + the contract args); `sign` the `sighash` with
+/// `applyTweak:false` to get the V′ leg.
+#[no_mangle]
+pub extern "C" fn ark_build_evtxo_spend(params_json: *const c_char) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let json = read_cstr(params_json).ok_or("null params_json")?;
+        evtxo_spend::build_evtxo_spend(&json)
+    })();
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
+/// Finalize an eVTXO cooperative spend: assemble the witness from the V′ FROST
+/// signature plus a server-leg signature produced from the ASP signer key.
+///
+/// Input: handle (u64), `v_prime_sig_hex` (64-byte hex), `signer_sk_hex` (the ASP
+/// signer secret key; its x-only pubkey must equal the built `server_pk`).
+/// Returns the raw signed transaction hex, ready for `sendrawtransaction`.
+#[no_mangle]
+pub extern "C" fn ark_finalize_evtxo_spend(
+    handle: u64,
+    v_prime_sig_hex: *const c_char,
+    signer_sk_hex: *const c_char,
+) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let v_prime = read_cstr(v_prime_sig_hex).ok_or("null v_prime_sig_hex")?;
+        let signer_sk = read_cstr(signer_sk_hex).ok_or("null signer_sk_hex")?;
+        evtxo_spend::finalize_evtxo_spend(handle, &v_prime, &signer_sk)
+    })();
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
+}
+
+/// Free an eVTXO spend session.
+#[no_mangle]
+pub extern "C" fn ark_free_evtxo_spend(handle: u64) {
+    evtxo_spend::free_evtxo_spend(handle);
+}
+
+/// Derive the Ark address for an eVTXO output key, so a normal off-chain send can
+/// mint a VTXO at it through arkd.
+///
+/// Input: JSON `{ "server_pk": hex, "q_evtxo": hex, "network": "regtest" }`.
+/// Returns the bech32m Ark address string.
+#[no_mangle]
+pub extern "C" fn ark_evtxo_ark_address(params_json: *const c_char) -> *mut FfiResult {
+    let result = (|| -> Result<String, String> {
+        let json = read_cstr(params_json).ok_or("null params_json")?;
+        evtxo_address::evtxo_ark_address(&json)
+    })();
+    match result {
+        Ok(data) => FfiResult::ok(&data),
+        Err(e) => FfiResult::err(&e),
+    }
 }
 
 #[cfg(test)]

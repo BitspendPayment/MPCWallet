@@ -8,20 +8,19 @@
 use tokio::runtime::Handle;
 use tonic::Status;
 
-use crate::cosigner::state::{CosignerState, VtxoEntry};
+use crate::cosigner::actor::CosignerActor;
+use crate::cosigner::registry::run_blocking;
+use crate::cosigner::state::VtxoEntry;
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::wasm::CosignerInstance;
-use crate::shared::SharedServices;
 
 use super::helpers::{now_secs, save_user_ark_history, save_user_vtxos};
 
 /// Per-actor tick. No-ops when there is nothing to do.
-#[tracing::instrument(skip_all, name = "actor::tick_auto_settle", err)]
-pub fn tick_auto_settle(
-    _user: &mut CosignerInstance,
-    state: &mut CosignerState,
-    shared: &SharedServices,
-) -> Result<(), Status> {
+impl CosignerActor {
+    pub async fn tick_auto_settle(&mut self) -> Result<(), Status> {
+        let shared = self.shared.clone();
+        run_blocking(self.state.clone(), move |state| {
+    let shared = shared.as_ref();
     let Some(record) = state.delegate_session.as_ref() else {
         return Ok(());
     };
@@ -42,7 +41,13 @@ pub fn tick_auto_settle(
                     .vtxos
                     .iter()
                     .find(|e| &e.txid == t && e.vout == *v)
-                    .and_then(|e| if e.expires_at > 0 { Some(e.expires_at) } else { None })
+                    .and_then(|e| {
+                        if e.expires_at > 0 {
+                            Some(e.expires_at)
+                        } else {
+                            None
+                        }
+                    })
             })
             .min()
             .unwrap_or(0)
@@ -56,10 +61,7 @@ pub fn tick_auto_settle(
         return Ok(());
     }
 
-    let Some(asp) = shared.asp_client.clone() else {
-        tracing::warn!("tick_auto_settle: ASP not configured; cannot drive stored intent");
-        return Ok(());
-    };
+    let asp = shared.asp_client.clone();
 
     let record = state.delegate_session.take().expect("checked above");
     tracing::info!(
@@ -70,7 +72,7 @@ pub fn tick_auto_settle(
     );
     // The in-memory record is gone; the sled row must follow whether the
     // drive succeeds or fails (failure → client re-delegates next refresh).
-    let user_id_hex = state.user_id_hex.clone();
+    let user_id_hex = state.cosigner_id.clone();
     super::helpers::delete_user_delegate(shared.persistence.as_ref(), &user_id_hex);
 
     let mut session = record.session;
@@ -100,8 +102,7 @@ pub fn tick_auto_settle(
         }
     };
 
-    let (vtxo_txid, vtxo_vout) =
-        vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
+    let (vtxo_txid, vtxo_vout) = vtxo_outpoint.unwrap_or_else(|| (commitment_txid.clone(), 0));
     let total_amount: u64 = state.vtxos.iter().map(|e| e.amount).sum();
     state.vtxos.clear();
     let new_exit_delay = info.unilateral_exit_delay as u32;
@@ -129,4 +130,7 @@ pub fn tick_auto_settle(
         "[{user_id_hex}] auto-settle: settled, new VTXO {vtxo_txid}:{vtxo_vout} amount={total_amount} commitment={commitment_txid}"
     );
     Ok(())
+        })
+        .await
+    }
 }

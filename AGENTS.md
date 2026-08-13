@@ -5,7 +5,7 @@
 - `client/` Dart client library used by the app and tooling.
 - `server/` Dart gRPC server; entrypoint is `server/bin/server.dart`, core logic in `server/lib`.
 - `protocol/` shared Dart protocol package; generated stubs live in `protocol/lib/src/generated`.
-- `crates/` Rust support libraries (path deps): `crates/threshold` cryptography (unit tests in `crates/threshold/test`), `crates/ark` Ark protocol primitives, `crates/enclave-client` Nitro Enclave HTTP client, `crates/embassy-rp-fork` HAL fork.
+- `crates/` Rust support libraries (path deps): `crates/threshold` cryptography (unit tests in `crates/threshold/test`), `crates/ark` Ark protocol primitives, `crates/enclave-client` Nitro Enclave HTTP client.
 - `e2e/` integration tests and Docker setup for regtest services.
 - `protos/` protobuf definitions; top-level `docker-compose.yml` and `Makefile` support local regtest.
 

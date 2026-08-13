@@ -24,7 +24,11 @@ hex = { version = "0.4", optional = true }
 [features]
 default = []
 std = ["threshold/std"]
-client = ["std", "ark-core", "bitcoin", "tokio", "tonic", "prost", "serde", "serde_json", "tonic-build", "rand", "tokio-stream", "hex"]
+# `signing`: tx-building + FROST/MuSig2 signing math + prost message types. Builds for
+# wasm32-wasip2 (no tonic/tokio) — this is what the cosigner guest enables.
+signing = ["std", "ark-core", "bitcoin", "prost", "serde", "serde_json", "rand", "hex", "tonic-build"]
+# `client`: adds the ASP gRPC transport (tonic/tokio) on top of `signing` — host-only.
+client = ["signing", "tokio", "tonic", "tokio-stream"]
 
 [build-dependencies]
 tonic-build = { version = "0.12", optional = true }

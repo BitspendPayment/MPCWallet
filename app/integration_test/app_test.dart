@@ -1,12 +1,8 @@
-// One end-to-end testWidgets covering the full user lifecycle:
-//   onboarding (DKG) → on-chain send → Ark board → recovery (re-DKG from blob).
-//
-// Recovery reuses the same `InMemoryBackupStore` that onboarding wrote into,
-// so the restore flow downloads main flow's blob — no second fresh DKG.
+// One end-to-end testWidgets covering the user lifecycle:
+//   onboarding (DKG) → on-chain send → Ark board/send/receive.
 
 // ignore_for_file: avoid_print
 
-import 'package:app/services/backup_store.dart';
 import 'package:app/services/mpc_service.dart';
 import 'package:app/services/push_service.dart';
 import 'package:flutter/material.dart';
@@ -24,17 +20,16 @@ void main() {
   IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
-    'full flow: onboarding → send → ark → recovery',
+    'full flow: onboarding → send → ark',
     (tester) async {
-      const password = 'TestPassword!2026';
-      final store = InMemoryBackupStore();
+      const pin = '123456';
       final btc = RegtestHelper();
       await btc.ensureWalletLoaded('default');
 
       // ── Onboarding ───────────────────────────────────────────────────────
       await resetAppState();
-      await bootApp(tester, backupStore: store);
-      await Flows.completeOnboarding(tester, password: password);
+      await bootApp(tester);
+      await Flows.completeOnboarding(tester, pin: pin);
       await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
       expect(find.byKey(const Key('homeSendBtn')), findsOneWidget);
 
@@ -42,8 +37,6 @@ void main() {
       final originalAddress =
           Provider.of<MpcService>(ctxOnboard, listen: false).receiveAddress;
       expect(originalAddress, isNotNull);
-      expect(await store.download(), isNotNull,
-          reason: 'DKG should have uploaded an encrypted backup');
 
       // ── On-chain send ────────────────────────────────────────────────────
       await HomePage.tapReceive(tester);
@@ -74,74 +67,6 @@ void main() {
         timeout: const Duration(seconds: 90),
       );
 
-      // ── Spending policy: create + verify enforcement ────────────────────
-      const pin = '123456';
-
-      await HomePage.tapPoliciesTab(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('addPolicyBtn')));
-      await PoliciesPage.tapAdd(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('thresholdSlider')));
-      await EditPolicyPage.dragThresholdToMin(tester);
-      await EditPolicyPage.tapSave(tester);
-      await pumpUntilFound(
-          tester, find.byKey(const Key('createPolicyPinField')));
-      await EditPolicyPage.enterPinAndAuthorize(tester, pin);
-
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('addPolicyBtn')),
-        timeout: const Duration(seconds: 60),
-      );
-      await tester.pumpAndSettle();
-      final policiesCtx = tester.element(find.byKey(const Key('addPolicyBtn')));
-      final policiesSvc =
-          Provider.of<MpcService>(policiesCtx, listen: false);
-      expect(policiesSvc.policies.length, greaterThanOrEqualTo(1),
-          reason: 'one policy should exist after creation');
-
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-
-      final underDest = await btc.getNewAddress();
-      await HomePage.tapSend(tester);
-      await tester.pumpAndSettle();
-      await SendPage.enterAddress(tester, underDest);
-      await SendPage.enterAmount(tester, '5000');
-      await SendPage.tapReview(tester);
-      await pumpUntilFound(tester, find.byKey(const Key('reviewSignBtn')));
-      await ReviewPage.tapSign(tester);
-      await tester.pump(const Duration(seconds: 2));
-      expect(find.byKey(const Key('signingPinField')), findsNothing,
-          reason: 'under-threshold send must not prompt for PIN');
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('homeSendBtn')),
-        timeout: const Duration(seconds: 90),
-      );
-
-      final overDest = await btc.getNewAddress();
-      await HomePage.tapSend(tester);
-      await tester.pumpAndSettle();
-      await SendPage.enterAddress(tester, overDest);
-      await SendPage.enterAmount(tester, '50000');
-      await SendPage.tapReview(tester);
-      await pumpUntilFound(tester, find.byKey(const Key('reviewSignBtn')));
-      await ReviewPage.tapSign(tester);
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('signingPinField')),
-        timeout: const Duration(seconds: 30),
-      );
-      await SigningPinDialog.enterAndAuthorize(tester, pin);
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('homeSendBtn')),
-        timeout: const Duration(seconds: 90),
-      );
-
       // ── Ark boarding (skipped when ASP not configured) ──────────────────
       await HomePage.tapArkTab(tester);
       await tester.pumpAndSettle();
@@ -163,19 +88,6 @@ void main() {
 
         await ArkBoardPage.waitForFundsDetected(tester);
         await ArkBoardPage.tapBoardNow(tester);
-        // Policy-bypass regression guard (commit bbb692b). Boarding settles
-        // a boarding output into a VTXO — settling never applies a spending
-        // policy. The server's SignStep1 forces selected_policy_id=None
-        // whenever a settle_session/delegate_session is in flight (see
-        // sign.rs). Confirm no PIN field ever pops during the next ~3s.
-        for (var i = 0; i < 6; i++) {
-          await tester.pump(const Duration(milliseconds: 500));
-          expect(find.byKey(const Key('signingPinField')), findsNothing,
-              reason:
-                  'REGRESSION: boarding (500k sats, well over the 10k '
-                  'policy threshold) prompted for PIN — policies must not '
-                  'gate settling.');
-        }
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkBoardDoneBtn')),
@@ -215,15 +127,6 @@ void main() {
         await ArkSendPage.enterAddress(tester, bobArkAddress);
         await ArkSendPage.enterAmount(tester, '5000');
         await ArkSendPage.tapSend(tester);
-        // Cumulative spending in the 24h window already exceeds the 10k
-        // threshold (50k on-chain over-threshold + 500k boarding both went
-        // into the spending history), so even a 5k Ark send triggers PIN.
-        await pumpUntilFound(
-          tester,
-          find.byKey(const Key('signingPinField')),
-          timeout: const Duration(seconds: 30),
-        );
-        await SigningPinDialog.enterAndAuthorize(tester, pin);
         await pumpUntilFound(
           tester,
           find.byKey(const Key('arkSendBtn')),
@@ -288,135 +191,6 @@ void main() {
                 'MpcClient.restoreState(), or the FROST sign round of '
                 'settleDelegate(storeOnly:true).');
       }
-
-      // ── Policy: delete, then a fresh 30s-window policy to prove rollover ─
-      // Get back to Home (we may be on the Ark screen).
-      await HomePage.tapHomeTab(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-
-      // Delete the 10k policy created earlier (recovery-key authorised).
-      await HomePage.tapPoliciesTab(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('deletePolicyBtn_0')));
-      await PoliciesPage.tapDelete(tester, index: 0);
-      await tester.pumpAndSettle();
-      await PoliciesPage.confirmDelete(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(
-          tester, find.byKey(const Key('recoveryPasswordField')));
-      await RecoveryPasswordDialog.enterAndOk(tester, password);
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('addPolicyBtn')),
-        timeout: const Duration(seconds: 60),
-      );
-      await tester.pumpAndSettle();
-      final delCtx = tester.element(find.byKey(const Key('addPolicyBtn')));
-      final delSvc = Provider.of<MpcService>(delCtx, listen: false);
-      await pumpUntilTrue(
-        tester,
-        () => delSvc.policies.isEmpty && delSvc.activePolicy == null,
-        timeout: const Duration(seconds: 30),
-        reason: 'policy should be gone after delete',
-      );
-
-      // Verify the deleted policy is not enforced: a send of any size, no PIN.
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-      await Flows.doOnChainSend(
-        tester,
-        destination: await btc.getNewAddress(),
-        amountSats: '6000',
-        expectPin: false,
-        pin: pin,
-      );
-
-      // Create a 30s-window, min-threshold (~10k) policy.
-      await HomePage.tapPoliciesTab(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('addPolicyBtn')));
-      await PoliciesPage.tapAdd(tester);
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('thresholdSlider')));
-      await EditPolicyPage.pickInterval(tester, '30 Sec');
-      await EditPolicyPage.dragThresholdToMin(tester);
-      await EditPolicyPage.tapSave(tester);
-      await pumpUntilFound(
-          tester, find.byKey(const Key('createPolicyPinField')));
-      await EditPolicyPage.enterPinAndAuthorize(tester, pin);
-      await pumpUntilFound(
-        tester,
-        find.byKey(const Key('addPolicyBtn')),
-        timeout: const Duration(seconds: 60),
-      );
-      await tester.pumpAndSettle();
-      await tester.pageBack();
-      await tester.pumpAndSettle();
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-
-      // Inside the 30s window: 6k alone is under threshold (no PIN), but a
-      // second 6k makes the cumulative 12k > 10k → PIN. Proves aggregation.
-      await Flows.doOnChainSend(
-        tester,
-        destination: await btc.getNewAddress(),
-        amountSats: '6000',
-        expectPin: false,
-        pin: pin,
-      );
-      await Flows.doOnChainSend(
-        tester,
-        destination: await btc.getNewAddress(),
-        amountSats: '6000',
-        expectPin: true,
-        pin: pin,
-      );
-
-      // Let the 30s window roll over (real wall-clock — the policy engine
-      // reads SystemTime, not the test's frame clock). Cumulative resets to 0.
-      await Future<void>.delayed(const Duration(seconds: 35));
-      await tester.pump();
-      await Flows.doOnChainSend(
-        tester,
-        destination: await btc.getNewAddress(),
-        amountSats: '6000',
-        expectPin: false, // cumulative reset → 0 + 6000 < 10000
-        pin: pin,
-      );
-      await btc.generateToAddress(1, minerAddr);
-
-      // ── Recovery: wipe, re-restore from the blob `store` already holds ──
-      await tearDownTree(tester);
-      await resetAppState();
-      await bootApp(tester, backupStore: store);
-
-      await pumpUntilFound(tester, find.byKey(const Key('welcomeRestoreBtn')));
-      await WelcomePage.tapRestore(tester);
-      await tester.pumpAndSettle();
-      await SignerSelectionPage.pickSoftware(tester);
-      await SignerSelectionPage.tapContinue(tester);
-      await tester.pumpAndSettle();
-      await GoogleSignInPage.signIn(tester);
-      await tester.pumpAndSettle();
-
-      await pumpUntilFound(tester, find.byKey(const Key('restoreContinueBtn')));
-      await RestorePage.enterPassword(tester, password);
-      await RestorePage.tapContinue(tester);
-
-      await pumpUntilFound(tester, find.byKey(const Key('serverPresetRegtest')));
-      await ServerConnectPage.pickRegtest(tester);
-      await tester.pumpAndSettle();
-      await DkgProgressPage.waitForReady(tester,
-          timeout: const Duration(minutes: 2));
-      await WalletReadyPage.tapGoToWallet(tester);
-
-      await pumpUntilFound(tester, find.byKey(const Key('homeSendBtn')));
-      final ctxPost = tester.element(find.byKey(const Key('homeSendBtn')));
-      final svcPost = Provider.of<MpcService>(ctxPost, listen: false);
-      expect(svcPost.dkgComplete, isTrue);
-      expect(svcPost.receiveAddress, equals(originalAddress),
-          reason: 'restored wallet should derive the same group verifying key');
     },
     timeout: const Timeout(Duration(minutes: 12)),
   );

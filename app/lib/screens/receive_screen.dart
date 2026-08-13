@@ -14,6 +14,11 @@ class ReceiveScreen extends StatelessWidget {
     final address =
         context.select<MpcService, String?>((s) => s.receiveAddress);
 
+    // DEBUG: log the address so you can fund it from the host.
+    if (address != null) {
+      debugPrint('RECEIVE >> ADDRESS (fund this): $address');
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(

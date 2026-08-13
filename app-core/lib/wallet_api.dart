@@ -12,34 +12,29 @@ abstract class WalletApi {
   Future<DKGStep2Response> dKGStep2(DKGStep2Request request);
   Future<DKGStep3Response> dKGStep3(DKGStep3Request request);
 
+  // Contract eVTXO creation (PEER model): a single key-preserving refresh of V onto
+  // {receiver, cosigner}. The receiver later picks up its two ECIES half-shares from
+  // its inbox (evtxoPendingShares) and acks them (evtxoAckShare).
+  Future<ContractCreateResponse> contractCreate(ContractCreateRequest request);
+  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
+      EvtxoPendingSharesRequest request);
+  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest request);
+
   // Signing
-  Future<SignStep1Response> signStep1(SignStep1Request request);
-  Future<SignStep2Response> signStep2(SignStep2Request request);
-
-  // Refresh
-  Future<RefreshStep1Response> refreshStep1(RefreshStep1Request request);
-  Future<RefreshStep2Response> refreshStep2(RefreshStep2Request request);
-  Future<RefreshStep3Response> refreshStep3(RefreshStep3Request request);
-
-  // Policy
-  Future<GetPolicyIdResponse> getPolicyId(GetPolicyIdRequest request);
-  Future<UpdatePolicyResponse> updatePolicy(UpdatePolicyRequest request);
-  Future<DeletePolicyResponse> deletePolicy(DeletePolicyRequest request);
-
-  // Transactions
-  Future<BroadcastTransactionResponse> broadcastTransaction(
-      BroadcastTransactionRequest request);
-  Future<FetchHistoryResponse> fetchHistory(FetchHistoryRequest request);
-  Future<FetchRecentTransactionsResponse> fetchRecentTransactions(
-      FetchRecentTransactionsRequest request);
+  // [routeGroupKeyHex] overrides the actor the request is routed to (the URL group_key),
+  // while `request.userId` stays the signer's auth identity. Used by a contract RECEIVER to
+  // route a spend to the eVTXO's `{receiver, cosigner}` pairing actor (keyed by the spk) while
+  // authenticating as itself. Null ⇒ route by `request.userId` (the normal case).
+  Future<SignStep1Response> signStep1(SignStep1Request request,
+      {String? routeGroupKeyHex});
+  Future<SignStep2Response> signStep2(SignStep2Request request,
+      {String? routeGroupKeyHex});
 
   // Ark
   Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest request);
   Future<GetArkAddressResponse> getArkAddress(GetArkAddressRequest request);
   Future<GetBoardingAddressResponse> getBoardingAddress(
       GetBoardingAddressRequest request);
-  Future<CheckBoardingBalanceResponse> checkBoardingBalance(
-      CheckBoardingBalanceRequest request);
   Future<ListVtxosResponse> listVtxos(ListVtxosRequest request);
   Future<ListArkTransactionsResponse> listArkTransactions(
       ListArkTransactionsRequest request);
@@ -49,6 +44,20 @@ abstract class WalletApi {
   Future<SettleDelegateResponse> settleDelegate(
       SettleDelegateRequest request);
   Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest request);
+
+  // Request-to-pay. A party is identified by its GROUP key (the wallet's single public
+  // identity) — not by the share key it signs with, because the cosigner derives the payee's
+  // Ark address from it. `createPaymentRequest` is the one call addressed to ANOTHER wallet's
+  // actor: `request.userId` is OUR group key, and the target payer is passed separately.
+  Future<ContactAddResponse> contactAdd(ContactAddRequest request);
+  Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest request);
+  Future<ContactListResponse> contactList(ContactListRequest request);
+  Future<PaymentRequestCreateResponse> createPaymentRequest(
+      PaymentRequestCreateRequest request, String payerGroupKeyHex);
+  Future<PaymentRequestListResponse> paymentRequestList(
+      PaymentRequestListRequest request);
+  Future<PaymentRequestDeclineResponse> paymentRequestDecline(
+      PaymentRequestDeclineRequest request);
 
   // Deployment metadata. Unauthenticated.
   Future<GetServerInfoResponse> getServerInfo(GetServerInfoRequest request);

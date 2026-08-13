@@ -28,6 +28,7 @@ class _SendScreenState extends State<SendScreen> {
   @override
   Widget build(BuildContext context) {
     final mpcService = context.watch<MpcService>();
+    final offline = mpcService.offlineMode;
     final onChainBalance = mpcService.balance;
     final arkBalance = mpcService.arkBalance;
     final formattedOnChain = NumberFormat('#,###').format(onChainBalance.toInt());
@@ -66,27 +67,33 @@ class _SendScreenState extends State<SendScreen> {
                       ),
                       if (address.isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Icon(
-                              isArk ? Icons.account_tree : Icons.link,
-                              size: 14,
-                              color:
-                                  isArk ? Colors.blueAccent : Colors.white38,
-                            ),
-                            const SizedBox(width: 6),
-                            Text(
-                              isArk
-                                  ? 'Ark (off-chain)'
-                                  : 'Bitcoin (on-chain)',
-                              style: GoogleFonts.inter(
-                                fontSize: 12,
-                                color:
-                                    isArk ? Colors.blueAccent : Colors.white38,
+                        Builder(builder: (_) {
+                          final arkBlocked = isArk && offline;
+                          final color = arkBlocked
+                              ? Colors.amberAccent
+                              : (isArk ? Colors.blueAccent : Colors.white38);
+                          return Row(
+                            children: [
+                              Icon(
+                                arkBlocked
+                                    ? Icons.cloud_off
+                                    : (isArk ? Icons.account_tree : Icons.link),
+                                size: 14,
+                                color: color,
                               ),
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 6),
+                              Text(
+                                arkBlocked
+                                    ? 'Ark unavailable in offline mode'
+                                    : (isArk
+                                        ? 'Ark (off-chain)'
+                                        : 'Bitcoin (on-chain)'),
+                                style: GoogleFonts.inter(
+                                    fontSize: 12, color: color),
+                              ),
+                            ],
+                          );
+                        }),
                       ],
                       const SizedBox(height: 24),
                       Row(
@@ -117,7 +124,9 @@ class _SendScreenState extends State<SendScreen> {
                       ),
                       const SizedBox(height: 16),
                       Text(
-                        'On-chain: $formattedOnChain Sats  |  Ark: $formattedArk Sats',
+                        offline
+                            ? 'On-chain: $formattedOnChain Sats'
+                            : 'On-chain: $formattedOnChain Sats  |  Ark: $formattedArk Sats',
                         style: GoogleFonts.inter(
                             color: Colors.white54, fontSize: 12),
                       ),
@@ -149,6 +158,13 @@ class _SendScreenState extends State<SendScreen> {
     }
 
     final isArk = _isArkAddress(address);
+
+    if (isArk && context.read<MpcService>().offlineMode) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Ark unavailable in offline mode — send on-chain (bc1q…) only')));
+      return;
+    }
 
     if (!isArk && !_isBitcoinAddress(address)) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

@@ -1,6 +1,5 @@
-//! Per-cosigner actor model. Each user has one cosigner instance; a tokio task
-//! owns that instance + its mutable state, processing commands serially. WASM
-//! calls run via `spawn_blocking` so the task stays light.
+//! Per-cosigner actor model. Each user has one native `CosignerActor` (keys + FROST ceremony +
+//! Ark sessions); a tokio task owns it + its mutable host state, processing commands serially.
 
 pub mod actor;
 pub mod command;
@@ -9,11 +8,10 @@ pub mod handlers;
 pub mod registry;
 pub mod state;
 pub mod types;
-pub mod wasm;
 
+pub use actor::CosignerActor;
 pub use command::CosignerCommand;
 pub use handle::CosignerHandle;
 pub use registry::CosignerRegistry;
 pub use state::CosignerState;
 pub use types::ArkTxEntry;
-pub use wasm::{CosignerInstance, CosignerWasiView};

@@ -1,5 +1,3 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -31,59 +29,29 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
 
   void _startDkg() async {
     final mpcService = context.read<MpcService>();
-    final extras = GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
-    final isRestore = extras['isRestore'] == true;
-    final signerKindStr = extras['signerKind'] as String? ?? 'software';
-    final signerKind = signerKindStr == 'hardware'
-        ? SignerKind.hardware
-        : SignerKind.software;
-    final password = extras['password'] as String?;
-    final blob = extras['blob'] as Uint8List?;
-
     // Wait for Init
     if (!mpcService.isInitialized) {
       await _addLog('Client init failed or slow. Retrying...');
-    }
-
-    // Record which signer backend is in use. Software signer password is
-    // passed directly to doDkg / doRestore below — never cached in the service.
-    try {
-      await mpcService.setSignerKind(signerKind);
-    } catch (e) {
-      await _addLog('Failed to set signer: $e');
-      return;
     }
 
     await _addLog('Connected to server.');
     setState(() => _currentStep = 0);
 
     try {
-      if (isRestore) {
-        await _addLog('Restoring wallet...');
-      } else {
-        await _addLog('Starting Distributed Key Generation...');
-      }
+      await _addLog('Starting Distributed Key Generation...');
       setState(() => _currentStep = 1);
 
       await Future.delayed(const Duration(milliseconds: 500)); // UI pacing
-      await _addLog(isRestore
-          ? 'Re-deriving shares from stored secrets...'
-          : 'Generating secrets and exchanging packages...');
+      await _addLog('Generating secrets and exchanging packages...');
 
-      if (isRestore) {
-        await mpcService.doRestore(blob: blob, password: password);
-      } else {
-        await mpcService.doDkg(password: password);
-      }
+      await mpcService.doDkg();
 
-      await _addLog(isRestore
-          ? 'Wallet restored successfully.'
-          : 'DKG Finalized successfully.');
+      await _addLog('DKG Finalized successfully.');
       setState(() => _currentStep = 2);
       await Future.delayed(const Duration(seconds: 1));
 
       if (mounted) {
-        context.push('/onboarding/ready');
+        context.push('/onboarding/passkey');
       }
     } catch (e) {
       await _addLog('Error: $e');
@@ -100,11 +68,8 @@ class _DkgProgressScreenState extends State<DkgProgressScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final extras = GoRouterState.of(context).extra as Map<String, dynamic>? ?? {};
-    final isRestore = extras['isRestore'] == true;
-
     return Scaffold(
-      appBar: AppBar(title: Text(isRestore ? 'Restoring Wallet' : 'Creating Wallet')),
+      appBar: AppBar(title: const Text('Creating Wallet')),
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(24.0),

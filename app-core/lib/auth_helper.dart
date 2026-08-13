@@ -46,55 +46,126 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
+  /// Auth signature for EvtxoPendingShares (receiver fetches its inbox of contract shares).
+  AuthSignature signForEvtxoPending() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoPending,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for attaching a passkey to this wallet. Must be produced
+  /// BEFORE the share is PRF-gated, while the raw signing key is still available.
+  AuthSignature signForPasskeyRegister() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPasskeyRegister,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for authorizing a contact to bill this wallet.
+  AuthSignature signForContactAdd() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactAdd,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for revoking a contact.
+  AuthSignature signForContactRemove() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactRemove,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for listing authorized contacts.
+  AuthSignature signForContactList() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opContactList,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for asking another wallet to pay us.
+  ///
+  /// Note the runtime prefers the session token when one is attached, and this call identifies
+  /// the requester by its GROUP key — which cannot be Schnorr-signed. So in practice the token
+  /// is what authenticates; this signature is sent for shape-compatibility.
+  AuthSignature signForPayreqCreate() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqCreate,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for listing this wallet's incoming payment requests.
+  AuthSignature signForPayreqList() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqList,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for declining a payment request.
+  AuthSignature signForPayreqDecline() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opPayreqDecline,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for the SSE event subscription (`GET /u/{vk}/events`).
+  AuthSignature signForEventsSubscribe() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEventsSubscribe,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
+  /// Auth signature for EvtxoAckShare (receiver clears a picked-up share).
+  AuthSignature signForEvtxoAck() {
+    final timestamp = currentTimestamp;
+    final signature = _signer.signOperation(
+      operation: threshold.AuthMessage.opEvtxoAck,
+      userIdHex: _userIdHex,
+      timestampMs: timestamp.toInt(),
+    );
+    return AuthSignature(signature, timestamp);
+  }
+
   /// Creates an authentication signature for SignStep2.
   AuthSignature signForSignStep2() {
     final timestamp = currentTimestamp;
     final signature = _signer.signOperation(
       operation: threshold.AuthMessage.opSignStep2,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for RefreshStep1.
-  AuthSignature signForRefreshStep1() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep1,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for RefreshStep2.
-  AuthSignature signForRefreshStep2() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep2,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for RefreshStep3.
-  AuthSignature signForRefreshStep3() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opRefreshStep3,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
-  /// Creates an authentication signature for GetPolicyId.
-  AuthSignature signForGetPolicyId() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opGetPolicyId,
       userIdHex: _userIdHex,
       timestampMs: timestamp.toInt(),
     );

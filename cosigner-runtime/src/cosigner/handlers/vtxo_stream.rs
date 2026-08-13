@@ -3,14 +3,11 @@
 
 use tonic::Status;
 
-use crate::shared::SharedServices;
 use crate::cosigner::state::{CosignerState, VtxoEntry};
 use crate::cosigner::types::ArkTxEntry;
-use crate::cosigner::wasm::CosignerInstance;
+use crate::shared::SharedServices;
 
-use super::helpers::{
-    get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos,
-};
+use super::helpers::{get_user_xonly_pubkey, now_secs, save_user_ark_history, save_user_vtxos};
 
 /// Resolve a VTXO's exit_delay by trying both candidates against its
 /// scriptPubKey. Falls back to `boarding_exit_delay`.
@@ -53,7 +50,6 @@ fn resolve_exit_delay(
 /// block, including the history append. No separate "active session" gate
 /// is needed.
 pub fn apply_stream_update(
-    user: &mut CosignerInstance,
     state: &mut CosignerState,
     shared: &SharedServices,
     user_id_hex: &str,
@@ -86,16 +82,18 @@ pub fn apply_stream_update(
             super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
             tracing::info!("[{user_id_hex}] delegate invalidated: covered VTXO spent");
         }
+        // All VTXOs spent — any guest-delegate marker (no host-side coverage info) is now stale.
+        if state.guest_delegate_threshold.take().is_some() {
+            super::helpers::delete_guest_delegate_threshold(
+                shared.persistence.as_ref(),
+                user_id_hex,
+            );
+        }
         save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);
         return Ok(Vec::new());
     }
 
-    let owner_pk = get_user_xonly_pubkey(
-        user,
-        shared.persistence.as_ref(),
-        shared.secret_store.as_ref(),
-        user_id_hex,
-    )?;
+    let owner_pk = get_user_xonly_pubkey(state, shared.persistence.as_ref(), user_id_hex)?;
     let network = match ark::client::parse_network(&info.network) {
         Ok(n) => n,
         Err(e) => return Err(Status::internal(e)),
@@ -133,13 +131,8 @@ pub fn apply_stream_update(
                 }
                 continue;
             }
-            let exit_delay = resolve_exit_delay(
-                &owner_pk,
-                &info.signer_pubkey,
-                &new.script,
-                &info,
-                network,
-            );
+            let exit_delay =
+                resolve_exit_delay(&owner_pk, &info.signer_pubkey, &new.script, &info, network);
             tracing::info!(
                 "[{user_id_hex}] VTXO stream: new spendable {}:{} amount={} exit_delay={exit_delay} expires_at={}",
                 outpoint.txid,
@@ -171,6 +164,13 @@ pub fn apply_stream_update(
     if delegate_invalidated {
         state.delegate_session = None;
         super::helpers::delete_user_delegate(shared.persistence.as_ref(), user_id_hex);
+        // The guest-delegate marker has no host-side coverage info; a changed VTXO set makes it stale.
+        if state.guest_delegate_threshold.take().is_some() {
+            super::helpers::delete_guest_delegate_threshold(
+                shared.persistence.as_ref(),
+                user_id_hex,
+            );
+        }
     }
 
     save_user_vtxos(shared.persistence.as_ref(), user_id_hex, &state.vtxos);

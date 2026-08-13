@@ -4,23 +4,22 @@ use std::env;
 /// Mirrors the Dart `ServerConfig` from `server/lib/config.dart`.
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-    pub electrum_url: String,
-    pub electrum_port: u16,
-    pub data_dir: String,
+    /// Filesystem path to the SQLite database backing the single KV store, e.g.
+    /// `/var/lib/cosigner/state.db`. Parent directories are created at open. `:memory:` gives an
+    /// ephemeral store (tests). Env `SQLITE_PATH`.
+    pub sqlite_path: String,
     /// ASP (Ark Service Provider) gRPC URL, e.g. "http://localhost:7070".
     /// When empty, Ark RPCs return UNAVAILABLE.
     pub asp_url: String,
     /// Bitcoin network name (e.g. "regtest", "signet", "testnet", "mainnet").
     /// Used for logging; the authoritative network comes from the ASP's GetArkInfo.
     pub bitcoin_network: String,
-    /// Persistence backend: "sled" (local) or "enclave" (HTTP KV store).
-    pub persistence_backend: String,
-    /// Enclave supervisor base URL (only used when persistence_backend = "enclave").
-    pub supervisor_url: String,
-    /// Enclave management token for supervisor API auth.
-    pub enclave_mgmt_token: String,
-    /// Path to the cosigner WASM component file.
-    pub cosigner_wasm_path: String,
+    /// esplora REST base URL (e.g. "http://127.0.0.1:30000"). The cosigner's ONLY
+    /// chain dependency — a read-only watcher of user boarding addresses so it can
+    /// nudge the device to board. Empty ⇒ the boarding watcher is disabled.
+    pub esplora_url: String,
+    /// Boarding-watch sweep interval (seconds). Default 60; e2e sets it low.
+    pub boarding_watch_interval_secs: u64,
     /// Auto-settle threshold: submit a stored delegate intent when
     /// `now > earliest_expires_at - this`. Default 30 minutes.
     pub auto_settle_safety_margin_secs: i64,
@@ -44,6 +43,22 @@ pub struct ServerConfig {
     /// idle out; the knob exists primarily for ASP-down deployments and
     /// for tests that exercise the eviction path.
     pub actor_idle_threshold_secs: i64,
+    /// 32-byte secret (hex) seeding the cosigner's OWN Ed25519 keypair, used to mint + verify the
+    /// session tokens it issues after a WebAuthn assertion. Empty ⇒ session-token auth disabled
+    /// (Schnorr-only). Env `WEBAUTH_TOKEN_SECRET`.
+    pub webauth_token_secret: String,
+    /// WebAuthn Relying Party ID (the effective domain the passkey is scoped to). Env `WEBAUTH_RP_ID`,
+    /// default `"localhost"`.
+    pub webauth_rp_id: String,
+    /// WebAuthn RP origin URL — the https origin matching `webauth_rp_id`, e.g.
+    /// `https://vtxos.com`. Env `WEBAUTH_RP_ORIGIN`, default `"http://localhost"`.
+    pub webauth_rp_origin: String,
+    /// Additional allowed origin for Android Credential-Manager assertions: the app's
+    /// `android:apk-key-hash:<b64url-sha256-of-signing-cert>`. Empty ⇒ web/https-only. Env
+    /// `WEBAUTH_ANDROID_ORIGIN`.
+    pub webauth_android_origin: String,
+    /// Human-readable RP name shown in the passkey UI. Env `WEBAUTH_RP_NAME`, default `"MPC Wallet"`.
+    pub webauth_rp_name: String,
 }
 
 impl ServerConfig {
@@ -51,25 +66,17 @@ impl ServerConfig {
     /// Supports Docker secrets via `_FILE` suffix pattern.
     pub fn from_environment() -> Self {
         Self {
-            electrum_url: env::var("ELECTRUM_URL").unwrap_or_else(|_| "127.0.0.1".to_string()),
-            electrum_port: env::var("ELECTRUM_PORT")
+            sqlite_path: env::var("SQLITE_PATH")
                 .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(50001),
-            data_dir: env::var("DATA_DIR").unwrap_or_else(|_| {
-                let home = env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-                format!("{}/.mpc_wallet/server", home)
-            }),
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| DEFAULT_SQLITE_PATH.to_string()),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
-            persistence_backend: env::var("PERSISTENCE_BACKEND")
-                .unwrap_or_else(|_| "sled".to_string()),
-            supervisor_url: env::var("SUPERVISOR_URL")
-                .unwrap_or_else(|_| "http://127.0.0.1:8080".to_string()),
-            enclave_mgmt_token: env::var("ENCLAVE_RUNTIME_TOKEN").unwrap_or_default(),
-            cosigner_wasm_path: env::var("COSIGNER_WASM_PATH").unwrap_or_else(|_| {
-                "../cosigner/target/wasm32-wasip1/release/cosigner.wasm".to_string()
-            }),
+            esplora_url: env::var("ESPLORA_URL").unwrap_or_default(),
+            boarding_watch_interval_secs: env::var("BOARDING_WATCH_INTERVAL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(60),
             auto_settle_safety_margin_secs: env::var("AUTO_SETTLE_SAFETY_MARGIN_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -84,6 +91,16 @@ impl ServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800),
+            webauth_token_secret: env::var("WEBAUTH_TOKEN_SECRET").unwrap_or_default(),
+            webauth_rp_id: env::var("WEBAUTH_RP_ID").unwrap_or_else(|_| "localhost".to_string()),
+            webauth_rp_origin: env::var("WEBAUTH_RP_ORIGIN")
+                .unwrap_or_else(|_| "http://localhost".to_string()),
+            webauth_android_origin: env::var("WEBAUTH_ANDROID_ORIGIN").unwrap_or_default(),
+            webauth_rp_name: env::var("WEBAUTH_RP_NAME").unwrap_or_else(|_| "MPC Wallet".to_string()),
         }
     }
 }
+
+/// Where the KV database lives when `SQLITE_PATH` is unset. A relative path so a bare `cargo run`
+/// works without root; deployments point this at the mounted data volume.
+const DEFAULT_SQLITE_PATH: &str = "data/cosigner.db";
