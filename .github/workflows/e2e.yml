@@ -52,7 +52,12 @@ jobs:
     name: Ark E2E (regtest)
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # The suite alone runs ~26 min on a dev machine (14 tests, several waiting on
+    # real arkd batch rounds), and this budget also covers checkout, Dart setup,
+    # `docker compose up` + a 30s settle, chain init and arkd init — on a runner
+    # slower than a workstation. 25 was already below the suite's own runtime, so
+    # the job was being killed mid-run and reported as a failure either way.
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
 
