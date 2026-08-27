@@ -37,10 +37,6 @@ class PushService {
   /// [registerCurrentToken] once it is.
   static bool _pendingBoarding = false;
 
-  /// Set when a "contract_share" notification opened the app from a terminated
-  /// state before the service was ready; acted on in [registerCurrentToken].
-  static bool _pendingContractShare = false;
-
   /// Set when a "vtxo_received" notification opened the app from a terminated
   /// state before the service was ready; acted on in [registerCurrentToken]
   /// (a refresh, which raises the Ark-tab delegate banner if needed).
@@ -89,15 +85,6 @@ class PushService {
         await svc.boardFunds();
       } catch (e) {
         debugPrint('[push] pending boardFunds failed: $e');
-      }
-    }
-    // A contract-share notification opened the app before the service was ready.
-    if (_pendingContractShare) {
-      _pendingContractShare = false;
-      try {
-        await svc.pickUpContractShares();
-      } catch (e) {
-        debugPrint('[push] pending pickUpContractShares failed: $e');
       }
     }
     // A funds-received notification opened the app before the service was
@@ -157,14 +144,6 @@ class PushService {
       } catch (e) {
         debugPrint('[push] foreground refreshBoardingBalance failed: $e');
       }
-    } else if (type == 'contract_share') {
-      // App is open: a contract share landed in our inbox — pick it up + assemble.
-      try {
-        final n = await svc.pickUpContractShares();
-        debugPrint('[push] foreground picked up $n contract share(s)');
-      } catch (e) {
-        debugPrint('[push] foreground pickUpContractShares failed: $e');
-      }
     } else if (type == 'payment_request') {
       // App is open: an allowlisted contact asked us to pay. The intent is already sealed
       // cosigner-side, so this is only a nudge to refresh the inbox.
@@ -180,8 +159,7 @@ class PushService {
   /// User tapped a notification (app backgrounded or cold-started). Handles the
   /// visible/tappable notifications: "vtxo_received" (funds arrived — refresh
   /// so the Ark tab raises its delegate banner; the user taps Delegate there,
-  /// which is where the passkey prompt belongs), "boarding_deposit" and
-  /// "contract_share".
+  /// which is where the passkey prompt belongs) and "boarding_deposit".
   static Future<void> _handleOpenedApp(RemoteMessage msg) async {
     final type = msg.data['type'];
     final svc = _svc;
@@ -207,17 +185,6 @@ class PushService {
         debugPrint('[push] tap-to-board: boardFunds ok');
       } catch (e) {
         debugPrint('[push] tap-to-board boardFunds failed: $e');
-      }
-    } else if (type == 'contract_share') {
-      if (svc == null) {
-        _pendingContractShare = true;
-        return;
-      }
-      try {
-        final n = await svc.pickUpContractShares();
-        debugPrint('[push] tap-to-accept: picked up $n contract share(s)');
-      } catch (e) {
-        debugPrint('[push] tap-to-accept pickUpContractShares failed: $e');
       }
     }
   }

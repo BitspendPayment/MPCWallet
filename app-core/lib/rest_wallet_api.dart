@@ -187,64 +187,14 @@ class RestWalletApi implements WalletApi {
   }
 
   // -------------------------------------------------------------------------
-  // Contract eVTXO creation
   // -------------------------------------------------------------------------
 
   @override
-  Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/contract/create', {
-      'identifier': _hex(r.identifier),
-      'contract_id': _hex(r.contractId),
-      'contract_wasm': _hex(r.contractWasm),
-      'server_pk': _hex(r.serverPk),
-      'exit_delay': r.exitDelay,
-      'owner_pk': _hex(r.ownerPk),
-      'receiver_vk': _hex(r.receiverVk),
-      'a_at_cosigner': _hex(r.aAtCosigner),
-      'a_at_receiver_point': _hex(r.aAtReceiverPoint),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-      'ecies_a_at_receiver': _hex(r.eciesAAtReceiver),
-      'template_id': r.templateId,
-      'stub_id': r.stubId,
-      'config_blob': _hex(r.configBlob),
-    });
-    return ContractCreateResponse()
-      ..contractScriptPubkey = _unhex(resp['contract_script_pubkey'] as String?)
-      ..contractId = _unhex(resp['contract_id'] as String?);
-  }
-
+  
   @override
-  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
-      EvtxoPendingSharesRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/pending', {
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    final shares = (resp['shares'] as List<dynamic>? ?? [])
-        .map((s) => PendingContractShare()
-          ..evtxoScriptPubkey = _unhex(s['evtxo_script_pubkey'] as String?)
-          ..contractId = _unhex(s['contract_id'] as String?)
-          ..eciesHalfAuthor = _unhex(s['ecies_half_author'] as String?)
-          ..eciesHalfCosigner = _unhex(s['ecies_half_cosigner'] as String?)
-          ..publicKeyPackageJson = s['public_key_package_json'] as String? ?? ''
-          ..exitDelay = (s['exit_delay'] as num?)?.toInt() ?? 0
-          ..serverPk = _unhex(s['server_pk'] as String?)
-          ..ownerPk = _unhex(s['owner_pk'] as String?))
-        .toList();
-    return EvtxoPendingSharesResponse()..shares.addAll(shares);
-  }
-
+  
   @override
-  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) async {
-    final resp = await _post('/api/u/${_hex(r.userId)}/evtxo/ack', {
-      'evtxo_script_pubkey': _hex(r.evtxoScriptPubkey),
-      'signature': _hex(r.signature),
-      'timestamp_ms': r.timestampMs.toInt(),
-    });
-    return EvtxoAckShareResponse()..ok = resp['ok'] as bool? ?? false;
-  }
-
+  
 
   // -------------------------------------------------------------------------
   // Request-to-pay
@@ -254,6 +204,51 @@ class RestWalletApi implements WalletApi {
   // Ark address from whatever key identifies the requester, so a share key would produce an
   // address the requester cannot spend. A group key also can't be Schnorr-signed (nobody holds
   // its private half) — the session token, whose `sub` IS the group key, is what authenticates.
+
+  @override
+  Future<ServiceEnrollResponse> serviceEnroll(ServiceEnrollRequest r) async {
+    // Only the POINT `a@service·G` goes to the cosigner. Sending the scalar would let it hold
+    // both the service's share and its own counter-share — two points on one degree-1 line, which
+    // interpolate `V`.
+    final resp = await _post('/api/u/${_hex(r.userId)}/service/enroll', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'identifier': _hex(r.identifier),
+      'service_id': _hex(r.serviceId),
+      'a_at_cosigner': _hex(r.aAtCosigner),
+      'a_at_service_point': _hex(r.aAtServicePoint),
+      'allowed_destinations': r.allowedDestinations,
+      'max_sats_per_signature': r.maxSatsPerSignature.toInt(),
+    });
+    return ServiceEnrollResponse()
+      ..pairingGroupKey = resp['pairing_group_key'] as String? ?? ''
+      ..serviceVerifyingShare = resp['service_verifying_share'] as String? ?? ''
+      ..pairingPublicKeyPackageJson =
+          resp['pairing_public_key_package_json'] as String? ?? ''
+      ..cosignerHalfDelivered = resp['cosigner_half_delivered'] as bool? ?? false;
+  }
+
+  @override
+  Future<ServiceListResponse> serviceList(ServiceListRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/service/list', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+    });
+    final services = ((resp['services'] as List?) ?? [])
+        .map((s) => EnrolledService()
+          ..verifyingShare = s['verifying_share'] as String? ?? ''
+          ..serviceId = s['service_id'] as String? ?? '')
+        .toList();
+    return ServiceListResponse()..services.addAll(services);
+  }
+
+  @override
+  Future<ServiceRevokeResponse> serviceRevoke(ServiceRevokeRequest r) async {
+    final resp = await _post('/api/u/${_hex(r.userId)}/service/revoke', {
+      ..._authFields(r.userId, r.signature, r.timestampMs),
+      'verifying_share': r.verifyingShare,
+    });
+    return ServiceRevokeResponse()
+      ..revoked = resp['revoked'] as bool? ?? false;
+  }
 
   @override
   Future<ContactAddResponse> contactAdd(ContactAddRequest r) async {
@@ -357,7 +352,6 @@ class RestWalletApi implements WalletApi {
       'message_to_sign': _hex(r.messageToSign),
       'signature': _hex(r.signature),
       'full_transaction': _hex(r.fullTransaction),
-      'ark_tx': _hex(r.arkTx),
       'timestamp_ms': r.timestampMs.toInt(),
       'script_path_spend': r.scriptPathSpend,
     });

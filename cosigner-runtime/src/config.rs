@@ -11,6 +11,17 @@ pub struct ServerConfig {
     /// ASP (Ark Service Provider) gRPC URL, e.g. "http://localhost:7070".
     /// When empty, Ark RPCs return UNAVAILABLE.
     pub asp_url: String,
+    /// Where to push a newly dealt service half, keyed by the service's identity hex.
+    ///
+    /// Env `SERVICE_ENDPOINTS`, formatted `<service_id_hex>=<url>` separated by commas or
+    /// whitespace. A service whose key is absent gets no push and its enrolment simply does not
+    /// complete.
+    ///
+    /// OPERATOR-CONFIGURED ON PURPOSE. The obvious alternative — let the enrolling wallet name the
+    /// URL — turns this cosigner into an SSRF gadget: an attacker enrols a throwaway service and
+    /// aims the enclave's outbound HTTP at anything it can reach. Services are deployed
+    /// infrastructure, so their addresses belong in deployment config, not in a request body.
+    pub service_endpoints: std::collections::BTreeMap<String, String>,
     /// Bitcoin network name (e.g. "regtest", "signet", "testnet", "mainnet").
     /// Used for logging; the authoritative network comes from the ASP's GetArkInfo.
     pub bitcoin_network: String,
@@ -71,6 +82,9 @@ impl ServerConfig {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| DEFAULT_SQLITE_PATH.to_string()),
             asp_url: env::var("ASP_URL").unwrap_or_default(),
+            service_endpoints: parse_service_endpoints(
+                &env::var("SERVICE_ENDPOINTS").unwrap_or_default(),
+            ),
             bitcoin_network: env::var("BITCOIN_NETWORK").unwrap_or_else(|_| "regtest".to_string()),
             esplora_url: env::var("ESPLORA_URL").unwrap_or_default(),
             boarding_watch_interval_secs: env::var("BOARDING_WATCH_INTERVAL_SECS")
@@ -104,3 +118,45 @@ impl ServerConfig {
 /// Where the KV database lives when `SQLITE_PATH` is unset. A relative path so a bare `cargo run`
 /// works without root; deployments point this at the mounted data volume.
 const DEFAULT_SQLITE_PATH: &str = "data/cosigner.db";
+
+/// Parse `SERVICE_ENDPOINTS`: `<service_id_hex>=<url>` entries separated by commas or whitespace.
+///
+/// Malformed entries are dropped with a warning rather than aborting startup — a typo in one
+/// service's address should not take the cosigner down for every wallet.
+fn parse_service_endpoints(raw: &str) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    for entry in raw.split([',', ' ', '\t', '\n']).filter(|e| !e.is_empty()) {
+        match entry.split_once('=') {
+            Some((vk, url)) if !vk.is_empty() && !url.is_empty() => {
+                out.insert(vk.trim().to_ascii_lowercase(), url.trim().to_string());
+            }
+            _ => tracing::warn!("SERVICE_ENDPOINTS: ignoring malformed entry {entry:?}"),
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod service_endpoint_tests {
+    use super::parse_service_endpoints;
+
+    #[test]
+    fn parses_comma_and_whitespace_separated_entries() {
+        let m = parse_service_endpoints("AA=https://a.example, bb=https://b.example\ncc=https://c");
+        assert_eq!(m.len(), 3);
+        assert_eq!(m["aa"], "https://a.example", "keys normalize to lowercase hex");
+        assert_eq!(m["bb"], "https://b.example");
+    }
+
+    #[test]
+    fn drops_malformed_entries_without_losing_the_good_ones() {
+        let m = parse_service_endpoints("good=https://x, garbage, =https://y, z=");
+        assert_eq!(m.len(), 1);
+        assert!(m.contains_key("good"));
+    }
+
+    #[test]
+    fn an_unset_variable_is_simply_no_services() {
+        assert!(parse_service_endpoints("").is_empty());
+    }
+}

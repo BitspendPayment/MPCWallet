@@ -33,18 +33,18 @@ class MPCWalletClient extends $grpc.Client {
       '/mpc_wallet.MPCWallet/DKGStep3',
       ($0.DKGStep3Request value) => value.writeToBuffer(),
       ($core.List<$core.int> value) => $0.DKGStep3Response.fromBuffer(value));
-  static final _$contractCreate = $grpc.ClientMethod<$0.ContractCreateRequest, $0.ContractCreateResponse>(
-      '/mpc_wallet.MPCWallet/ContractCreate',
-      ($0.ContractCreateRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.ContractCreateResponse.fromBuffer(value));
-  static final _$evtxoPendingShares = $grpc.ClientMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
-      '/mpc_wallet.MPCWallet/EvtxoPendingShares',
-      ($0.EvtxoPendingSharesRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.EvtxoPendingSharesResponse.fromBuffer(value));
-  static final _$evtxoAckShare = $grpc.ClientMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
-      '/mpc_wallet.MPCWallet/EvtxoAckShare',
-      ($0.EvtxoAckShareRequest value) => value.writeToBuffer(),
-      ($core.List<$core.int> value) => $0.EvtxoAckShareResponse.fromBuffer(value));
+  static final _$serviceEnroll = $grpc.ClientMethod<$0.ServiceEnrollRequest, $0.ServiceEnrollResponse>(
+      '/mpc_wallet.MPCWallet/ServiceEnroll',
+      ($0.ServiceEnrollRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ServiceEnrollResponse.fromBuffer(value));
+  static final _$serviceList = $grpc.ClientMethod<$0.ServiceListRequest, $0.ServiceListResponse>(
+      '/mpc_wallet.MPCWallet/ServiceList',
+      ($0.ServiceListRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ServiceListResponse.fromBuffer(value));
+  static final _$serviceRevoke = $grpc.ClientMethod<$0.ServiceRevokeRequest, $0.ServiceRevokeResponse>(
+      '/mpc_wallet.MPCWallet/ServiceRevoke',
+      ($0.ServiceRevokeRequest value) => value.writeToBuffer(),
+      ($core.List<$core.int> value) => $0.ServiceRevokeResponse.fromBuffer(value));
   static final _$contactAdd = $grpc.ClientMethod<$0.ContactAddRequest, $0.ContactAddResponse>(
       '/mpc_wallet.MPCWallet/ContactAdd',
       ($0.ContactAddRequest value) => value.writeToBuffer(),
@@ -144,16 +144,16 @@ class MPCWalletClient extends $grpc.Client {
     return $createUnaryCall(_$dKGStep3, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.ContractCreateResponse> contractCreate($0.ContractCreateRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$contractCreate, request, options: options);
+  $grpc.ResponseFuture<$0.ServiceEnrollResponse> serviceEnroll($0.ServiceEnrollRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$serviceEnroll, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.EvtxoPendingSharesResponse> evtxoPendingShares($0.EvtxoPendingSharesRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$evtxoPendingShares, request, options: options);
+  $grpc.ResponseFuture<$0.ServiceListResponse> serviceList($0.ServiceListRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$serviceList, request, options: options);
   }
 
-  $grpc.ResponseFuture<$0.EvtxoAckShareResponse> evtxoAckShare($0.EvtxoAckShareRequest request, {$grpc.CallOptions? options}) {
-    return $createUnaryCall(_$evtxoAckShare, request, options: options);
+  $grpc.ResponseFuture<$0.ServiceRevokeResponse> serviceRevoke($0.ServiceRevokeRequest request, {$grpc.CallOptions? options}) {
+    return $createUnaryCall(_$serviceRevoke, request, options: options);
   }
 
   $grpc.ResponseFuture<$0.ContactAddResponse> contactAdd($0.ContactAddRequest request, {$grpc.CallOptions? options}) {
@@ -263,27 +263,27 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
         false,
         ($core.List<$core.int> value) => $0.DKGStep3Request.fromBuffer(value),
         ($0.DKGStep3Response value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.ContractCreateRequest, $0.ContractCreateResponse>(
-        'ContractCreate',
-        contractCreate_Pre,
+    $addMethod($grpc.ServiceMethod<$0.ServiceEnrollRequest, $0.ServiceEnrollResponse>(
+        'ServiceEnroll',
+        serviceEnroll_Pre,
         false,
         false,
-        ($core.List<$core.int> value) => $0.ContractCreateRequest.fromBuffer(value),
-        ($0.ContractCreateResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.EvtxoPendingSharesRequest, $0.EvtxoPendingSharesResponse>(
-        'EvtxoPendingShares',
-        evtxoPendingShares_Pre,
+        ($core.List<$core.int> value) => $0.ServiceEnrollRequest.fromBuffer(value),
+        ($0.ServiceEnrollResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ServiceListRequest, $0.ServiceListResponse>(
+        'ServiceList',
+        serviceList_Pre,
         false,
         false,
-        ($core.List<$core.int> value) => $0.EvtxoPendingSharesRequest.fromBuffer(value),
-        ($0.EvtxoPendingSharesResponse value) => value.writeToBuffer()));
-    $addMethod($grpc.ServiceMethod<$0.EvtxoAckShareRequest, $0.EvtxoAckShareResponse>(
-        'EvtxoAckShare',
-        evtxoAckShare_Pre,
+        ($core.List<$core.int> value) => $0.ServiceListRequest.fromBuffer(value),
+        ($0.ServiceListResponse value) => value.writeToBuffer()));
+    $addMethod($grpc.ServiceMethod<$0.ServiceRevokeRequest, $0.ServiceRevokeResponse>(
+        'ServiceRevoke',
+        serviceRevoke_Pre,
         false,
         false,
-        ($core.List<$core.int> value) => $0.EvtxoAckShareRequest.fromBuffer(value),
-        ($0.EvtxoAckShareResponse value) => value.writeToBuffer()));
+        ($core.List<$core.int> value) => $0.ServiceRevokeRequest.fromBuffer(value),
+        ($0.ServiceRevokeResponse value) => value.writeToBuffer()));
     $addMethod($grpc.ServiceMethod<$0.ContactAddRequest, $0.ContactAddResponse>(
         'ContactAdd',
         contactAdd_Pre,
@@ -438,16 +438,16 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
     return dKGStep3(call, await request);
   }
 
-  $async.Future<$0.ContractCreateResponse> contractCreate_Pre($grpc.ServiceCall call, $async.Future<$0.ContractCreateRequest> request) async {
-    return contractCreate(call, await request);
+  $async.Future<$0.ServiceEnrollResponse> serviceEnroll_Pre($grpc.ServiceCall call, $async.Future<$0.ServiceEnrollRequest> request) async {
+    return serviceEnroll(call, await request);
   }
 
-  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoPendingSharesRequest> request) async {
-    return evtxoPendingShares(call, await request);
+  $async.Future<$0.ServiceListResponse> serviceList_Pre($grpc.ServiceCall call, $async.Future<$0.ServiceListRequest> request) async {
+    return serviceList(call, await request);
   }
 
-  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare_Pre($grpc.ServiceCall call, $async.Future<$0.EvtxoAckShareRequest> request) async {
-    return evtxoAckShare(call, await request);
+  $async.Future<$0.ServiceRevokeResponse> serviceRevoke_Pre($grpc.ServiceCall call, $async.Future<$0.ServiceRevokeRequest> request) async {
+    return serviceRevoke(call, await request);
   }
 
   $async.Future<$0.ContactAddResponse> contactAdd_Pre($grpc.ServiceCall call, $async.Future<$0.ContactAddRequest> request) async {
@@ -533,9 +533,9 @@ abstract class MPCWalletServiceBase extends $grpc.Service {
   $async.Future<$0.DKGStep1Response> dKGStep1($grpc.ServiceCall call, $0.DKGStep1Request request);
   $async.Future<$0.DKGStep2Response> dKGStep2($grpc.ServiceCall call, $0.DKGStep2Request request);
   $async.Future<$0.DKGStep3Response> dKGStep3($grpc.ServiceCall call, $0.DKGStep3Request request);
-  $async.Future<$0.ContractCreateResponse> contractCreate($grpc.ServiceCall call, $0.ContractCreateRequest request);
-  $async.Future<$0.EvtxoPendingSharesResponse> evtxoPendingShares($grpc.ServiceCall call, $0.EvtxoPendingSharesRequest request);
-  $async.Future<$0.EvtxoAckShareResponse> evtxoAckShare($grpc.ServiceCall call, $0.EvtxoAckShareRequest request);
+  $async.Future<$0.ServiceEnrollResponse> serviceEnroll($grpc.ServiceCall call, $0.ServiceEnrollRequest request);
+  $async.Future<$0.ServiceListResponse> serviceList($grpc.ServiceCall call, $0.ServiceListRequest request);
+  $async.Future<$0.ServiceRevokeResponse> serviceRevoke($grpc.ServiceCall call, $0.ServiceRevokeRequest request);
   $async.Future<$0.ContactAddResponse> contactAdd($grpc.ServiceCall call, $0.ContactAddRequest request);
   $async.Future<$0.ContactRemoveResponse> contactRemove($grpc.ServiceCall call, $0.ContactRemoveRequest request);
   $async.Future<$0.ContactListResponse> contactList($grpc.ServiceCall call, $0.ContactListRequest request);

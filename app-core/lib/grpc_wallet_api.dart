@@ -21,15 +21,8 @@ class GrpcWalletApi implements WalletApi {
   Future<DKGStep3Response> dKGStep3(DKGStep3Request r) => _stub.dKGStep3(r);
 
   @override
-  Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) =>
-      _stub.contractCreate(r);
   @override
-  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
-          EvtxoPendingSharesRequest r) =>
-      _stub.evtxoPendingShares(r);
   @override
-  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) =>
-      _stub.evtxoAckShare(r);
 
   @override
   Future<SignStep1Response> signStep1(SignStep1Request r,
@@ -73,6 +66,18 @@ class GrpcWalletApi implements WalletApi {
 
   // Request-to-pay is REST-only: the runtime serves no gRPC (nothing binds MPCWallet), so these
   // exist solely to satisfy the interface.
+  @override
+  Future<ServiceEnrollResponse> serviceEnroll(ServiceEnrollRequest r) =>
+      _stub.serviceEnroll(r);
+
+  @override
+  Future<ServiceListResponse> serviceList(ServiceListRequest r) =>
+      _stub.serviceList(r);
+
+  @override
+  Future<ServiceRevokeResponse> serviceRevoke(ServiceRevokeRequest r) =>
+      _stub.serviceRevoke(r);
+
   @override
   Future<ContactAddResponse> contactAdd(ContactAddRequest r) =>
       throw UnsupportedError('request-to-pay is REST-only');

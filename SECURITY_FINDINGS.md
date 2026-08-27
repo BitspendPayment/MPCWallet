@@ -20,12 +20,32 @@ Do NOT fix yet — just record. Fix pass happens once, after this list is comple
 
 ---
 
+## Closed by the eVTXO / contract removal
+
+The off-chain WASM contract layer and the eVTXO taptree were deleted (`contracts/`,
+`cosigner-runtime/src/contract/`, `contract_gate`, `evtxo_*` in `crates/ark` + `ffi`, and the
+`ContractCreate` / `EvtxoPendingShares` / `EvtxoAckShare` RPCs). Every finding scoped to that code
+is moot — the code is gone, not fixed, so **do not re-raise them against the current tree**:
+
+- **CR-3** (unauthenticated `contract/create`) — superseded by the authenticated
+  `service/enroll`; see the master list.
+- **CR-4 / CR-H4** (`contract/register-template` unauth + unbounded wasm) — route deleted.
+- **CR-6** (`contract/compose.rs` panic in `synthesize_provider`) — module deleted.
+- **CR-H3** (`contract/create` may be unauthenticated) — duplicate of CR-3.
+- The contract-sandbox wall-clock-deadline note under CR-H* — engine deleted.
+- The `evtxo_spend.rs` half of **TH-2**'s hex-decode panic and its `.lock().unwrap()` in
+  **TH-5** — file deleted. **The `send.rs` half of both still stands.**
+
+Still live and unaffected: TH-1, TH-4, TH-6, CR-1, IN-1, IN-2, IN-4, IN-5, CL-*, EC-*.
+
+---
+
 ## ★ CONSOLIDATED MASTER LIST (fix-pass checklist, deduped + severity-ranked)
 
 ### HIGH — fix first
 - [x] **CL-1** ✓ FIXED — strip `clientExtensionResults.prf` before the `assert/finish` POST (passkey_authenticator.dart). analyze clean; server confirmed not to use PRF.
 - [x] **TH-1** ✓ FIXED — single-use FROST nonce via atomic spent-flag wrapper (ffi/src/threshold: mod.rs + ffi_signing.rs). ffi builds; full 2-party sign still to be verified on device/e2e.
-- [ ] **CR-3** `verify_auth` (bound to group_key) on `contract/create` before dispatch (rest_api.rs). DEFERRED per user (contract work parked) — was implemented + verified (cargo check + dart analyze clean) then REVERTED; revisit alongside the contract/eVTXO feature.
+- [x] **CR-3** ✓ CLOSED BY DELETION — `contract/create` no longer exists; the eVTXO/contract layer was removed. Its replacement, `POST /u/{group_key}/service/enroll`, calls `verify_auth` bound to the group key *before* any dispatch, so the unauthenticated key-refresh is gone rather than deferred.
 - [ ] **IN-1** `is_kms_key_locked: true` + scope/remove host-role `kms:Decrypt` (enclave.yaml:11, main.tf:379-392). *Makes the enclave boundary real (the C1 rationale).* — INFRA/Terraform; needs a deploy.
 - [ ] **IN-2** verify the KMS-signed (or Sigstore) PCR0 in the client instead of the unsigned GitHub manifest (manifest.dart:45-62; main.tf:198-257). — new client feature; needs pinned-key decision + deployment details.
 - [x] **EC-3** ✓ FIXED — fail CLOSED on empty/unextractable appKeyHash (attested_wallet_api.dart). analyze clean.

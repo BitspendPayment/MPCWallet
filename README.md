@@ -269,21 +269,14 @@ three-leaf address today with no new protocol message.
 
 **The ASP does not need to know or approve.** An Ark address is just `(server_key, vtxo_tap_key)`;
 the taptree is committed inside the output key, and arkd mints and co-signs against the
-cooperative path without inspecting the rest. That is not a hope — this project already ships
-contract eVTXOs built exactly this way. [`evtxo_tree`](crates/ark/src/lib.rs#L181-L193) takes the
-cooperative key and the exit-leaf key as **separate parameters**:
+cooperative path without inspecting the rest. This project has built and e2e-verified a taptree
+that keys the cooperative leaf and the exit leaf to **different** keys, spending through arkd on
+regtest — the recovery leaf is that same construction with the recovery key in the exit slot.
+(That code was removed along with the eVTXO/contract layer; it is recoverable from git history
+if the recovery leaf gets built.)
 
-```rust
-let cooperative = TapLeaf::new(contract_cooperative_script(commit, server_pk, evtxo_pk));
-let exit        = TapLeaf::new(evtxo_exit_script(exit_delay, owner_pk));   // different key
-```
-
-`ContractPolicy.owner_pk` is literally documented as "user-supplied exit-leaf owner x-only key",
-and the whole path is e2e-verified spending through arkd on regtest. The recovery leaf is the same
-construction with the recovery key in that slot.
-
-The gap is narrow: plain wallet VTXOs still go through `Vtxo::new_default`, which reuses one
-`owner` for both leaves. eVTXOs got the better construction; ordinary VTXOs did not.
+The gap is narrow: plain wallet VTXOs go through `Vtxo::new_default`, which reuses one `owner`
+for both leaves.
 
 The honest costs:
 

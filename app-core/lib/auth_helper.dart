@@ -46,17 +46,6 @@ class ClientAuthHelper {
     return AuthSignature(signature, timestamp);
   }
 
-  /// Auth signature for EvtxoPendingShares (receiver fetches its inbox of contract shares).
-  AuthSignature signForEvtxoPending() {
-    final timestamp = currentTimestamp;
-    final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opEvtxoPending,
-      userIdHex: _userIdHex,
-      timestampMs: timestamp.toInt(),
-    );
-    return AuthSignature(signature, timestamp);
-  }
-
   /// Auth signature for attaching a passkey to this wallet. Must be produced
   /// BEFORE the share is PRF-gated, while the raw signing key is still available.
   AuthSignature signForPasskeyRegister() {
@@ -140,21 +129,29 @@ class ClientAuthHelper {
   }
 
   /// Auth signature for the SSE event subscription (`GET /u/{vk}/events`).
-  AuthSignature signForEventsSubscribe() {
+  /// Auth signature for ServiceEnroll (the wallet delegating signing to a service).
+  AuthSignature signForServiceEnroll() => _sign(threshold.AuthMessage.opServiceEnroll);
+
+  /// Auth signature for ServiceList (which services can sign for this wallet).
+  AuthSignature signForServiceList() => _sign(threshold.AuthMessage.opServiceList);
+
+  /// Auth signature for ServiceRevoke (retiring a service's counter-share).
+  AuthSignature signForServiceRevoke() => _sign(threshold.AuthMessage.opServiceRevoke);
+
+  AuthSignature _sign(String operation) {
     final timestamp = currentTimestamp;
     final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opEventsSubscribe,
+      operation: operation,
       userIdHex: _userIdHex,
       timestampMs: timestamp.toInt(),
     );
     return AuthSignature(signature, timestamp);
   }
 
-  /// Auth signature for EvtxoAckShare (receiver clears a picked-up share).
-  AuthSignature signForEvtxoAck() {
+  AuthSignature signForEventsSubscribe() {
     final timestamp = currentTimestamp;
     final signature = _signer.signOperation(
-      operation: threshold.AuthMessage.opEvtxoAck,
+      operation: threshold.AuthMessage.opEventsSubscribe,
       userIdHex: _userIdHex,
       timestampMs: timestamp.toInt(),
     );

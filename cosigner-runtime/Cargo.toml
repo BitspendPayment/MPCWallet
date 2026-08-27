@@ -11,13 +11,6 @@ path = "src/main.rs"
 default = []
 
 [dependencies]
-# Sandboxes the untrusted contract WASM (component-model, no WASI). The cosigner itself is native.
-wasmtime = { version = "45", features = ["component-model"] }
-# Composes a template + a synthesized config provider into one contract component. Pinned to 0.248
-# to match wasmtime 45's transitive wasm-encoder/wasmparser (no version-resolution conflict).
-wasm-compose = "=0.248.0"
-# Temp files for the (filesystem-based) wasm-compose API.
-tempfile = "3"
 http = "1"
 tonic = "0.12"
 tonic-web = "0.12"

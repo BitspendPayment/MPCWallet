@@ -47,23 +47,8 @@ pub struct VtxoInputParam {
     /// the unilateral delay). Absent => the top-level `exit_delay`.
     #[serde(default)]
     pub exit_delay: Option<u32>,
-    /// Present => this input is a contract eVTXO spent via its cooperative
-    /// (`ConditionMultisigClosure`) leaf, signed by V′ and gated by the cosigner.
-    #[serde(default)]
-    pub evtxo: Option<EvtxoSpendInfoParam>,
 }
 
-#[derive(Deserialize)]
-pub struct EvtxoSpendInfoParam {
-    pub contract_id: String, // 32-byte hex; commit = sha256(contract_id)
-    pub server_pk: String,   // x-only hex (ASP signer)
-    pub evtxo_pk: String,    // x-only hex (V′, the 2-of-2 {wallet,cosigner} key)
-    pub owner_pk: String,    // x-only hex (V, keys the exit leaf)
-    pub exit_delay: u32,
-    /// Hex of the opaque contract args for the gate (PSBT `EVTXO/0x01` proprietary).
-    #[serde(default)]
-    pub contract_args: Option<String>,
-}
 
 #[derive(Deserialize)]
 pub struct ArkInfoParam {
@@ -84,10 +69,8 @@ pub struct BuildSendResult {
     pub handle: u64,
     pub sighashes: Vec<String>,
     pub ark_tx_bytes: String,
-    /// PSBT (hex) to pass as `fullTransaction` to the cosigner's sign so the
-    /// contract gate fires and V′ is selected. When the spend has an eVTXO input
-    /// this is the checkpoint PSBT (whose input 0 `witness_utxo` is the eVTXO
-    /// spk); otherwise it equals `ark_tx_bytes` (normal sends are unaffected).
+    /// PSBT (hex) to pass as `fullTransaction` to the cosigner's sign. Equal to
+    /// `ark_tx_bytes`; kept as a distinct field so callers need not care.
     pub gate_tx_bytes: String,
 }
 
@@ -113,7 +96,7 @@ struct SighashEntry {
     target: SighashTarget,
     leaf_hash: TapLeafHash,
     /// The x-only key whose `tap_script_sigs` slot this signature fills — the
-    /// VTXO owner key V for normal inputs, or V′ for an eVTXO input.
+    /// VTXO owner key V.
     signer_pk: XOnlyPublicKey,
 }
 
@@ -163,9 +146,6 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
     // embeds its own delay, so one template can't serve a mixed set.
     let mut vtxo_by_delay: HashMap<u32, ark_core::Vtxo> = HashMap::new();
     for vi in &params.vtxo_inputs {
-        if vi.evtxo.is_some() {
-            continue;
-        }
         let delay = vi.exit_delay.unwrap_or(params.exit_delay);
         if let std::collections::hash_map::Entry::Vacant(slot) = vtxo_by_delay.entry(delay) {
             let seq = server::parse_sequence_number(delay as i64)
@@ -176,80 +156,32 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
         }
     }
 
-    // Build VtxoInputs. Each input is either a normal VTXO (default forfeit leaf,
-    // signed by the owner key V) or a contract eVTXO spent via its cooperative
-    // `ConditionMultisigClosure` leaf (signed by V′, gated by the cosigner).
+    // Build VtxoInputs. Every input is a normal VTXO spent via its default forfeit leaf,
+    // signed by the owner key V.
     let mut send_inputs: Vec<VtxoInput> = Vec::with_capacity(params.vtxo_inputs.len());
     let mut signer_pks: Vec<XOnlyPublicKey> = Vec::with_capacity(params.vtxo_inputs.len());
-    // (input index, contract_id, optional gate args) — attached to PSBTs post-build.
-    let mut evtxo_inputs: Vec<(usize, [u8; 32], Option<Vec<u8>>)> = Vec::new();
 
-    for (i, vi) in params.vtxo_inputs.iter().enumerate() {
+    for vi in params.vtxo_inputs.iter() {
         let outpoint = OutPoint {
             txid: vi.txid.parse().map_err(|e| format!("invalid txid: {e}"))?,
             vout: vi.vout,
         };
-        match vi.evtxo.as_ref() {
-            Some(e) => {
-                let contract_id = hex_to_32(&e.contract_id)?;
-                let server = hex_to_32(&e.server_pk)?;
-                let evtxo_pk = hex_to_32(&e.evtxo_pk)?;
-                let owner = hex_to_32(&e.owner_pk)?;
-                let commit: [u8; 32] =
-                    bitcoin::hashes::sha256::Hash::hash(&contract_id).to_byte_array();
-                let (coop_script, th_cb) = ark::evtxo_cooperative_spend_info(
-                    &commit, &server, &evtxo_pk, &owner, e.exit_delay,
-                )
-                .ok_or("evtxo_cooperative_spend_info failed")?;
-                let spk =
-                    ark::evtxo_script_pubkey(&commit, &server, &evtxo_pk, &owner, e.exit_delay)
-                        .map_err(|err| format!("evtxo_script_pubkey: {err:?}"))?;
-                // ark's ControlBlock -> bitcoin's via its serialized form.
-                let cb = taproot::ControlBlock::decode(&th_cb.serialize())
-                    .map_err(|err| format!("control block decode: {err}"))?;
-                let tapscripts = vec![
-                    ScriptBuf::from_bytes(coop_script.clone()),
-                    ScriptBuf::from_bytes(ark::evtxo_exit_script(e.exit_delay, &owner)),
-                ];
-                send_inputs.push(VtxoInput::new(
-                    ScriptBuf::from_bytes(coop_script),
-                    None,
-                    cb,
-                    tapscripts,
-                    ScriptBuf::from_bytes(spk.to_vec()),
-                    Amount::from_sat(vi.amount),
-                    outpoint,
-                    Vec::new(),
-                ));
-                signer_pks.push(
-                    XOnlyPublicKey::from_slice(&evtxo_pk)
-                        .map_err(|err| format!("invalid evtxo_pk: {err}"))?,
-                );
-                let args = match e.contract_args.as_deref() {
-                    Some(a) if !a.is_empty() => Some(hex_decode(a)?),
-                    _ => None,
-                };
-                evtxo_inputs.push((i, contract_id, args));
-            }
-            None => {
-                let delay = vi.exit_delay.unwrap_or(params.exit_delay);
-                let input_vtxo = &vtxo_by_delay[&delay];
-                let (spend_script, control_block) = input_vtxo
-                    .forfeit_spend_info()
-                    .map_err(|e| format!("forfeit_spend_info: {e}"))?;
-                send_inputs.push(VtxoInput::new(
-                    spend_script,
-                    None,
-                    control_block,
-                    input_vtxo.tapscripts(),
-                    input_vtxo.script_pubkey(),
-                    Amount::from_sat(vi.amount),
-                    outpoint,
-                    Vec::new(), // assets — none (ark-core 0.9)
-                ));
-                signer_pks.push(owner_pk);
-            }
-        }
+        let delay = vi.exit_delay.unwrap_or(params.exit_delay);
+        let input_vtxo = &vtxo_by_delay[&delay];
+        let (spend_script, control_block) = input_vtxo
+            .forfeit_spend_info()
+            .map_err(|e| format!("forfeit_spend_info: {e}"))?;
+        send_inputs.push(VtxoInput::new(
+            spend_script,
+            None,
+            control_block,
+            input_vtxo.tapscripts(),
+            input_vtxo.script_pubkey(),
+            Amount::from_sat(vi.amount),
+            outpoint,
+            Vec::new(), // assets — none (ark-core 0.9)
+        ));
+        signer_pks.push(owner_pk);
     }
 
     // Parse addresses
@@ -275,34 +207,11 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
 
     // Build transactions
     let OffchainTransactions {
-        mut ark_tx,
-        mut checkpoint_txs,
+        ark_tx,
+        checkpoint_txs,
     } = send::build_offchain_transactions(&receivers, &change_addr, &send_inputs, &server_info)
         .map_err(|e| format!("build_offchain_transactions: {e}"))?;
 
-    // Attach the condition preimage (contract_id) on both the checkpoint input and
-    // the ark_tx input (each reveals the cooperative leaf), plus the gate's args.
-    for (i, contract_id, args) in &evtxo_inputs {
-        let cond = encode_condition(&[contract_id.to_vec()]);
-        let cond_key = bitcoin::psbt::raw::Key {
-            type_value: 222,
-            key: ark_core::VTXO_CONDITION_KEY.to_vec(),
-        };
-        checkpoint_txs[*i].inputs[0]
-            .unknown
-            .insert(cond_key.clone(), cond.clone());
-        ark_tx.inputs[*i].unknown.insert(cond_key, cond);
-        if let Some(args) = args {
-            checkpoint_txs[*i].inputs[0].proprietary.insert(
-                bitcoin::psbt::raw::ProprietaryKey {
-                    prefix: b"EVTXO".to_vec(),
-                    subtype: 0x01,
-                    key: Vec::new(),
-                },
-                args.clone(),
-            );
-        }
-    }
 
     // Compute sighashes (per-input signer key threaded for tap_script_sigs).
     let mut sighashes = Vec::new();
@@ -315,12 +224,7 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
 
     // Serialize ark_tx (after attaching condition fields) for fullTransaction passthrough.
     let ark_tx_bytes_hex = hex_encode(&ark_tx.serialize());
-    // The gate fires on the PSBT whose input carries the eVTXO witness_utxo — the
-    // checkpoint. Fall back to the ark tx for normal (non-eVTXO) sends.
-    let gate_tx_bytes_hex = match evtxo_inputs.first() {
-        Some((i, _, _)) => hex_encode(&checkpoint_txs[*i].serialize()),
-        None => ark_tx_bytes_hex.clone(),
-    };
+    let gate_tx_bytes_hex = ark_tx_bytes_hex.clone();
 
     // Store session
     let handle = NEXT_HANDLE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -338,33 +242,6 @@ pub fn build_send_tx(params_json: &str) -> Result<String, String> {
         gate_tx_bytes: gate_tx_bytes_hex,
     };
     serde_json::to_string(&result).map_err(|e| format!("JSON serialize: {e}"))
-}
-
-/// Encode condition-witness elements in ark-core's PSBT `condition` field format
-/// (compact-size count, then each element length-prefixed). For our cooperative
-/// leaf the single element is the 32-byte `contract_id` preimage.
-fn encode_condition(elements: &[Vec<u8>]) -> Vec<u8> {
-    fn write_compact(out: &mut Vec<u8>, n: u64) {
-        if n < 0xfd {
-            out.push(n as u8);
-        } else if n <= 0xffff {
-            out.push(0xfd);
-            out.extend_from_slice(&(n as u16).to_le_bytes());
-        } else if n <= 0xffff_ffff {
-            out.push(0xfe);
-            out.extend_from_slice(&(n as u32).to_le_bytes());
-        } else {
-            out.push(0xff);
-            out.extend_from_slice(&n.to_le_bytes());
-        }
-    }
-    let mut out = Vec::new();
-    write_compact(&mut out, elements.len() as u64);
-    for e in elements {
-        write_compact(&mut out, e.len() as u64);
-        out.extend_from_slice(e);
-    }
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +551,7 @@ fn hex_decode(hex: &str) -> Result<Vec<u8>, String> {
     // Use the `hex` crate: rejects odd length + invalid chars and NEVER panics.
     // The old `&hex[i..i+2]` slicing panicked on odd-length input (out-of-range
     // final slice) and on multi-byte UTF-8 (non-char-boundary) — both reachable
-    // from ASP-supplied strings. Shared by the ark send / evtxo-spend paths.
+    // from ASP-supplied strings.
     hex::decode(hex).map_err(|e| format!("hex: {e}"))
 }
 
@@ -682,41 +559,3 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-fn hex_to_32(hex: &str) -> Result<[u8; 32], String> {
-    let bytes = hex_decode(hex)?;
-    if bytes.len() != 32 {
-        return Err(format!("expected 32 bytes, got {}", bytes.len()));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encode_condition_single_preimage_matches_ark_format() {
-        // For `Condition = OP_SHA256 <commit> OP_EQUAL`, the condition witness is a
-        // single 32-byte preimage. ark-core encodes it as: count varint (0x01),
-        // element-len varint (0x20), then the 32 bytes. arkd reads exactly this.
-        let cid = [0xcd_u8; 32];
-        let enc = encode_condition(&[cid.to_vec()]);
-        assert_eq!(enc.len(), 1 + 1 + 32);
-        assert_eq!(enc[0], 0x01); // one element
-        assert_eq!(enc[1], 0x20); // 32-byte length
-        assert_eq!(&enc[2..], &cid[..]);
-    }
-
-    #[test]
-    fn encode_condition_compact_size_boundaries() {
-        // 253-byte element crosses the 0xfd compact-size boundary.
-        let big = vec![0xaa_u8; 253];
-        let enc = encode_condition(&[big.clone()]);
-        assert_eq!(enc[0], 0x01); // count
-        assert_eq!(enc[1], 0xfd); // len marker for 253
-        assert_eq!(&enc[2..4], &[0xfd, 0x00]); // 253 LE u16
-        assert_eq!(&enc[4..], &big[..]);
-    }
-}

@@ -23,9 +23,6 @@ class AppBottomNav extends StatelessWidget {
             '/ark', Icons.account_tree_outlined, Icons.account_tree, 'Ark'),
       const _NavItem(
           '/spending/send', Icons.send_outlined, Icons.send, 'Send'),
-      if (!offline)
-        const _NavItem('/services', Icons.storefront_outlined,
-            Icons.storefront, 'Services'),
     ];
 
     int currentIndex = items.indexWhere((i) => i.route == current);

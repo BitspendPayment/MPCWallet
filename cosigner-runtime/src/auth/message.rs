@@ -19,8 +19,9 @@ pub const OP_SETTLE: &str = "SETTLE";
 pub const OP_SETTLE_DELEGATE: &str = "SETTLE_DELEGATE";
 pub const OP_LIST_ARK_TXS: &str = "LIST_ARK_TXS";
 pub const OP_REGISTER_DEVICE_TOKEN: &str = "REGISTER_DEVICE_TOKEN";
-pub const OP_EVTXO_PENDING: &str = "EVTXO_PENDING";
-pub const OP_EVTXO_ACK: &str = "EVTXO_ACK";
+pub const OP_SERVICE_ENROLL: &str = "SERVICE_ENROLL";
+pub const OP_SERVICE_LIST: &str = "SERVICE_LIST";
+pub const OP_SERVICE_REVOKE: &str = "SERVICE_REVOKE";
 pub const OP_EVENTS_SUBSCRIBE: &str = "EVENTS_SUBSCRIBE";
 /// Attaching a passkey to a wallet. Signed with the wallet's own signing key —
 /// NOT satisfiable by a session token, which would be circular (a token is what

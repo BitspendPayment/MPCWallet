@@ -9,25 +9,41 @@ use crate::wallet_proto::*;
 /// Reply channel for an actor command.
 pub type Reply<T> = oneshot::Sender<Result<T, Status>>;
 
-/// Output of an in-guest contract refresh (Plan A): the PUBLIC pairing PKP, the receiver's
-/// half scalar, and the cosigner's pairing key package (relayed to seed the pairing actor;
-/// never persisted host-side).
-pub struct ContractRefreshOutput {
+/// Output of an in-actor service refresh: the PUBLIC pairing PKP, the receiver's half scalar,
+/// and the cosigner's pairing key package (relayed to seed the pairing actor; never persisted
+/// host-side).
+pub struct ServiceRefreshOutput {
     pub pairing_public_key_package_json: String,
     pub receiver_half: Vec<u8>,
-    pub my_key_package_json: String,
+    /// The service's verifying share hex — the `user_id` it presents when signing, and the key
+    /// its pairing is filed under in the wallet actor.
+    pub service_verifying_share_hex: String,
 }
 
 pub enum CosignerCommand {
-    // --- Contract create (Plan A: refresh V inside the guest, so the host never reads V) ---
-    ContractRefresh {
+    // --- Service enrolment: refresh V onto a `{service, cosigner}` pairing inside the actor,
+    // so the host never reads V ---
+    ServiceRefresh {
         receiver_id_hex: String,
         receiver_partial_point: Vec<u8>,
         wallet_id_hex: String,
         a_at_cosigner: Vec<u8>,
         min_signers: u32,
-        reply: Reply<ContractRefreshOutput>,
+        service_id: Vec<u8>,
+
+        policy: crate::cosigner::types::ServicePolicy,
+        reply: Reply<ServiceRefreshOutput>,
     },
+   
+    ListServicePairings {
+        reply: Reply<Vec<(String, String)>>,
+    },
+    
+    RemoveServicePairing {
+        verifying_share_hex: String,
+        reply: Reply<bool>,
+    },
+
     // --- Signing ---
     // Per-user authentication runs at the REST boundary (`rest_api.rs`), not here — the actor no
     // longer re-checks the request signature/session for these per-user commands.
@@ -119,38 +135,16 @@ pub enum CosignerCommand {
         reply: Reply<PaymentRequestDeclineResponse>,
     },
 
-    // --- Peer-contract share inbox (receiver's own actor) ---
-    EvtxoPendingShares {
-        req: EvtxoPendingSharesRequest,
-        reply: Reply<EvtxoPendingSharesResponse>,
-    },
-    EvtxoAckShare {
-        req: EvtxoAckShareRequest,
-        reply: Reply<EvtxoAckShareResponse>,
-    },
-
-    // --- Policy seeding (onboarding / contract create) ---
-    /// Install freshly-computed policy material into the per-actor guest and seal it into
-    /// the guest's snapshot, so the guest owns the keys and every later cold spawn restores
-    /// them from the sealed blob (no plaintext key kept host-side). Sent by onboarding (and
-    /// contract-create) right after DKG, via `registry.dispatch`.
+    // --- Policy seeding (onboarding / service enrolment) ---
+    /// Install freshly-computed policy material into the actor and seal it into the actor's
+    /// snapshot, so the actor owns the keys and every later cold spawn restores them from the
+    /// sealed blob (no plaintext key kept host-side). Sent by onboarding right after DKG, and by
+    /// service enrolment right after the refresh, via `registry.dispatch`.
     SeedPolicy {
         key_package_json: String,
         public_key_package_json: String,
         user_signing_identifier_hex: Option<String>,
         server_dkg_secret_hex: Option<String>,
-        /// For a `{service, cosigner}` pairing actor: the eVTXO conditioning params, seeded into
-        /// the guest so it rebuilds + binds the cooperative-leaf sighash itself (Plan A 1C).
-        contract_pairing: Option<crate::cosigner::types::ContractPairing>,
-        reply: Reply<()>,
-    },
-
-    /// Add a gate `ContractPolicy` (JSON) to the WALLET actor's sealed `contracts` projection +
-    /// re-seal (Plan A: the actor is the single source — no host `policies` tree). Dispatched by
-    /// `ContractManager::create_contract`.
-    AddContract {
-        spk_hex: String,
-        contract_policy_json: String,
         reply: Reply<()>,
     },
 

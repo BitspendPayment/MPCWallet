@@ -1,6 +1,5 @@
 //! The native, in-process per-user cosigner actor — holds the signing keys, the FROST
 //! ceremony, the Ark sessions, and its own ASP connection. Driven by the `run_cosigner` task.
-//! The only WASM left is the untrusted contract (run by the native `ContractHost`).
 //! (Merged from the former core/{mod,flows,conditioning}.rs.)
 
 use std::collections::BTreeMap;
@@ -19,9 +18,9 @@ use crate::cosigner::state::CosignerState;
 
 use crate::cosigner::types::{
     ApplyDelegateSigs, ArkTxEntry, BoardingSettleOutcome, BoardingSettleSubmitted, Commitment,
-    Contact, ContractPairing, ContractRefreshed, IntentStatus, PaymentIntent, PublicPolicy,
-    SendVtxoStep1, SendVtxoSubmitted, SettleSubmitted, SignStep1, SignStep1Out, SignStep2,
-    SignStep2Out, SnapshotState, VtxoInput,
+    Contact, IntentStatus, PaymentIntent, PublicPolicy, ServiceRefreshed,
+    SendVtxoStep1, SendVtxoSubmitted, ServicePairing, SettleSubmitted, SignStep1, SignStep1Out,
+    SignStep2, SignStep2Out, SnapshotState, VtxoInput,
 };
 
 use ark::client::batch::{DelegateSettleSession, PersistedDelegate};
@@ -35,6 +34,7 @@ use threshold::keys::{KeyPackage, PublicKeyPackage};
 use threshold::nonce::{self, SigningCommitments, SigningNonce};
 use threshold::point;
 use threshold::scalar::{scalar_from_bytes, scalar_to_bytes};
+use threshold::service_poly;
 use threshold::signing::{self, SignatureShare};
 
 use crate::shared::SharedServices;
@@ -62,6 +62,35 @@ fn truncate(s: String, max: usize) -> String {
     }
 }
 
+/// The key material one ceremony runs on, resolved from the verifying share the caller presented.
+///
+/// Borrowed rather than cloned: resolution happens on every sign step, and the wallet's own
+/// context is by far the common case.
+struct SigningContext<'a> {
+    /// The share the COSIGNER signs with — the wallet's own, or a per-service counter-share.
+    key_package: &'a KeyPackage,
+    /// The package the round aggregates against (2-entry for a service pairing).
+    public_key_package: &'a PublicKeyPackage,
+    /// The other participant's FROST identifier: the user, or the service.
+    counterparty: &'a Identifier,
+    /// The ceiling this signer is bound by. `None` for the wallet — the user is the authority
+    /// over their own key; a ceiling only exists where signing has been delegated.
+    ceiling: Option<&'a crate::cosigner::types::ServicePolicy>,
+}
+
+/// A pairing with its key material parsed, ready to sign.
+struct LoadedPairing {
+    /// The cosigner's counter-share for this pairing — a DIFFERENT key per service, because each
+    /// enrolment reshares onto a fresh polynomial.
+    key_package: KeyPackage,
+    /// The 2-entry {service, cosigner} package this pairing aggregates against.
+    public_key_package: PublicKeyPackage,
+    /// The service's FROST identifier (the counterparty in every ceremony here).
+    service_identifier: Identifier,
+    /// The serde form, kept verbatim so the snapshot round-trips without re-serializing keys.
+    record: ServicePairing,
+}
+
 /// An installed signing policy. The cosigner's own key share + the group public key, plus the
 /// client's FROST identifier (the other half of the 2-of-2).
 struct Policy {
@@ -69,12 +98,9 @@ struct Policy {
     key_package: KeyPackage,
     public_key_package: PublicKeyPackage,
     user_signing_identifier: Option<Identifier>,
-    /// Set ONLY for a `{service, cosigner}` pairing actor: the core then rebuilds + binds the
-    /// cooperative-leaf sighash itself in `sign_step1` (Plan A 1C). `None` for a normal wallet.
-    contract_pairing: Option<ContractPairing>,
-    /// The wallet's contract registry as JSON (kept so the sealed snapshot is the single source of
-    /// the public projection). Empty string ⇒ no contracts.
-    contracts_json: String,
+    /// Enrolled services, keyed by the service's VERIFYING SHARE hex — the identity a signing
+    /// request presents as `user_id`. Parsed at install so the signing path does no JSON work.
+    service_pairings: BTreeMap<String, LoadedPairing>,
 }
 
 /// In-flight FROST ceremony state (cleared between rounds).
@@ -85,9 +111,6 @@ struct Ceremony {
     shares: BTreeMap<Identifier, SignatureShare>,
     /// The cosigner's single-use nonce for this round (set in step1, consumed in step2).
     nonce: Option<SigningNonce>,
-    /// The full transaction being signed (from step1), passed to the contract gate in step2
-    /// before the cosigner produces its share.
-    full_transaction: Vec<u8>,
 }
 
 pub struct CosignerActor {
@@ -111,7 +134,7 @@ pub struct CosignerActor {
     contacts: Vec<Contact>,
     /// Request-to-pay records held for the payer (bounded; see `prune_intents`).
     payment_intents: Vec<PaymentIntent>,
-    /// Global services (contract gate + ASP url). Held so `command()` is a drop-in for the old
+    /// Global services (persistence + ASP url). Held so `command()` is a drop-in for the old
     /// `GuestInstance::command` — no per-call-site `shared` threading.
     pub(crate) shared: Arc<SharedServices>,
     /// This user's public projection (VTXOs / history / device tokens / policy metadata). The
@@ -163,8 +186,6 @@ impl CosignerActor {
                 .as_ref()
                 .map(|id| hex::encode(id.serialize())),
             ark_cosigner_secret_hex: self.ark_secret().map(|s| s.to_string()),
-            contract_pairing: policy.contract_pairing.clone(),
-            contracts_json: policy.contracts_json.clone(),
             vtxos: self.vtxos.clone(),
             history: self.history.clone(),
             // Persist a ReadyToSettle delegate (to_persisted errors for other phases → None).
@@ -175,6 +196,11 @@ impl CosignerActor {
                 .and_then(|p| serde_json::to_string(&p).ok()),
             contacts: self.contacts.clone(),
             payment_intents: self.payment_intents.clone(),
+            service_pairings: policy
+                .service_pairings
+                .iter()
+                .map(|(k, v)| (k.clone(), v.record.clone()))
+                .collect(),
         };
         serde_json::to_vec(&snap).map_err(|e| format!("snapshot serialize: {e}"))
     }
@@ -196,8 +222,7 @@ impl CosignerActor {
             key_package,
             public_key_package,
             user_signing_identifier,
-            contract_pairing: snap.contract_pairing,
-            contracts_json: snap.contracts_json,
+            service_pairings: load_pairings(snap.service_pairings)?,
         });
         self.ark_cosigner_secret_hex = snap.ark_cosigner_secret_hex.map(Zeroizing::new);
         self.vtxos = snap.vtxos;
@@ -239,12 +264,6 @@ impl CosignerActor {
         self.history.push(entry);
     }
 
-    /// Replace the stored contract registry (opaque host JSON). Errors if no policy is installed.
-    pub fn set_contracts(&mut self, contracts_json: String) -> Result<(), String> {
-        let p = self.policy.as_mut().ok_or("no policy installed")?;
-        p.contracts_json = contracts_json;
-        Ok(())
-    }
 
     // -----------------------------------------------------------------------
     // Request-to-pay: contacts (allowlist) + the payer's payment-request inbox
@@ -491,14 +510,16 @@ impl CosignerActor {
     /// in-process so `V` never leaves it (Plan A). Returns the public pairing PKP + the receiver's
     /// half + the cosigner's pairing key package (the host relays the latter to seed the pairing
     /// actor; it is never persisted host-side).
-    pub(crate) fn contract_refresh(
+    pub(crate) fn service_refresh(
         &mut self,
         receiver_id_hex: &str,
         receiver_partial_point: &[u8],
         wallet_id_hex: &str,
         a_at_cosigner: &[u8],
         min_signers: usize,
-    ) -> Result<ContractRefreshed, String> {
+        service_id: &[u8],
+        ceiling: crate::cosigner::types::ServicePolicy,
+    ) -> Result<ServiceRefreshed, String> {
         let policy = self.policy.as_ref().ok_or("no policy installed")?;
         let receiver_id = parse_identifier_hex(receiver_id_hex)?;
         let wallet_id = parse_identifier_hex(wallet_id_hex)?;
@@ -509,10 +530,29 @@ impl CosignerActor {
             .try_into()
             .map_err(|_| "a_at_cosigner must be 32 bytes")?;
 
+        // The user hands us `a@receiver` only as a POINT, so without this check we would take it
+        // on faith. A client that lies about it steers the resulting pairing package — and the
+        // package is what everything downstream trusts: the verifying share the service is filed
+        // under, the share it assembles, and the key this cosigner will later aggregate against.
+        // Verify the dealing is a consistent degree-1 contribution before building on it.
+        let a_at_cos_scalar = threshold::scalar::scalar_from_bytes(&a_at_cos)
+            .map_err(|e| format!("a_at_cosigner is not a scalar: {e:?}"))?;
+        let partial_pt = threshold::point::deserialize_compressed(&partial_point)
+            .map_err(|e| format!("receiver_partial_point is not a curve point: {e:?}"))?;
+        service_poly::verify_user_contribution(
+            &policy.public_key_package,
+            &wallet_id,
+            &policy.key_package.identifier,
+            &receiver_id,
+            &a_at_cos_scalar,
+            &partial_pt,
+        )
+        .map_err(|e| format!("user refresh contribution is inconsistent: {e:?}"))?;
+
         let mut id_partial_share = BTreeMap::new();
         id_partial_share.insert(wallet_id, a_at_cos);
         let receiver = dkg::Receiver {
-            id: receiver_id,
+            id: receiver_id.clone(),
             partial_verifying_share: partial_point,
         };
         let pairing = dkg::refresh_to_receiver(
@@ -523,11 +563,75 @@ impl CosignerActor {
             &mut OsRng,
         )
         .map_err(|e| format!("refresh_to_receiver: {e:?}"))?;
-        Ok(ContractRefreshed {
-            pairing_public_key_package_json: pairing.pairing_pkp.to_json(),
+
+        // The service's verifying share, and the one degeneracy worth refusing: if the pairing
+        // polynomial were CONSTANT, the service's share would BE the group secret `v` and it
+        // could sign alone. A constant polynomial shows up as a share equal to the group key, so
+        // that is what we check — no polynomial identity needed.
+        //
+        // It takes a broken CSPRNG to get here (the slope is `r_user + r_cosigner` and the
+        // cosigner's half is fresh `OsRng`, so the user cannot force a cancellation it does not
+        // know), which is the same assumption FROST nonces already rest on. Cheap enough to hold
+        // the line anyway.
+        // The verifying share the service will present as `user_id` — and therefore the key its
+        // pairing is filed under. Taking it from the pairing package (rather than from anything
+        // the caller sent) means the lookup key is derived from the same material the service
+        // will prove it holds.
+        let service_vs = pairing
+            .pairing_pkp
+            .verifying_shares
+            .get(&receiver_id)
+            .ok_or("pairing package has no share for the service")?;
+        if point::points_equal(service_vs, &pairing.pairing_pkp.verifying_key.point) {
+            return Err(
+                "degenerate pairing: the service's share equals the group key (constant \
+                 polynomial) — refusing to hand out the group secret"
+                    .into(),
+            );
+        }
+        let service_vs_hex = hex::encode(point::serialize_compressed(service_vs));
+
+        let record = ServicePairing {
+            key_package_json: pairing.my_kp.to_json(),
+            public_key_package_json: pairing.pairing_pkp.to_json(),
+            service_id: hex::encode(service_id),
+            policy: ceiling,
+        };
+        let loaded = load_pairing(&record)?;
+
+        // The cosigner's counter-share is installed HERE and never leaves the actor. The host
+        // relays only the service's half (sealed to it) and the public package.
+        let policy_mut = self.policy.as_mut().ok_or("no policy installed")?;
+        policy_mut
+            .service_pairings
+            .insert(service_vs_hex.clone(), loaded);
+
+        Ok(ServiceRefreshed {
+            pairing_public_key_package_json: record.public_key_package_json,
             receiver_half: pairing.receiver_half.to_vec(),
-            my_key_package_json: pairing.my_kp.to_json(),
+            service_verifying_share_hex: service_vs_hex,
         })
+    }
+
+    /// Retire an enrolled service: drop its counter-share so the cosigner can no longer complete
+    /// a ceremony with it. The service keeps its own half, but a `{service, cosigner}` 2-of-2 with
+    /// one half gone cannot sign — which is what makes this real revocation rather than a flag.
+    pub(crate) fn remove_service_pairing(&mut self, verifying_share_hex: &str) -> Result<bool, String> {
+        let policy = self.policy.as_mut().ok_or("no policy installed")?;
+        Ok(policy.service_pairings.remove(verifying_share_hex).is_some())
+    }
+
+    /// The enrolled services, as `(verifying_share_hex, service_id_hex)`.
+    pub(crate) fn list_service_pairings(&self) -> Vec<(String, String)> {
+        self.policy
+            .as_ref()
+            .map(|p| {
+                p.service_pairings
+                    .iter()
+                    .map(|(vs, lp)| (vs.clone(), lp.record.service_id.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -538,8 +642,6 @@ impl CosignerActor {
         public_key_package_json: &str,
         user_signing_identifier_hex: Option<&str>,
         server_dkg_secret_hex: Option<String>,
-        contract_pairing: Option<ContractPairing>,
-        contracts_json: String,
     ) -> Result<(), String> {
         let key_package =
             KeyPackage::from_json(key_package_json).map_err(|e| format!("bad key package: {e}"))?;
@@ -554,8 +656,8 @@ impl CosignerActor {
             key_package,
             public_key_package,
             user_signing_identifier,
-            contract_pairing,
-            contracts_json,
+            // Services are added by enrolment, never by installing a policy from host material.
+            service_pairings: BTreeMap::new(),
         });
         self.ark_cosigner_secret_hex = server_dkg_secret_hex.map(Zeroizing::new);
         Ok(())
@@ -571,21 +673,42 @@ impl CosignerActor {
                 .user_signing_identifier
                 .as_ref()
                 .map(|id| hex::encode(id.serialize())),
-            contract_pairing: p.contract_pairing.clone(),
-            contracts_json: p.contracts_json.clone(),
         })
     }
 
-    /// Whether `user_id` (a compressed pubkey, hex) may drive a signing ceremony on this actor.
-    fn is_authorized_signer(&self, user_id: &[u8]) -> bool {
-        let Some(policy) = self.policy.as_ref() else {
-            return false;
-        };
+
+    fn signing_context(&self, user_id: &[u8]) -> Option<SigningContext<'_>> {
+        let policy = self.policy.as_ref()?;
         let pkp = &policy.public_key_package;
-        pkp.verifying_shares
+
+        // The wallet itself: its own verifying share, or the group key it addresses by.
+        let is_wallet = pkp
+            .verifying_shares
             .values()
             .any(|share| point::serialize_compressed(share) == user_id)
-            || point::serialize_compressed(&pkp.verifying_key.point) == user_id
+            || point::serialize_compressed(&pkp.verifying_key.point) == user_id;
+        if is_wallet {
+            return Some(SigningContext {
+                key_package: &policy.key_package,
+                public_key_package: pkp,
+                counterparty: policy.user_signing_identifier.as_ref()?,
+                ceiling: None,
+            });
+        }
+
+        // An enrolled service, filed under the verifying share it just presented.
+        let pairing = policy.service_pairings.get(&hex::encode(user_id))?;
+        Some(SigningContext {
+            key_package: &pairing.key_package,
+            public_key_package: &pairing.public_key_package,
+            counterparty: &pairing.service_identifier,
+            ceiling: Some(&pairing.record.policy),
+        })
+    }
+
+    /// Whether `user_id` (a compressed pubkey) may drive a signing ceremony on this actor.
+    fn is_authorized_signer(&self, user_id: &[u8]) -> bool {
+        self.signing_context(user_id).is_some()
     }
 
     /// Reject a caller that authenticated as some OTHER wallet.
@@ -614,50 +737,25 @@ impl CosignerActor {
         if !self.is_authorized_signer(&req.user_id) {
             return Err("signer is not authorized for this wallet".into());
         }
-        let policy = self.policy.as_ref().ok_or("no policy installed")?;
-        let user_identifier = policy
-            .user_signing_identifier
-            .clone()
-            .ok_or("policy has no user_signing_identifier")?;
-        let server_identifier = policy.key_package.identifier.clone();
+        let ctx = self
+            .signing_context(&req.user_id)
+            .ok_or("signer is not authorized for this wallet")?;
+        let user_identifier = ctx.counterparty.clone();
+        let server_identifier = ctx.key_package.identifier.clone();
+        let key_package = ctx.key_package.clone();
 
-        let key_package = policy.key_package.clone();
+        // A `{service, cosigner}` pairing signs under a ceiling rather than under a covenant: its
+        // sealed `ServicePolicy` is the only thing bounding what it will put a signature on. Fail
+        // closed — no allowlist or an unparseable transaction are both denials. The wallet's own
+        // pairing has no ceiling: the user IS the authority there.
+        if let Some(ceiling) = ctx.ceiling {
+            enforce_service_policy(ceiling, &req.full_transaction)?;
+        }
 
-        // Plan A 1C: a `{service, cosigner}` pairing actor is AUTHORITATIVE about WHAT it signs. A
-        // contract eVTXO's cooperative leaf is ONLY ever spent through arkd as an ark transaction
-        // (two-leg), so `ark_tx` is REQUIRED — the on-chain escape is the exit leaf, which never
-        // routes through this pairing actor. The core rebuilds the cooperative-leaf sighash (leg 1)
-        // from its OWN sealed params plus the ark-tx leg sighash (leg 2), and binds the requested
-        // message to leg 1 OR leg 2. A normal (non-pairing) actor signs the requested message as-is.
-        let message = match policy.contract_pairing.as_ref() {
-            None => req.message_to_sign.clone(),
-            Some(pairing) => {
-                if req.ark_tx.is_empty() {
-                    return Err(
-                        "pairing co-sign: a contract eVTXO can only be spent via an ark transaction (ark_tx required)"
-                            .into(),
-                    );
-                }
-                let leg1 = build_checkpoint_sighash(
-                    pairing,
-                    &policy.public_key_package,
-                    &req.full_transaction,
-                )?;
-                let leg2 = build_arktx_sighash(&req.full_transaction, &req.ark_tx)?;
-                if req.message_to_sign == leg1 || req.message_to_sign == leg2 {
-                    req.message_to_sign.clone()
-                } else {
-                    return Err(
-                        "pairing co-sign: message is neither leg-1 nor leg-2 of an eVTXO spend"
-                            .into(),
-                    );
-                }
-            }
-        };
+        let message = req.message_to_sign.clone();
 
         let mut new_signing_ceremony = Ceremony {
             message,
-            full_transaction: req.full_transaction.clone(),
             ..Default::default()
         };
 
@@ -694,21 +792,18 @@ impl CosignerActor {
         if !self.is_authorized_signer(&req.user_id) {
             return Err("signer is not authorized for this wallet".into());
         }
-        // Plan A: enforce the bound contract (native `ContractHost`) over the full tx BEFORE
-        // producing the cosigner's share — on Deny we refuse. No-op for non-contract spends.
-        let full_tx = self.ceremony.full_transaction.clone();
-        crate::cosigner::handlers::contract_gate::enforce_contracts(&self.shared, &full_tx)
-            .map_err(|e| format!("contract gate denied: {}", e.message()))?;
 
-        let policy = self.policy.as_ref().ok_or("no policy installed")?;
-        let user_identifier = policy
-            .user_signing_identifier
-            .clone()
-            .ok_or("policy has no user_signing_identifier")?;
-        let server_identifier = policy.key_package.identifier.clone();
+        let ctx = self
+            .signing_context(&req.user_id)
+            .ok_or("signer is not authorized for this wallet")?;
+        let user_identifier = ctx.counterparty.clone();
+        let server_identifier = ctx.key_package.identifier.clone();
+        let key_package = ctx.key_package.clone();
+        let public_key_package = ctx.public_key_package.clone();
 
-        let key_package = policy.key_package.clone();
-        let public_key_package = policy.public_key_package.clone();
+        if !self.ceremony.commitments.contains_key(&user_identifier) {
+            return Err("this signer did not open the in-flight ceremony".into());
+        }
 
         // Insert the client's signature share.
         let user_s_bytes: [u8; 32] = req
@@ -1521,126 +1616,88 @@ fn sigs_from_wire(wire: &[Vec<u8>]) -> Result<Vec<[u8; 64]>, String> {
         .collect()
 }
 
-use bitcoin::hashes::Hash;
-use bitcoin::sighash::{Prevouts, SighashCache};
-use bitcoin::taproot::LeafVersion;
-use bitcoin::{TapLeafHash, TapSighashType};
-use sha2::{Digest, Sha256};
 
-/// the cooperative-leaf script-path sighash of the input that spends this actor's eVTXO.
-/// The leaf is rebuilt from the cosigner's own registration params (NOT the client PSBT scripts),
-/// so the only thing this can ever produce a signature over is a spend of its own eVTXO. `pkp` is
-/// the pairing PKP (its group key is `V`, the cooperative key). Errs if the spend doesn't touch it.
-pub fn build_checkpoint_sighash(
-    pairing: &ContractPairing,
-    pkp: &PublicKeyPackage,
+fn load_pairing(record: &ServicePairing) -> Result<LoadedPairing, String> {
+    let key_package = KeyPackage::from_json(&record.key_package_json)
+        .map_err(|e| format!("bad pairing key package: {e}"))?;
+    let public_key_package = PublicKeyPackage::from_json(&record.public_key_package_json)
+        .map_err(|e| format!("bad pairing public key package: {e}"))?;
+    let service_id = hex::decode(&record.service_id)
+        .map_err(|e| format!("bad service_id hex: {e}"))?;
+    let service_identifier = Identifier::derive(&service_id)
+        .map_err(|e| format!("derive service identifier: {e:?}"))?;
+    Ok(LoadedPairing {
+        key_package,
+        public_key_package,
+        service_identifier,
+        record: record.clone(),
+    })
+}
+
+/// Parse a whole stored pairing map (snapshot restore).
+fn load_pairings(
+    records: BTreeMap<String, ServicePairing>,
+) -> Result<BTreeMap<String, LoadedPairing>, String> {
+    records
+        .into_iter()
+        .map(|(k, v)| load_pairing(&v).map(|lp| (k, lp)))
+        .collect()
+}
+
+#[doc(hidden)]
+/// Test seam for [`enforce_service_policy`] — the ceiling is the security boundary for a
+/// service pairing, so it is exercised directly rather than only through a ceremony.
+pub fn enforce_service_policy_for_test(
+    policy: &crate::cosigner::types::ServicePolicy,
     full_transaction: &[u8],
-) -> Result<[u8; 32], String> {
-    let psbt =
-        bitcoin::Psbt::deserialize(full_transaction).map_err(|e| format!("not a PSBT: {e}"))?;
+) -> Result<(), String> {
+    enforce_service_policy(policy, full_transaction)
+}
 
-    let prevouts: Vec<bitcoin::TxOut> = psbt
-        .inputs
+fn enforce_service_policy(
+    policy: &crate::cosigner::types::ServicePolicy,
+    full_transaction: &[u8],
+) -> Result<(), String> {
+    if policy.allowed_destinations.is_empty() {
+        return Err(
+            "service co-sign: no allowed destinations configured — a service with no declared \
+             reach may not spend"
+                .into(),
+        );
+    }
+    if full_transaction.is_empty() {
+        return Err("service co-sign: the full transaction is required to apply the policy".into());
+    }
+    let tx: bitcoin::Transaction = bitcoin::consensus::encode::deserialize(full_transaction)
+        .map_err(|e| format!("service co-sign: undecodable transaction: {e}"))?;
+
+    let allowed: std::collections::BTreeSet<&str> = policy
+        .allowed_destinations
         .iter()
-        .map(|i| {
-            i.witness_utxo.clone().unwrap_or_else(|| bitcoin::TxOut {
-                value: bitcoin::Amount::from_sat(0),
-                script_pubkey: bitcoin::ScriptBuf::new(),
-            })
-        })
+        .map(|s| s.as_str())
         .collect();
-    let input_idx = prevouts
-        .iter()
-        .position(|p| hex::encode(p.script_pubkey.as_bytes()) == pairing.evtxo_spk_hex)
-        .ok_or("service pairing may only co-sign a spend of its own eVTXO")?;
 
-    let commit: [u8; 32] = Sha256::digest(pairing.contract_id).into();
-    let evtxo_pk = threshold::point::serialize_x_only(&pkp.verifying_key.point);
-    let (coop_script, _cb) = ark::evtxo_cooperative_spend_info(
-        &commit,
-        &pairing.server_pk,
-        &evtxo_pk,
-        &pairing.owner_pk,
-        pairing.exit_delay,
-    )
-    .ok_or("evtxo_cooperative_spend_info failed")?;
-    let coop_script_buf = bitcoin::ScriptBuf::from_bytes(coop_script);
-
-    let leaf_hash = TapLeafHash::from_script(&coop_script_buf, LeafVersion::TapScript);
-    let sighash = SighashCache::new(&psbt.unsigned_tx)
-        .taproot_script_spend_signature_hash(
-            input_idx,
-            &Prevouts::All(&prevouts),
-            leaf_hash,
-            TapSighashType::Default,
-        )
-        .map_err(|e| format!("coop sighash: {e}"))?;
-    Ok(sighash.to_byte_array())
+    let mut total: u64 = 0;
+    for (i, out) in tx.output.iter().enumerate() {
+        let spk = hex::encode(out.script_pubkey.as_bytes());
+        if !allowed.contains(spk.as_str()) {
+            return Err(format!(
+                "service co-sign: output {i} pays {spk}, which is not an allowed destination"
+            ));
+        }
+        total = total
+            .checked_add(out.value.to_sat())
+            .ok_or("service co-sign: output total overflows")?;
+    }
+    if total > policy.max_sats_per_signature {
+        return Err(format!(
+            "service co-sign: {total} sats exceeds the per-signature cap of {} sats",
+            policy.max_sats_per_signature
+        ));
+    }
+    Ok(())
 }
 
-/// the script-path sighash of the `ark_tx` input that spends an
-/// OUTPUT of the verified `checkpoint_tx`. We don't re-derive ark-core's protocol; we CHAIN leg 2
-/// to leg 1 — the `ark_tx` input's prevout must be an output of the same checkpoint leg 1 verified
-/// spends the eVTXO. That binds the bundle to the eVTXO. The checkpoint output is `V`+server and
-/// arkd validates the ark_tx independently, so taking the leaf from the PSBT is safe.
-pub fn build_arktx_sighash(checkpoint_tx: &[u8], ark_tx: &[u8]) -> Result<[u8; 32], String> {
-    let cp = bitcoin::Psbt::deserialize(checkpoint_tx)
-        .map_err(|e| format!("checkpoint not a PSBT: {e}"))?;
-    let at = bitcoin::Psbt::deserialize(ark_tx).map_err(|e| format!("ark_tx not a PSBT: {e}"))?;
-    let cp_txid = cp.unsigned_tx.compute_txid();
-
-    let prevouts: Vec<bitcoin::TxOut> = at
-        .inputs
-        .iter()
-        .map(|i| {
-            i.witness_utxo
-                .clone()
-                .ok_or_else(|| "ark_tx input missing witness_utxo".to_string())
-        })
-        .collect::<Result<_, _>>()?;
-
-    let idx = at
-        .unsigned_tx
-        .input
-        .iter()
-        .enumerate()
-        .find_map(|(i, txin)| {
-            if txin.previous_output.txid != cp_txid {
-                return None;
-            }
-            let cp_out = cp
-                .unsigned_tx
-                .output
-                .get(txin.previous_output.vout as usize)?;
-            (prevouts.get(i)?.script_pubkey == cp_out.script_pubkey).then_some(i)
-        })
-        .ok_or("ark_tx does not spend the verified checkpoint's output")?;
-
-    let input = &at.inputs[idx];
-    let leaf_hash = input
-        .tap_script_sigs
-        .keys()
-        .next()
-        .map(|(_, lh)| *lh)
-        .or_else(|| {
-            input
-                .tap_scripts
-                .values()
-                .next()
-                .map(|(script, ver)| TapLeafHash::from_script(script, *ver))
-        })
-        .ok_or("ark_tx input has no tap leaf")?;
-
-    let sighash = SighashCache::new(&at.unsigned_tx)
-        .taproot_script_spend_signature_hash(
-            idx,
-            &Prevouts::All(&prevouts),
-            leaf_hash,
-            TapSighashType::Default,
-        )
-        .map_err(|e| format!("ark_tx sighash: {e}"))?;
-    Ok(sighash.to_byte_array())
-}
 
 impl CosignerActor {
     /// Per-command dispatch. Each command routes to the matching `&mut self` handler method.
@@ -1700,13 +1757,6 @@ impl CosignerActor {
             }
             CosignerCommand::PaymentRequestList { req, reply } => {
                 let _ = reply.send(self.payment_request_list(req).await);
-            }
-            // -------- Peer-contract share inbox --------
-            CosignerCommand::EvtxoPendingShares { req, reply } => {
-                let _ = reply.send(self.evtxo_pending_shares(req).await);
-            }
-            CosignerCommand::EvtxoAckShare { req, reply } => {
-                let _ = reply.send(self.evtxo_ack_share(req).await);
             }
             // -------- Auto-settle tick --------
             CosignerCommand::TickAutoSettle => {

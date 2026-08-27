@@ -15,10 +15,11 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e up down \
+.PHONY: service-sdk-build service-sdk-test rebalancer-build rebalancer-test rebalancer-run service-test \
+	e2e up down \
 	bob-up bob-down bob-send \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-x86_64 ffi-android-all \
-	contracts-build runtime-build \
+	runtime-build \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	runtime-run runtime-stop \
 	arkd-up arkd-down arkd-init db-reset \
@@ -48,7 +49,7 @@ SERVER            ?= 127.0.0.1:7074
 # (the com.vtxos.app client's mobilesdk_app_id).
 FIREBASE_APP_ID  ?= 1:575541915148:android:03d0cade16cd0393378829
 FIREBASE_PROJECT ?= vtxos-7afb3
-TESTERS_GROUP    ?= internal
+TESTERS_GROUP    ?= friends
 
 # ── Versioning ────────────────────────────────────────────────────────────────
 # VERSION sets --build-name (the x.y.z testers see); BUILD_NUMBER sets
@@ -218,20 +219,6 @@ ffi-test:
 # Server & cosigner
 
 # WASI sysroot for cross-compiling the C deps (secp256k1-sys) of the wasm guest.
-# System clang targeting wasm32-wasip2 has no sysroot, so its stdint.h falls through
-# to /usr/include (glibc) and fails on bits/libc-header-start.h. wasi-sdk 24 ships an
-# LLVM-18 sysroot matching the system clang-18; point clang at it via --sysroot.
-contracts-build:
-	@echo "Building example WASM contracts (wasm32-wasip2 components)..."
-	cd contracts/examples/spending-limit && cargo build --release
-	@echo "Built: contracts/examples/spending-limit/target/wasm32-wasip2/release/spending_limit.wasm"
-	cd contracts/examples/oracle-gate && cargo build --release
-	@echo "Built: contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm"
-	cd contracts/examples/oracle-gate-template && cargo build --release
-	@echo "Built: oracle-gate-template (Phase 2 template, imports oracle:gate/config)"
-	cd contracts/examples/config-provider && cargo build --release
-	@echo "Built: config-provider (Phase 2 provider stub, patchable config slot)"
-
 runtime-build:
 	@echo "Building server..."
 	cd cosigner-runtime && cargo build --release
@@ -314,6 +301,37 @@ proto:
 threshold-test:
 	@echo "Running threshold tests..."
 	cd crates/threshold && cargo test --features std
+
+# --- Services -------------------------------------------------------------
+# The service-share invariant spans three crates (threshold derives the polynomial id,
+# cosigner-runtime enforces uniqueness, service-sdk re-derives and refuses duplicates), so
+# `service-test` runs all of them together — a change that breaks the invariant usually only
+# shows up at one of the seams.
+service-sdk-build:
+	cargo build --manifest-path crates/service-sdk/Cargo.toml
+
+service-sdk-test:
+	@echo "Running service SDK tests..."
+	cargo test --manifest-path crates/service-sdk/Cargo.toml
+
+rebalancer-build:
+	cargo build --manifest-path services/rebalancer/Cargo.toml
+
+rebalancer-test:
+	@echo "Running rebalancer tests..."
+	cargo test --manifest-path services/rebalancer/Cargo.toml
+
+# Paper venue, mock price: places no real hedge. See services/rebalancer/src/funding.rs for
+# what a real deployment still needs underneath.
+rebalancer-run: rebalancer-build
+	ALLOW_INSECURE_COSIGNER=1 \
+	COSIGNER_URL=$${COSIGNER_URL:-http://127.0.0.1:7074} \
+	TARGET_USD_CENTS=$${TARGET_USD_CENTS:-10000} \
+	cargo run --manifest-path services/rebalancer/Cargo.toml --bin rebalancer
+
+service-test: threshold-test service-sdk-test rebalancer-test
+	@echo "Running cosigner-side invariant tests..."
+	cargo test --manifest-path cosigner-runtime/Cargo.toml --test service_poly_invariant_test
 
 flutter: ffi-android
 	cd app && flutter run

@@ -1427,9 +1427,9 @@ fn test_restore_via_redkg_preserves_group_key_and_signing() {
     }
 }
 
-// --- eVTXO key resharing: V' = V + Δ, 2-of-2 {wallet, cosigner}, HW excluded ---
+// --- Key resharing: V' = V + Δ, 2-of-2 {wallet, cosigner}, HW excluded ---
 
-/// Run the eVTXO resharing. `old_kps` = [wallet, cosigner, hardware] from a 2-of-3
+/// Run the resharing. `old_kps` = [wallet, cosigner, hardware] from a 2-of-3
 /// DKG. Dealers = {cosigner, hardware} (fresh non-zero polynomials), receivers =
 /// {wallet, cosigner}; hardware is excluded from the result. Returns the new
 /// (wallet_kp, cosigner_kp, new_pkp) for V'.
@@ -1491,14 +1491,14 @@ fn run_reshare(
 }
 
 #[test]
-fn test_evtxo_reshare_new_key_2of2_excludes_hardware() {
+fn test_reshare_new_key_2of2_excludes_hardware() {
     let (old_kps, old_pkp) = run_full_dkg(2, 3);
     let (w_kp, c_kp, new_pkp) = run_reshare(&old_kps, &old_pkp);
 
     // 1) V' is a NEW key (non-zero delta).
     assert!(
         !point::points_equal(&new_pkp.verifying_key.point, &old_pkp.verifying_key.point),
-        "eVTXO key must differ from the main key"
+        "the reshared key must differ from the main key"
     );
     // 2) New PKP holds exactly {wallet, cosigner}; hardware excluded.
     assert_eq!(new_pkp.verifying_shares.len(), 2);
@@ -1512,10 +1512,10 @@ fn test_evtxo_reshare_new_key_2of2_excludes_hardware() {
 }
 
 #[test]
-fn test_evtxo_reshare_wallet_cosigner_can_sign() {
+fn test_reshare_wallet_cosigner_can_sign() {
     let (old_kps, old_pkp) = run_full_dkg(2, 3);
     let (w_kp, c_kp, new_pkp) = run_reshare(&old_kps, &old_pkp);
-    let msg = b"evtxo cooperative spend";
+    let msg = b"cooperative spend";
 
     let mut rng = OsRng;
     let mut nonces = BTreeMap::new();
@@ -1537,11 +1537,11 @@ fn test_evtxo_reshare_wallet_cosigner_can_sign() {
         .expect("V' (2-of-2 wallet+cosigner) signature must verify");
 }
 
-/// 2-party reshare (the multi-user contract-eVTXO key derivation): {author,
+/// 2-party reshare: {author,
 /// cosigner} both deal a fresh non-zero Δ AND both finalize via the dealer
 /// finalizer, under their EXISTING identifiers, with NO passive receiver →
 /// `V′ = V + Δ_author + Δ_cosigner`. This is the topology Phase 1 of the
-/// multi-user-eVTXO work uses (the old ceremony had a 3rd hardware dealer).
+/// this shape uses (the old ceremony had a 3rd hardware dealer).
 fn run_reshare_2party(
     old_kps: &[KeyPackage], // [author, cosigner]
     old_pkp: &PublicKeyPackage,
@@ -1591,7 +1591,7 @@ fn run_reshare_2party(
 }
 
 #[test]
-fn test_evtxo_reshare_2party_new_key() {
+fn test_reshare_2party_new_key() {
     let (old_kps, old_pkp) = run_full_dkg(2, 2); // existing 2-of-2 of V
     let (a_kp, c_kp, new_pkp) = run_reshare_2party(&old_kps, &old_pkp);
 
@@ -1609,10 +1609,10 @@ fn test_evtxo_reshare_2party_new_key() {
 }
 
 #[test]
-fn test_evtxo_reshare_2party_can_sign() {
+fn test_reshare_2party_can_sign() {
     let (old_kps, old_pkp) = run_full_dkg(2, 2);
     let (a_kp, c_kp, new_pkp) = run_reshare_2party(&old_kps, &old_pkp);
-    let msg = b"contract evtxo V-prime cooperative spend";
+    let msg = b"V-prime cooperative spend";
 
     let mut rng = OsRng;
     let mut nonces = BTreeMap::new();

@@ -18,9 +18,7 @@ class ArkSendSession {
   final List<Uint8List> sighashes;
   final Uint8List arkTxBytes;
 
-  /// PSBT to pass as `fullTransaction` to the cosigner so the contract gate fires
-  /// and V′ is selected. For an eVTXO spend this is the checkpoint PSBT (input 0
-  /// carries the eVTXO `witness_utxo`); for a normal send it equals `arkTxBytes`.
+  /// PSBT to pass as `fullTransaction` to the cosigner. Equals `arkTxBytes`.
   final Uint8List gateTxBytes;
 
   ArkSendSession._({
@@ -122,27 +120,6 @@ class ArkSignedSend {
   });
 }
 
-/// Derive the Ark address for an eVTXO output key (x-only `qEvtxo` = the eVTXO
-/// scriptPubkey bytes [2..]), so a normal off-chain send can mint a VTXO at it
-/// through arkd. `serverPk`/`qEvtxo` are 32-byte x-only keys.
-String arkEvtxoArkAddress({
-  required Uint8List serverPk,
-  required Uint8List qEvtxo,
-  required String network,
-}) {
-  final params = jsonEncode({
-    'server_pk': _hexEncode(serverPk),
-    'q_evtxo': _hexEncode(qEvtxo),
-    'network': network,
-  });
-  final ptr = params.toNativeUtf8();
-  try {
-    return callFfiData(arkEvtxoArkAddressFfi(ptr.cast()));
-  } finally {
-    calloc.free(ptr);
-  }
-}
-
 List<int> _hexDecode(String hex) {
   final result = <int>[];
   for (var i = 0; i < hex.length; i += 2) {
@@ -150,7 +127,4 @@ List<int> _hexDecode(String hex) {
   }
   return result;
 }
-
-String _hexEncode(List<int> bytes) =>
-    bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
 

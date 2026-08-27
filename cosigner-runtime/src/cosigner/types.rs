@@ -3,23 +3,8 @@
 //! the host's public projections are built from these.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
-/// Serde helper: a `[u8; 32]` (x-only key / contract id) as a lowercase-hex string, so JSON
-/// projections + the sealed snapshot carry a readable hex string instead of a byte array.
-pub(crate) mod arr32_hex {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(b: &[u8; 32], s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_str(&hex::encode(b))
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<[u8; 32], D::Error> {
-        let h = String::deserialize(d)?;
-        let bytes = hex::decode(&h).map_err(serde::de::Error::custom)?;
-        bytes
-            .try_into()
-            .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArkTxEntry {
@@ -41,25 +26,30 @@ pub struct VtxoInput {
     pub exit_delay: u32,
 }
 
-/// Binds a `{service, cosigner}` pairing actor to the single eVTXO it may co-sign. Carries every
-/// param needed to rebuild that eVTXO's cooperative-leaf script (and thus its script-path sighash)
-/// independent of the spend PSBT (Plan A 1C). Seeded at contract-create, sealed in the snapshot,
-/// and used by the actor's `build_checkpoint_sighash`. `None` for a normal wallet actor.
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractPairing {
-    /// The eVTXO scriptPubKey hex this actor is allowed to co-sign spends of.
-    pub evtxo_spk_hex: String,
-    /// sha256(component_wasm) — the gate's contract id (also the cooperative-leaf hashlock seed).
-    #[serde(with = "arr32_hex")]
-    pub contract_id: [u8; 32],
-    /// ASP signer x-only key (cooperative leaf).
-    #[serde(with = "arr32_hex")]
-    pub server_pk: [u8; 32],
-    /// Exit-leaf owner x-only key (part of the taptree).
-    #[serde(with = "arr32_hex")]
-    pub owner_pk: [u8; 32],
-    /// Unilateral-exit CSV delay (part of the taptree).
-    pub exit_delay: u32,
+pub struct ServicePairing {
+    /// The cosigner's counter-share for THIS pairing, as opaque `KeyPackage` JSON.
+    pub key_package_json: String,
+    /// The 2-entry pairing `PublicKeyPackage` {service, cosigner}, JSON.
+    pub public_key_package_json: String,
+
+    pub service_id: String,
+    /// The hard ceiling on what this pairing will co-sign.
+    pub policy: ServicePolicy,
+}
+
+/// The coarse ceiling applied to every spend a [`ServicePairing`] co-signs. Fail-closed: an empty
+/// allowlist denies everything, and an unparseable transaction is a denial rather than a pass.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServicePolicy {
+    /// Output scriptPubKeys (hex) this service may pay to. EMPTY DENIES EVERY SPEND — a service
+    /// with no declared destinations is not a service with unlimited reach.
+    #[serde(default)]
+    pub allowed_destinations: Vec<String>,
+    /// Hard cap on the total sats moved by a single co-signed transaction.
+    #[serde(default)]
+    pub max_sats_per_signature: u64,
 }
 
 /// A party authorized to bill this wallet. One-way — the contact gives no consent. An
@@ -105,7 +95,7 @@ impl IntentStatus {
 pub struct PaymentIntent {
     /// Random 16-byte hex id.
     pub id: String,
-    /// The requester's verifying key hex — was on the payer's allowlist at create time.
+    /// The requester's identity hex — was on the payer's allowlist at create time.
     pub from_vk_hex: String,
     /// DERIVED from `from_vk_hex`; never taken from the request body.
     pub to_ark_address: String,
@@ -128,13 +118,6 @@ pub struct SnapshotState {
     pub public_key_package_json: String,
     pub user_signing_identifier_hex: Option<String>,
     pub ark_cosigner_secret_hex: Option<String>,
-    /// Pairing-actor conditioning params (Plan A 1C), so the actor stays authoritative about
-    /// what it co-signs across cold spawns. `None` for a normal wallet actor.
-    #[serde(default)]
-    pub contract_pairing: Option<ContractPairing>,
-    /// The wallet's contract registry as OPAQUE host JSON (see `InstallPolicy::contracts_json`).
-    #[serde(default)]
-    pub contracts_json: String,
     pub vtxos: Vec<VtxoInput>,
     pub history: Vec<ArkTxEntry>,
     /// A `ReadyToSettle` delegate session serialized via ark `PersistedDelegate` (JSON), if
@@ -149,6 +132,8 @@ pub struct SnapshotState {
     /// pruned on every mutation (the whole snapshot is re-serialized on each change).
     #[serde(default)]
     pub payment_intents: Vec<PaymentIntent>,
+    #[serde(default)]
+    pub service_pairings: BTreeMap<String, ServicePairing>,
 }
 
 // ===========================================================================
@@ -215,10 +200,6 @@ pub struct SignStep1 {
     pub timestamp_ms: i64,
     /// True ⇒ raw FROST (no taproot tweak).
     pub script_path_spend: bool,
-    /// Service spend THROUGH arkd — the second leg's `ark_tx` PSBT. When set (and the actor is a
-    /// pairing actor), the guest accepts `message_to_sign` if it equals leg 1 OR leg 2; empty ⇒
-    /// single-leg, the guest OVERRIDES `message_to_sign` with the rebuilt cooperative-leaf sighash.
-    pub ark_tx: Vec<u8>,
 }
 
 /// FROST sign round-2 request (mirrors the gRPC `SignStep2Request`).
@@ -243,13 +224,17 @@ pub struct Commitment {
 // calls directly. Plain in-process data — no serde needed (never crosses a boundary).
 // ===========================================================================
 
-/// Output of `contract_refresh`: the PUBLIC pairing PKP, the receiver's half scalar, and the
-/// cosigner's pairing key package (the host relays the last to seed the pairing actor).
+/// Output of `service_refresh`. The cosigner's counter-share is NOT here: it is installed into
+/// the wallet actor's own pairing map, so it never crosses the host boundary.
 #[derive(Debug)]
-pub struct ContractRefreshed {
+pub struct ServiceRefreshed {
+    /// The 2-entry pairing PKP, relayed to the service so it can verify its assembled share.
     pub pairing_public_key_package_json: String,
+    /// `b@service` — the cosigner's half, for the host to ECIES-seal to the service.
     pub receiver_half: Vec<u8>,
-    pub my_key_package_json: String,
+    /// The service's verifying share hex — the key its pairing is filed under, and the `user_id`
+    /// it must present when signing.
+    pub service_verifying_share_hex: String,
 }
 
 /// Output of `public_policy`: the PUBLIC projection the host loads into its `policy_state`.
@@ -258,8 +243,6 @@ pub struct PublicPolicy {
     pub group_key: String,
     pub public_key_package_json: String,
     pub user_signing_identifier_hex: Option<String>,
-    pub contract_pairing: Option<ContractPairing>,
-    pub contracts_json: String,
 }
 
 /// Output of `sign_step1`: the combined commitments to sign over.

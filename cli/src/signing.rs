@@ -61,7 +61,7 @@ pub async fn frost_sign(
     // unrelated send. The Dart client has always built the package from its own
     // local message (client.dart) — this now matches.
     //
-    // A pairing/contract actor legitimately rebuilds the message, so it would trip
+    // A pairing actor legitimately rebuilds the message, so it would trip
     // this check; those flows are out of scope here and must re-derive the sighash
     // locally rather than trust an echo.
     let echoed = hex_field(&resp1, "message_to_sign")?;

@@ -2,9 +2,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::HashMap;
 
-use crate::cosigner::types::{arr32_hex, ArkTxEntry, ContractPairing};
+use crate::cosigner::types::ArkTxEntry;
 
 /// One VTXO owned by the user. Persisted in `vtxo_store`. `created_at` and
 /// `expires_at` come from the ASP `Vtxo` event and feed the auto-settle
@@ -65,12 +64,10 @@ pub struct DeviceToken {
 }
 
 pub struct CosignerState {
-    /// This cosigner actor's id (hex), set by the registry at spawn time — the
-    /// GROUP KEY it co-signs for: `V` for a normal 2-of-2 wallet, `V′` for a
-    /// contract. NOT "one user": a contract actor serves many members, each
-    /// authenticated by their own verifying share (see `group_auth_idx` +
-    /// `EvtxoPolicy.recipient_shares`). Handlers use it to scope persistence keys
-    /// and as the group id for `auth_check_group`.
+    /// This cosigner actor's id (hex), set by the registry at spawn time — the GROUP KEY it
+    /// co-signs for: the wallet's `V` for a normal 2-of-2, or the polynomial id for a
+    /// `{service, cosigner}` pairing actor. Handlers use it to scope persistence keys and as the
+    /// group id for `auth_check_group`.
     pub cosigner_id: String,
 
     /// Active delegate-settle session — stored signed intent + scope.
@@ -129,9 +126,8 @@ impl Default for CosignerState {
 /// Per-user policy state. Mirrors `PolicyState` from `server/lib/state.dart`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PolicyState {
-    /// This group's cosigner id (hex) = the GROUP KEY: `V` for a normal 2-of-2
-    /// wallet, `V′` for a contract. Policies are keyed under it; clients addressing
-    /// by a member's verifying share resolve here via `policy_owner_idx`.
+    /// This group's cosigner id (hex) = the GROUP KEY. Policies are keyed under it; clients
+    /// addressing by a member's verifying share resolve here via `policy_owner_idx`.
     pub cosigner_id: String,
     /// The wallet's DKG identifier (may differ from Identifier::derive(userId)
     /// when the wallet is a passive receiver).
@@ -142,20 +138,6 @@ pub struct PolicyState {
     pub server_dkg_secret_hex: Option<String>,
     /// The user's normal 2-of-2 {user, cosigner} spending key.
     pub normal_policy: NormalPolicy,
-    /// Contracts created by this user, keyed by contract scriptPubKey (hex). Each
-    /// binds a reshared 2-of-2 key V′ to a WASM contract, with the cosigner's
-    /// counter-share for each signing pairing (the user and the always-online
-    /// service).
-    #[serde(default)]
-    pub contracts: HashMap<String, ContractPolicy>,
-    /// Set ONLY on a `{service, cosigner}` pairing actor (Tier 2 service co-sign).
-    /// Its presence marks this actor as a service co-signer that may sign nothing
-    /// EXCEPT a contract-approved spend of the one eVTXO named here: the sign path
-    /// rebuilds the cooperative-leaf sighash from these params and signs only that,
-    /// so a compromised service cannot co-sign a `V` spend of the wallet's normal
-    /// funds. `normal_policy` holds the cosigner's pairing counter-share + the V PKP.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub contract_pairing: Option<ContractPairing>,
 }
 
 /// Normal (default) spending policy.
@@ -173,44 +155,6 @@ pub struct NormalPolicy {
 /// compared directly against wire-provided verifying-key hex.
 pub type VerifyingKeyHex = String;
 
-/// A contract bound to a WASM `contract_id`. NO distinct key: the wallet's normal key `V` is
-/// reused. The cosigner GATE is the sole binding — it co-signs a contract eVTXO spend only
-/// when (1) the WASM `evaluate` returns Allow and (2) the requesting verifying share is on the
-/// allowlist (`wallet_vk` ∪ `authorized_service_vks`).
-///
-/// The WALLET signs contract spends with its existing normal `V` pairing. The always-online
-/// SERVICE gets a key-preserving REFRESH of `V` onto `{service, cosigner}` at create time; the
-/// cosigner's counter-share lives in the SEPARATE pairing actor's guest (Plan A — never stored
-/// here), so this struct holds only the gate's PUBLIC metadata + the authorized-signer allowlist.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractPolicy {
-    /// Contract that governs cooperative spends: sha256(component_wasm).
-    #[serde(with = "arr32_hex")]
-    pub contract_id: [u8; 32],
-    /// The WALLET's own verifying-share hex — an authorized signer that uses the normal `V`
-    /// pairing. Included in the allowlist.
-    pub wallet_vk: VerifyingKeyHex,
-    /// Unilateral-exit CSV delay (the exit leaf).
-    pub exit_delay: u32,
-    /// User-supplied exit-leaf owner x-only key, for the taptree.
-    #[serde(with = "arr32_hex")]
-    pub owner_pk: [u8; 32],
-
-    /// Service verifying keys authorized to co-sign this contract (the gate allowlist). Each has
-    /// a `{service, cosigner}` pairing whose cosigner counter-share lives in its own guest actor.
-    #[serde(default, alias = "shares")]
-    pub authorized_service_vks: Vec<VerifyingKeyHex>,
-}
-
-impl ContractPolicy {
-    /// The verifying shares authorized to sign this contract: the wallet (normal `V`) plus every
-    /// authorized service. The gate co-signs only for these.
-    pub fn authorized_verifying_keys(&self) -> Vec<VerifyingKeyHex> {
-        let mut keys = vec![self.wallet_vk.clone()];
-        keys.extend(self.authorized_service_vks.iter().cloned());
-        keys
-    }
-}
 
 /// Per-user UTXO cache.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

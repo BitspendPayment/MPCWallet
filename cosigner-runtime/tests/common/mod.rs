@@ -122,7 +122,6 @@ pub async fn seed_policy(
             public_key_package_json: pkp.to_json(),
             user_signing_identifier_hex: Some(hex::encode(kp_user.identifier.serialize())),
             server_dkg_secret_hex: ark_cosigner_secret_hex,
-            contract_pairing: None,
             reply,
         })
         .await
