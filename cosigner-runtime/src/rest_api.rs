@@ -14,7 +14,6 @@ use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt;
 use tonic::Status;
 
-use crate::contract::ContractManager;
 use crate::cosigner::command::CosignerCommand;
 use crate::cosigner::registry::CosignerRegistry;
 use crate::onboarding::OnboardingManager;
@@ -26,7 +25,6 @@ use crate::wallet_proto::{self};
 pub struct AppState {
     pub registry: Arc<CosignerRegistry>,
     pub onboarding_manager: Arc<OnboardingManager>,
-    pub contract_manager: Arc<ContractManager>,
     /// Public deployment metadata served by `/api/server-info`. Built once
     /// at startup from `ServerConfig::bitcoin_network`.
     pub server_info: Arc<wallet_proto::GetServerInfoResponse>,
@@ -41,12 +39,6 @@ impl FromRef<AppState> for Arc<CosignerRegistry> {
 impl FromRef<AppState> for Arc<OnboardingManager> {
     fn from_ref(s: &AppState) -> Self {
         s.onboarding_manager.clone()
-    }
-}
-
-impl FromRef<AppState> for Arc<ContractManager> {
-    fn from_ref(s: &AppState) -> Self {
-        s.contract_manager.clone()
     }
 }
 
@@ -66,13 +58,10 @@ pub fn routes(state: AppState) -> Router {
         .route("/dkg/step1", post(onboarding_step1))
         .route("/dkg/step2", post(onboarding_step2))
         .route("/dkg/step3", post(onboarding_step3))
-        // Contract creation (refresh V onto {service, cosigner})
-        .route("/u/{group_key}/contract/create", post(contract_create))
-        .route(
-            "/u/{group_key}/evtxo/pending",
-            post(contract_pending_shares),
-        )
-        .route("/u/{group_key}/evtxo/ack", post(contract_ack_share))
+        // Service enrolment: refresh V onto a `{service, cosigner}` pairing.
+        .route("/u/{group_key}/service/enroll", post(service_enroll))
+        .route("/u/{group_key}/service/list", post(service_list))
+        .route("/u/{group_key}/service/revoke", post(service_revoke))
         // Request-to-pay. All signed by the wallet that owns `{group_key}` EXCEPT
         // `payment-request/create`, which is signed by the REQUESTER and routed to the PAYER's
         // actor — the payer's contact allowlist is what authorizes it.
@@ -93,13 +82,6 @@ pub fn routes(state: AppState) -> Router {
         )
         // SSE event stream — a backend user holds this open and reacts to cosigner events.
         .route("/u/{group_key}/events", get(events_stream))
-        // Contract template directory (peer model): publish + browse
-        .route(
-            "/u/{group_key}/contract/register-template",
-            post(register_template),
-        )
-        .route("/contracts", get(list_contracts))
-        .route("/contracts/{contract_id}/wasm", get(get_contract_template))
         // Signing
         .route("/u/{group_key}/sign/step1", post(sign_step1))
         .route("/u/{group_key}/sign/step2", post(sign_step2))
@@ -375,95 +357,218 @@ async fn onboarding_step3(
 }
 
 // ---------------------------------------------------------------------------
-// Contract creation (reshare V→V′ + single service refresh)
+// Service enrolment
 // ---------------------------------------------------------------------------
 
-#[tracing::instrument(skip_all, name = "rest::contract_create", fields(group_key = %group_key))]
-async fn contract_create(
-    State(coord): State<Arc<ContractManager>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let req = wallet_proto::ContractCreateRequest {
-        user_id: user_id_bytes(&group_key),
-        identifier: hex_field(&body, "identifier"),
-        contract_id: hex_field(&body, "contract_id"),
-        contract_wasm: hex_field(&body, "contract_wasm"),
-        server_pk: hex_field(&body, "server_pk"),
-        exit_delay: i64_field(&body, "exit_delay") as u32,
-        owner_pk: hex_field(&body, "owner_pk"),
-        receiver_vk: hex_field(&body, "receiver_vk"),
-        a_at_cosigner: hex_field(&body, "a_at_cosigner"),
-        a_at_receiver_point: hex_field(&body, "a_at_receiver_point"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-        ecies_a_at_receiver: hex_field(&body, "ecies_a_at_receiver"),
-        template_id: str_field(&body, "template_id"),
-        stub_id: str_field(&body, "stub_id"),
-        config_blob: hex_field(&body, "config_blob"),
-    };
-    match coord.create_contract(&group_key, req).await {
-        Ok(resp) => Ok(Json(json!({
-            "contract_script_pubkey": to_hex(&resp.contract_script_pubkey),
-            "contract_id": to_hex(&resp.contract_id),
-        }))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Peer-contract share inbox (the receiver's own actor)
-// ---------------------------------------------------------------------------
-
-#[tracing::instrument(skip_all, name = "rest::evtxo_pending", fields(group_key = %group_key))]
-async fn contract_pending_shares(
+/// Mint a `{service, cosigner}` share on a fresh refreshed polynomial.
+///
+/// The wallet deals its half (`a@service`, `a@cosigner`) and posts the cosigner's half plus the
+/// point commitment to `a@service`; the cosigner verifies that dealing is internally consistent,
+/// deals its own half, checks the resulting polynomial has never been used before, and seeds a
+/// pairing actor keyed by the polynomial's id.
+///
+/// Delivery is deliberately wallet-relayed rather than inboxed: the cosigner returns `b@service`
+/// ECIES-sealed to the service's key, and the wallet forwards both halves. The cosigner keeps no
+/// delivery state, and a wallet that withholds only denies itself the service — it cannot forge
+/// the cosigner's half, and the service verifies the sum against the pairing package regardless.
+///
+/// Authenticated: this dispatches a secret-share operation against the caller's wallet, so it
+/// must not be reachable anonymously.
+#[tracing::instrument(skip_all, name = "rest::service_enroll", fields(group_key = %group_key))]
+async fn service_enroll(
     State(reg): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
     headers: axum::http::HeaderMap,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let session = session_from_headers(&headers, reg.shared());
-    let req = wallet_proto::EvtxoPendingSharesRequest {
-        user_id: signer_user_id(&body, &group_key),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
+    let user_id = signer_user_id(&body, &group_key);
     crate::cosigner::handlers::helpers::verify_auth(
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        crate::auth::message::OP_EVTXO_PENDING,
+        &user_id,
+        &hex_field(&body, "signature"),
+        i64_field(&body, "timestamp_ms"),
+        crate::auth::message::OP_SERVICE_ENROLL,
         session.as_ref(),
     )
     .map_err(status_to_response)?;
-    match reg
-        .dispatch(&group_key, move |reply| {
-            CosignerCommand::EvtxoPendingShares { req, reply }
+
+    let bad = |m: &str| status_to_response(Status::invalid_argument(m.to_string()));
+
+    let service_id = hex_field(&body, "service_id");
+    if service_id.len() != 33 {
+        return Err(bad("service_id must be 33 bytes"));
+    }
+    let service_id_hex = hex::encode(&service_id);
+    let frost_id = threshold::identifier::Identifier::derive(&service_id)
+        .map_err(|e| bad(&format!("derive service id: {e:?}")))?;
+    let receiver_id_hex = hex::encode(frost_id.serialize());
+
+    let a_at_service_point = hex_field(&body, "a_at_service_point");
+    if a_at_service_point.len() != 33 {
+        return Err(bad("a_at_service_point must be 33 bytes"));
+    }
+    let a_at_cosigner = hex_field(&body, "a_at_cosigner");
+    if a_at_cosigner.len() != 32 {
+        return Err(bad("a_at_cosigner must be 32 bytes"));
+    }
+    let wallet_identifier = hex_field(&body, "identifier");
+    if wallet_identifier.len() != 32 {
+        return Err(bad("identifier must be 32 bytes"));
+    }
+
+    // The ceiling this pairing will sign under. Fail closed at the boundary too: an enrolment
+    // that declares no destinations would produce a pairing that can never sign, which is far
+    // more likely a caller bug than an intent.
+    let allowed_destinations: Vec<String> = body
+        .get("allowed_destinations")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d.as_str().map(|s| s.to_ascii_lowercase()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if allowed_destinations.is_empty() {
+        return Err(bad(
+            "allowed_destinations must be non-empty — a service with no declared reach cannot sign",
+        ));
+    }
+    let max_sats_per_signature = body
+        .get("max_sats_per_signature")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    if max_sats_per_signature == 0 {
+        return Err(bad("max_sats_per_signature must be greater than zero"));
+    }
+
+    // One dispatch, to the WALLET's own actor. The refresh is key-preserving, so the pairing
+    // shares the wallet's group key `V` and has no actor of its own: the actor verifies the
+    // wallet's dealing, deals its own half, installs its counter-share under the service's
+    // verifying share, and seals — all before this returns.
+    let service_id_bytes = service_id.clone();
+    let refreshed = reg
+        .dispatch(&group_key, move |reply| CosignerCommand::ServiceRefresh {
+            receiver_id_hex,
+            receiver_partial_point: a_at_service_point,
+            wallet_id_hex: hex::encode(&wallet_identifier),
+            a_at_cosigner,
+            min_signers: 2,
+            service_id: service_id_bytes,
+            policy: crate::cosigner::types::ServicePolicy {
+                allowed_destinations,
+                max_sats_per_signature,
+            },
+            reply,
         })
         .await
-    {
-        Ok(r) => {
-            let shares: Vec<Value> = r
-                .shares
-                .iter()
-                .map(|s| {
-                    json!({
-                        "evtxo_script_pubkey": to_hex(&s.evtxo_script_pubkey),
-                        "contract_id": to_hex(&s.contract_id),
-                        "ecies_half_author": to_hex(&s.ecies_half_author),
-                        "ecies_half_cosigner": to_hex(&s.ecies_half_cosigner),
-                        "public_key_package_json": s.public_key_package_json,
-                        "exit_delay": s.exit_delay,
-                        "server_pk": to_hex(&s.server_pk),
-                        "owner_pk": to_hex(&s.owner_pk),
-                    })
-                })
-                .collect();
-            Ok(Json(json!({ "shares": shares })))
-        }
-        Err(status) => Err(status_to_response(status)),
-    }
+        .map_err(status_to_response)?;
+
+    let mut recipient = [0u8; 33];
+    recipient.copy_from_slice(&service_id);
+    let half: [u8; 32] = refreshed
+        .receiver_half
+        .as_slice()
+        .try_into()
+        .map_err(|_| status_to_response(Status::internal("receiver_half must be 32 bytes")))?;
+    let sealed = threshold::ecies::encrypt(&half, &recipient, &mut rand::rngs::OsRng)
+        .map_err(|e| status_to_response(Status::internal(format!("ecies b@service: {e:?}"))))?;
+
+    let delivered = crate::service_delivery::push_half(
+        reg.shared(),
+        &service_id_hex,
+        crate::service_delivery::Half {
+            role: "cosigner",
+            pairing_group_key: &group_key,
+            service_verifying_share: &refreshed.service_verifying_share_hex,
+            pairing_public_key_package_json: &refreshed.pairing_public_key_package_json,
+            ecies_half: &to_hex(&sealed),
+        },
+    )
+    .await;
+
+    
+    Ok(Json(json!({
+        "pairing_group_key": group_key,
+        "service_verifying_share": refreshed.service_verifying_share_hex,
+        "pairing_public_key_package_json": refreshed.pairing_public_key_package_json,
+        "cosigner_half_delivered": delivered,
+    })))
 }
+
+/// What can sign for this wallet.
+///
+/// The pairing map is the only index there is, so this is the answer to "who did I delegate to?".
+/// Wallet-authenticated: a service must not be able to enumerate its peers.
+#[tracing::instrument(skip_all, name = "rest::service_list", fields(group_key = %group_key))]
+async fn service_list(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    crate::cosigner::handlers::helpers::verify_auth(
+        &user_id_bytes(&group_key),
+        &hex_field(&body, "signature"),
+        i64_field(&body, "timestamp_ms"),
+        crate::auth::message::OP_SERVICE_LIST,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
+
+    let rows = reg
+        .dispatch(&group_key, |reply| CosignerCommand::ListServicePairings { reply })
+        .await
+        .map_err(status_to_response)?;
+
+    let services: Vec<Value> = rows
+        .into_iter()
+        .map(|(verifying_share, service_id)| {
+            json!({
+                "verifying_share": verifying_share,
+                "service_id": service_id,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "services": services })))
+}
+
+
+#[tracing::instrument(skip_all, name = "rest::service_revoke", fields(group_key = %group_key))]
+async fn service_revoke(
+    State(reg): State<Arc<CosignerRegistry>>,
+    Path(group_key): Path<String>,
+    headers: axum::http::HeaderMap,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let session = session_from_headers(&headers, reg.shared());
+    crate::cosigner::handlers::helpers::verify_auth(
+        &user_id_bytes(&group_key),
+        &hex_field(&body, "signature"),
+        i64_field(&body, "timestamp_ms"),
+        crate::auth::message::OP_SERVICE_REVOKE,
+        session.as_ref(),
+    )
+    .map_err(status_to_response)?;
+
+    let verifying_share_hex = str_field(&body, "verifying_share").to_ascii_lowercase();
+    if verifying_share_hex.is_empty() {
+        return Err(status_to_response(Status::invalid_argument(
+            "verifying_share is required",
+        )));
+    }
+
+    let removed = reg
+        .dispatch(&group_key, move |reply| CosignerCommand::RemoveServicePairing {
+            verifying_share_hex,
+            reply,
+        })
+        .await
+        .map_err(status_to_response)?;
+
+    Ok(Json(json!({ "revoked": removed })))
+}
+
 
 // ---------------------------------------------------------------------------
 // Request-to-pay
@@ -699,43 +804,10 @@ async fn payment_request_decline(
     )
 }
 
-#[tracing::instrument(skip_all, name = "rest::evtxo_ack", fields(group_key = %group_key))]
-async fn contract_ack_share(
-    State(reg): State<Arc<CosignerRegistry>>,
-    Path(group_key): Path<String>,
-    headers: axum::http::HeaderMap,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let session = session_from_headers(&headers, reg.shared());
-    let req = wallet_proto::EvtxoAckShareRequest {
-        user_id: signer_user_id(&body, &group_key),
-        evtxo_script_pubkey: hex_field(&body, "evtxo_script_pubkey"),
-        signature: hex_field(&body, "signature"),
-        timestamp_ms: i64_field(&body, "timestamp_ms"),
-    };
-    crate::cosigner::handlers::helpers::verify_auth(
-        &req.user_id,
-        &req.signature,
-        req.timestamp_ms,
-        crate::auth::message::OP_EVTXO_ACK,
-        session.as_ref(),
-    )
-    .map_err(status_to_response)?;
-    match reg
-        .dispatch(&group_key, move |reply| CosignerCommand::EvtxoAckShare {
-            req,
-            reply,
-        })
-        .await
-    {
-        Ok(r) => Ok(Json(json!({ "ok": r.ok }))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Event stream (Phase 3) — a backend user holds this SSE connection open and reacts to events
-// about itself (e.g. a contract share landed in its inbox). Auth at connect via signed query params.
+// about itself. Auth at connect via signed query params.
 // ---------------------------------------------------------------------------
 
 #[derive(serde::Deserialize)]
@@ -746,7 +818,7 @@ struct EventsAuth {
 
 #[tracing::instrument(skip_all, name = "rest::events", fields(group_key = %group_key))]
 async fn events_stream(
-    State(coord): State<Arc<ContractManager>>,
+    State(coord): State<Arc<CosignerRegistry>>,
     Path(group_key): Path<String>,
     Query(q): Query<EventsAuth>,
     headers: axum::http::HeaderMap,
@@ -767,7 +839,7 @@ async fn events_stream(
 
     let rx = coord.shared().events.subscribe(&group_key);
     // Lagged (slow subscriber overran the buffer) → drop those events; the client catches up via
-    // `evtxo/pending`. Each event becomes an SSE frame `event: <kind>\ndata: <json>`.
+    // its durable record. Each event becomes an SSE frame `event: <kind>\ndata: <json>`.
     let stream = BroadcastStream::new(rx).filter_map(|ev| {
         ev.ok().map(|e| {
             Ok::<_, std::convert::Infallible>(Event::default().event(e.kind()).data(e.data_json()))
@@ -776,75 +848,6 @@ async fn events_stream(
     Ok(Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response())
-}
-
-// ---------------------------------------------------------------------------
-// Contract template directory (publish + browse). Discovery for the peer model:
-// `CosignerID -> [Contract Template, VerifyingShare]`.
-// ---------------------------------------------------------------------------
-
-/// Publish a contract template under the author's verifying key (the URL `group_key`).
-#[tracing::instrument(skip_all, name = "rest::register_template", fields(group_key = %group_key))]
-async fn register_template(
-    State(coord): State<Arc<ContractManager>>,
-    Path(group_key): Path<String>,
-    Json(body): Json<Value>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let shared = coord.shared();
-    let author_vk_hex = group_key;
-    let contract_id = hex_field(&body, "contract_id");
-    let wasm = hex_field(&body, "contract_wasm");
-    let stub_wasm = hex_field(&body, "provider_stub_wasm");
-    let schema = str_field(&body, "schema");
-    let name = str_field(&body, "name");
-    let description = str_field(&body, "description");
-    match crate::contract::register_template(
-        shared.persistence.as_ref(),
-        shared.contract_host.as_deref(),
-        &author_vk_hex,
-        &contract_id,
-        &wasm,
-        &stub_wasm,
-        &schema,
-        &name,
-        &description,
-    ) {
-        Ok(()) => Ok(Json(json!({ "ok": true }))),
-        Err(status) => Err(status_to_response(status)),
-    }
-}
-
-/// Browse the whole directory: every author's published templates (public).
-async fn list_contracts(State(coord): State<Arc<ContractManager>>) -> Json<Value> {
-    let rows = crate::contract::list_templates(coord.shared().persistence.as_ref());
-    let out: Vec<Value> = rows
-        .into_iter()
-        .map(|r| {
-            json!({
-                "author_vk": r.author_vk_hex,
-                "contract_id": r.contract_id_hex,
-                "name": r.name,
-                "description": r.description,
-                "stub_id": r.stub_id_hex,
-                "schema": r.schema_json,
-            })
-        })
-        .collect();
-    Json(json!({ "contracts": out }))
-}
-
-/// Fetch a template's wasm bytes by its content id (public).
-async fn get_contract_template(
-    State(coord): State<Arc<ContractManager>>,
-    Path(contract_id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    match crate::contract::get_template_wasm(coord.shared().persistence.as_ref(), &contract_id) {
-        Some(wasm) => Ok(Json(json!({ "contract_wasm": to_hex(&wasm) }))),
-        None => Err((
-            StatusCode::NOT_FOUND,
-            Json(json!({ "error": "unknown contract_id" })),
-        )),
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -871,7 +874,6 @@ async fn sign_step1(
         full_transaction: hex_field(&body, "full_transaction"),
         timestamp_ms: i64_field(&body, "timestamp_ms"),
         script_path_spend: bool_field(&body, "script_path_spend"),
-        ark_tx: hex_field(&body, "ark_tx"),
     };
     crate::cosigner::handlers::helpers::verify_auth(
         &req.user_id,

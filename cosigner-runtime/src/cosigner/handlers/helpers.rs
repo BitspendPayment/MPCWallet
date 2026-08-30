@@ -143,7 +143,7 @@ pub fn is_authorized_share(authorized_shares: &[String], claimed_share_hex: &str
 }
 
 /// Group auth: the request is signed by ONE of the group's authorized verifying
-/// shares (any participant of a contract cosigner). Verifies the BIP-340
+/// shares (any participant of a group). Verifies the BIP-340
 /// signature against `claimed_share` AND asserts it is in `authorized_shares`.
 /// Each signer signs as herself — the auth message binds her own share, which is
 /// both the pubkey the signature is checked against and the identity in the
@@ -163,7 +163,7 @@ pub fn auth_check_group(
             "signer not authorized for this group",
         ));
     }
-    // Group/contract ops identify by the claimed verifying share, not by the token's `sub`, so they
+    // Group ops identify by the claimed verifying share, not by the token's `sub`, so they
     // stay on Schnorr — a session token (bound to the main group key) does not apply here.
     auth_check(
         state,

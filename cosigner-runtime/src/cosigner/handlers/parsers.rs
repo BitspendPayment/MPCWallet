@@ -62,7 +62,7 @@ pub fn extract_identifier(kp_json: &str) -> Result<String, Status> {
 }
 
 /// The recipient's signing identifier `id_i` = the entry of a 2-entry `V′` PKP whose
-/// id is NOT the cosigner's. Used by a contract actor to insert the recipient's FROST
+/// id is NOT the cosigner's. Used by a pairing actor to insert the recipient's FROST
 /// commitment/share at its real `V′` identifier (the author's existing V identifier,
 /// or a refreshed participant's derived id) — which is generally NOT `derive(user_id)`.
 pub fn extract_recipient_identifier(

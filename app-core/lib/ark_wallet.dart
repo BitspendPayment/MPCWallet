@@ -13,7 +13,7 @@ class UnsignedArkTransaction {
   final List<String> spentOutpoints;
 
   /// PSBT to pass to the cosigner as `fullTransaction` (== arkTxBytes for normal
-  /// sends; the checkpoint PSBT for an eVTXO spend, so the gate fires + V′ is used).
+  /// sends).
   final Uint8List gateTxBytes;
 
   UnsignedArkTransaction({
@@ -163,127 +163,5 @@ class MpcArkWallet {
     );
   }
 
-  /// Build an off-chain send that spends a contract **eVTXO** input through arkd:
-  /// the cooperative (`ConditionMultisigClosure`) leaf, signed by V′ (gated by the
-  /// cosigner) + co-signed by arkd's `server_pk`. The eVTXO must already be an
-  /// arkd-tracked VTXO (mint it first with a normal send to its Ark address).
-  /// `contractId` = sha256(wasm); `evtxoPk` = V′ x-only; `exitDelay` must match
-  /// the value the eVTXO was created with.
-  Future<UnsignedArkTransaction> createEvtxoSpend({
-    required String destination,
-    required int amountSats,
-    required String inputTxid,
-    required int inputVout,
-    required int inputAmountSats,
-    required Uint8List contractId,
-    required Uint8List evtxoPk,
-    required int exitDelay,
-    Uint8List? contractArgs,
-    String? ownerPkOverride,
-  }) async {
-    // The exit-leaf owner is the AUTHOR's V. The author spends with its own group key;
-    // an onboarded participant must pass the author's owner key (from its pickup).
-    final ownerPk = ownerPkOverride ?? client.groupXOnlyPubKey;
-    if (ownerPk == null) {
-      throw StateError('Group key not available, cannot spend eVTXO.');
-    }
-    final arkInfo = await client.getArkInfo();
-    var serverPkHex = arkInfo.signerPubkey;
-    if (serverPkHex.length == 66) serverPkHex = serverPkHex.substring(2);
 
-    final arkInfoMap = {
-      'signer_pubkey': arkInfo.signerPubkey,
-      'forfeit_pubkey': arkInfo.forfeitPubkey,
-      'forfeit_address': arkInfo.forfeitAddress,
-      'checkpoint_tapscript': arkInfo.checkpointTapscript,
-      'network': arkInfo.network,
-      'session_duration': arkInfo.sessionDuration.toInt(),
-      'unilateral_exit_delay': arkInfo.unilateralExitDelay.toInt(),
-      'boarding_exit_delay': arkInfo.boardingExitDelay.toInt(),
-      'vtxo_min_amount': arkInfo.vtxoMinAmount.toInt(),
-      'dust': arkInfo.dust.toInt(),
-    };
-
-    final vtxoInputs = [
-      {
-        'txid': inputTxid,
-        'vout': inputVout,
-        'amount': inputAmountSats,
-        'evtxo': {
-          'contract_id': hex.encode(contractId),
-          'server_pk': serverPkHex,
-          'evtxo_pk': hex.encode(evtxoPk),
-          'owner_pk': ownerPk,
-          'exit_delay': exitDelay,
-          if (contractArgs != null) 'contract_args': hex.encode(contractArgs),
-        },
-      }
-    ];
-
-    final session = ArkSendSession.build(
-      ownerPk: ownerPk,
-      vtxoInputs: vtxoInputs,
-      recipientArkAddress: destination,
-      amountSats: amountSats,
-      changeArkAddress: await client.getArkAddress(),
-      exitDelay: exitDelay,
-      arkInfo: arkInfoMap,
-    );
-
-    return UnsignedArkTransaction(
-      sessionHandle: session.handle,
-      sighashes: session.sighashes,
-      arkTxBytes: session.arkTxBytes,
-      gateTxBytes: session.gateTxBytes,
-      spentOutpoints: ['$inputTxid:$inputVout'],
-    );
-  }
-
-  /// Sign an eVTXO spend with the V′ key package (NOT the main key) so the
-  /// cosigner uses V′ and the contract gate runs. Passes the checkpoint PSBT
-  /// (`gateTxBytes`) as `fullTransaction` so the gate detects the eVTXO. Throws
-  /// if the contract denies (the cosigner withholds its V′ share).
-  Future<SignedArkTransaction> signEvtxoSpend(
-    UnsignedArkTransaction unsigned, {
-    required threshold.KeyPackage evtxoKeyPkg,
-    required threshold.PublicKeyPackage evtxoPkp,
-    String? routeGroupKeyHex,
-  }) async {
-    try {
-      final sigHexes = <String>[];
-      for (final sighash in unsigned.sighashes) {
-        // Contract spends reuse our normal V actor; the cosigner gates the spend by the
-        // contract bound to the eVTXO (no separate routing key).
-        final sig = await client.signWithContext(
-          sighash,
-          evtxoKeyPkg,
-          evtxoPkp,
-          unsigned.gateTxBytes,
-          applyTweak: false,
-          routeGroupKeyHex: routeGroupKeyHex,
-          // The receiver routes to the pairing actor, which needs ark_tx (leg 2) to take the
-          // two-leg path; the author routes to its V actor, which ignores it. Pass it always.
-          arkTx: unsigned.arkTxBytes,
-        );
-        final rBytes = threshold.elemSerializeCompressed(sig.R);
-        final xOnly = rBytes.sublist(1);
-        final zBytes = threshold.bigIntToBytes(sig.Z);
-        final schnorrSig = Uint8List(64);
-        schnorrSig.setRange(0, 32, xOnly);
-        schnorrSig.setRange(32, 64, zBytes);
-        sigHexes.add(hex.encode(schnorrSig));
-      }
-
-      final signed =
-          ArkSendSession.insertSignatures(unsigned.sessionHandle, sigHexes);
-
-      return SignedArkTransaction(
-        signedArkTxB64: signed.signedArkTxB64,
-        signedCheckpointTxsB64: signed.signedCheckpointTxsB64,
-        spentOutpoints: unsigned.spentOutpoints,
-      );
-    } finally {
-      ArkSendSession.free(unsigned.sessionHandle);
-    }
-  }
 }

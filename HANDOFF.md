@@ -1,5 +1,10 @@
 # Cosigner rearchitecture — handoff / resume point
 
+> **HISTORICAL — do not follow.** This file describes two architectures that no longer exist:
+> the WASM-guest cosigner (reverted; the cosigner is a native per-user actor) and the
+> eVTXO / WASM-contract layer (removed). Every path, command and test name below is dead.
+> Kept for provenance only — `git log` is the reliable record.
+
 Status as of 2026-06-22. Branch `v3`. Everything below is **uncommitted** (staged / working-tree)
 unless you commit it. Deep implementation notes live in the agent memory file
 `~/.claude/projects/-home-joshua-MerlinWallet/memory/ark-crate-wasm-split-recipe.md`

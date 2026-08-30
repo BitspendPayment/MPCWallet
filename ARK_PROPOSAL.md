@@ -83,8 +83,7 @@ this plainly than let a reviewer discover it.
 
 The cosigner runs as a **native per-user actor** — each user gets a dedicated
 task owning its own keys and state, with serial command processing and no
-shared mutable state. (WASM/Wasmtime is retained only for sandboxing contract
-components, not for the cosigner itself.)
+shared mutable state.
 
 ## Where Things Stand
 

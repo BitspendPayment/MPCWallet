@@ -70,7 +70,6 @@ async fn cooperative_sign_and_verify(
         full_transaction: vec![],
         timestamp_ms: ts1,
         script_path_spend: true, // raw FROST (no taproot tweak)
-        ark_tx: vec![],
     };
     let resp1 = registry
         .dispatch(group_key, |reply| CosignerCommand::SignStep1 { req: req1, reply })

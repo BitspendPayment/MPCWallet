@@ -12,19 +12,18 @@ abstract class WalletApi {
   Future<DKGStep2Response> dKGStep2(DKGStep2Request request);
   Future<DKGStep3Response> dKGStep3(DKGStep3Request request);
 
-  // Contract eVTXO creation (PEER model): a single key-preserving refresh of V onto
-  // {receiver, cosigner}. The receiver later picks up its two ECIES half-shares from
-  // its inbox (evtxoPendingShares) and acks them (evtxoAckShare).
-  Future<ContractCreateResponse> contractCreate(ContractCreateRequest request);
-  Future<EvtxoPendingSharesResponse> evtxoPendingShares(
-      EvtxoPendingSharesRequest request);
-  Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest request);
+  // Service enrolment: refresh `V` onto a `{service, cosigner}` pairing that still reconstructs
+  // the same key, so the address never moves. `serviceList`/`serviceRevoke` are how a wallet sees
+  // and retires what it has delegated to — the cosigner's pairing map is the only such record.
+  Future<ServiceEnrollResponse> serviceEnroll(ServiceEnrollRequest request);
+  Future<ServiceListResponse> serviceList(ServiceListRequest request);
+  Future<ServiceRevokeResponse> serviceRevoke(ServiceRevokeRequest request);
 
   // Signing
-  // [routeGroupKeyHex] overrides the actor the request is routed to (the URL group_key),
-  // while `request.userId` stays the signer's auth identity. Used by a contract RECEIVER to
-  // route a spend to the eVTXO's `{receiver, cosigner}` pairing actor (keyed by the spk) while
-  // authenticating as itself. Null ⇒ route by `request.userId` (the normal case).
+  // [routeGroupKeyHex] overrides the actor the request is routed to (the URL group_key), while
+  // `request.userId` stays the signer's auth identity. A service uses this: the pairing shares
+  // the wallet's `V`, so it addresses the WALLET's actor and is told apart by the verifying share
+  // it presents. Null ⇒ route by `request.userId` (the normal case).
   Future<SignStep1Response> signStep1(SignStep1Request request,
       {String? routeGroupKeyHex});
   Future<SignStep2Response> signStep2(SignStep2Request request,

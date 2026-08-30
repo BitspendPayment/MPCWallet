@@ -8,19 +8,17 @@ service MPCWallet {
   rpc DKGStep2 (DKGStep2Request) returns (DKGStep2Response);
   rpc DKGStep3 (DKGStep3Request) returns (DKGStep3Response);
 
-  // Contract creation (PEER model). NO reshare and NO new key: the wallet's existing 2-of-2
-  // key V is reused; the contract is enforced by the cosigner gate (WASM evaluate +
-  // verifying-share allowlist), not by a distinct key. A single step REFRESHES V onto a
-  // {receiver, cosigner} pairing (key unchanged) so the chosen RECEIVER (another user) can
-  // co-sign. Both halves of the receiver's share are ECIES-encrypted to its verifying key and
-  // dropped into the receiver's pickup inbox: the wallet's a@receiver (in the request) and the
-  // cosigner's b@receiver. No external service, no URL.
-  rpc ContractCreate (ContractCreateRequest) returns (ContractCreateResponse);
-
-  // Inbox pickup (PEER model). The receiver fetches the ECIES contract-share halves held for
-  // it, decrypts BOTH with its signing secret, sums them into its share, then acks to clear.
-  rpc EvtxoPendingShares (EvtxoPendingSharesRequest) returns (EvtxoPendingSharesResponse);
-  rpc EvtxoAckShare (EvtxoAckShareRequest) returns (EvtxoAckShareResponse);
+  // Service enrolment. A key-preserving refresh puts a THIRD participant on a fresh polynomial
+  // that still reconstructs the wallet's `V`, so the address never moves. The wallet deals its
+  // contribution, the cosigner deals its own and files the pairing under the service's verifying
+  // share; each dealer then pushes the half it authored straight to the service.
+  //
+  // Only the POINT `a@service·G` reaches the cosigner, never the scalar — a cosigner holding both
+  // the service's share and its own counter-share would have two points on one degree-1 line and
+  // could interpolate `V`.
+  rpc ServiceEnroll (ServiceEnrollRequest) returns (ServiceEnrollResponse);
+  rpc ServiceList (ServiceListRequest) returns (ServiceListResponse);
+  rpc ServiceRevoke (ServiceRevokeRequest) returns (ServiceRevokeResponse);
 
   // Request-to-pay. A party is known by its single group verifying key. A wallet allowlists a
   // contact; that contact may then send it payment requests. The payer's cosigner authenticates
@@ -118,12 +116,7 @@ message SignStep1Request {
   bool script_path_spend = 8; // If true, skip taproot tweak (script-path signing)
   reserved 9; // was claimed_share — user_id now always carries the signer's verifying
               // share (user or service); routing is by the URL group_key.
-  // Service-driven eVTXO spend THROUGH arkd (Tier 2): the second leg (the `ark_tx`
-  // that spends the checkpoint output). `full_transaction` carries the checkpoint
-  // PSBT (leg 1, spends the eVTXO). When set, a pairing actor's conditioning verifies
-  // `message_to_sign` is the sighash of leg 1 OR leg 2, with leg 2 chained to leg 1's
-  // checkpoint. Empty for an on-chain single-leg spend (the cosigner overrides the msg).
-  bytes ark_tx = 10;
+  reserved 10; // was ark_tx — the two-leg eVTXO conditioning it fed is gone.
 }
 
 
@@ -398,77 +391,57 @@ message RegisterDeviceTokenResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Contract creation (PEER model). NO reshare and NO new key: the wallet's existing
-// 2-of-2 key V is reused; the contract is enforced by the cosigner gate (WASM
-// evaluate + verifying-share allowlist). A single key-preserving REFRESH of V onto a
-// {receiver, cosigner} pairing lets the chosen RECEIVER (another user, identified by
-// its verifying key) co-sign V independently. Both halves of the receiver's share are
-// ECIES-encrypted to receiver_vk and held in the receiver's inbox: the wallet's
-// a@receiver (ecies_a_at_receiver, in this request) and the cosigner's b@receiver
-// (computed + encrypted by the cosigner). Only the POINT a@receiver·G reaches the
-// cosigner, so it never learns the receiver's full share.
+// Service enrolment
 // ---------------------------------------------------------------------------
-message ContractCreateRequest {
+message ServiceEnrollRequest {
+  bytes user_id = 1;                 // the wallet's verifying share (auth identity)
+  bytes identifier = 2;              // the wallet's FROST identifier
+  // The service's identity: a 33-byte compressed secp256k1 key. Names the service, is the ECIES
+  // target for its half, and derives its FROST identifier. It never signs — the service's signing
+  // credential is the verifying share this call returns.
+  bytes service_id = 3;
+  bytes a_at_cosigner = 4;           // the wallet's dealt half FOR THE COSIGNER (scalar, 32B)
+  bytes a_at_service_point = 5;      // the wallet's dealt half for the service, as a POINT (33B)
+  repeated string allowed_destinations = 6; // output scripts (hex) this service may pay to
+  uint64 max_sats_per_signature = 7; // hard cap on total sats moved per co-signed transaction
+  bytes signature = 8;
+  int64 timestamp_ms = 9;
+}
+
+message ServiceEnrollResponse {
+  // The wallet's own group key: the pairing shares `V`, so the service addresses the wallet's
+  // actor and is told apart by its verifying share.
+  string pairing_group_key = 1;
+  // The service's verifying share — its `user_id` when signing, and the key its pairing is filed
+  // under. The wallet needs it to address the half it must still push.
+  string service_verifying_share = 2;
+  string pairing_public_key_package_json = 3;
+  // Whether the cosigner reached the service with its own half. False means the pairing exists but
+  // the service cannot assemble a share until that half is re-pushed.
+  bool cosigner_half_delivered = 4;
+}
+
+message ServiceListRequest {
   bytes user_id = 1;
-  bytes identifier = 2;         // the wallet's V FROST identifier
-  bytes contract_id = 3;        // sha256(component_wasm): the contract bound to this eVTXO
-  bytes contract_wasm = 4;      // contract component bytes; cosigner verifies sha256==contract_id
-  bytes server_pk = 5;          // ASP signer x-only pubkey (cooperative leaf)
-  uint32 exit_delay = 6;        // unilateral-exit CSV delay (exit leaf)
-  bytes owner_pk = 7;           // user-supplied unilateral-exit x-only key (exit leaf)
-  bytes receiver_vk = 8;        // the peer RECEIVER's verifying key (33B)
-  bytes a_at_cosigner = 9;      // wallet's refresh slice of V to the cosigner (scalar, 32B)
-  bytes a_at_receiver_point = 10; // wallet's refresh slice of V to the receiver, as POINT (33B)
-  bytes signature = 11;         // Schnorr auth signature
-  int64 timestamp_ms = 12;      // replay protection
-  bytes ecies_a_at_receiver = 13; // ECIES(a@receiver) to receiver_vk — the wallet's encrypted half
-  // Phase 2 (template + variable composition). When `template_id` is set, the cosigner composes a
-  // CONTRACT from a published TEMPLATE + the author's typed config: it fetches the template + its
-  // provider STUB (both by content id), patches `config_blob` (the encoded key-value config) into
-  // the stub, composes them into one component, and the COMPOSED sha256 becomes the bound
-  // contract_id (committing the variables). When empty, `contract_id`/`contract_wasm` above are used.
-  string template_id = 14;      // content id (hex) of the registered template
-  string stub_id = 15;          // content id (hex) of the template's provider stub
-  bytes config_blob = 16;       // encoded KV config the cosigner patches into the stub
-}
-
-message ContractCreateResponse {
-  bytes contract_script_pubkey = 1; // registered eVTXO scriptPubKey (cooperative leaf = V)
-  bytes contract_id = 2;            // the bound contract id (composed sha256 in template mode)
-}
-
-// ---------------------------------------------------------------------------
-// Inbox pickup (PEER model). The receiver fetches the contract-share halves held for
-// it in its own inbox, decrypts BOTH ECIES halves with its signing secret, sums them
-// into its share P = a@receiver + b@receiver, then acks to clear. No FCM/poll loop is
-// required — the inbox is surfaced on the receiver's authenticated pull.
-// ---------------------------------------------------------------------------
-message EvtxoPendingSharesRequest {
-  bytes user_id = 1;       // the receiver (its own actor)
   bytes signature = 2;
   int64 timestamp_ms = 3;
 }
-message EvtxoPendingSharesResponse {
-  repeated PendingContractShare shares = 1;
+message ServiceListResponse {
+  repeated EnrolledService services = 1;
 }
-message PendingContractShare {
-  bytes evtxo_script_pubkey = 1;        // the contract eVTXO (also the pairing actor to address at spend)
-  bytes contract_id = 2;                // sha256(wasm)
-  bytes ecies_half_author = 3;          // ECIES(a@receiver) — the wallet/author's half
-  bytes ecies_half_cosigner = 4;        // ECIES(b@receiver) — the cosigner's half
-  string public_key_package_json = 5;   // the 2-entry pairing PKP {receiver_id, cosigner_id}
-  uint32 exit_delay = 6;
-  bytes server_pk = 7;                  // ASP signer x-only (cooperative leaf)
-  bytes owner_pk = 8;                   // exit-leaf owner x-only (for the taptree)
+message EnrolledService {
+  string verifying_share = 1;  // how this service is filed, and how it signs
+  string service_id = 2;       // its identity, for display and revocation-by-name
 }
-message EvtxoAckShareRequest {
-  bytes user_id = 1;                    // the receiver
-  bytes evtxo_script_pubkey = 2;        // the share to clear from the inbox
+
+message ServiceRevokeRequest {
+  bytes user_id = 1;
+  string verifying_share = 2;  // the service to retire
   bytes signature = 3;
   int64 timestamp_ms = 4;
 }
-message EvtxoAckShareResponse {
-  bool ok = 1;
+message ServiceRevokeResponse {
+  bool revoked = 1;            // false ⇒ no such service was enrolled
 }
 
 // ---------------------------------------------------------------------------

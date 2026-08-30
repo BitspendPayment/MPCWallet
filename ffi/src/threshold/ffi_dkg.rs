@@ -467,7 +467,7 @@ pub extern "C" fn threshold_dkg_refresh_part3(
 /// scalar slice it keeps/sends AND the matching `·G` point — deterministic across the
 /// wallet's own calls. When every current holder does this with `min_signers = 2` and
 /// the per-id slices are summed, the recipients hold a fresh 2-of-n sharing of the SAME
-/// key. Used by `createEvtxoKey` to refresh `V` onto the {service, cosigner} pairing.
+/// key. Used by service enrolment to refresh `V` onto the {service, cosigner} pairing.
 ///
 /// Inputs: `kp_json` (holder KeyPackage), `id_set_json` (JSON array of current-holder
 /// identifier hex), `participant_hex` / `cosigner_hex` (32-byte recipient id scalars),
@@ -478,14 +478,12 @@ pub extern "C" fn threshold_refresh_share_to_id(
     id_set_json: *const c_char,
     participant_hex: *const c_char,
     cosigner_hex: *const c_char,
-    slope_hex: *const c_char,
 ) -> *mut FfiResult {
     let result = (|| -> Result<String, String> {
         let kp_str = read_cstr(kp_json).ok_or("null kp_json")?;
         let id_set_str = read_cstr(id_set_json).ok_or("null id_set_json")?;
         let participant_str = read_cstr(participant_hex).ok_or("null participant_hex")?;
         let cosigner_str = read_cstr(cosigner_hex).ok_or("null cosigner_hex")?;
-        let slope_str = read_cstr(slope_hex).ok_or("null slope_hex")?;
 
         let kp = threshold::keys::KeyPackage::from_json(&kp_str)
             .map_err(|e| format!("bad KP: {e}"))?;
@@ -499,7 +497,17 @@ pub extern "C" fn threshold_refresh_share_to_id(
 
         let participant_id = parse_identifier_hex(&participant_str)?;
         let cosigner_id = parse_identifier_hex(&cosigner_str)?;
-        let slope = parse_scalar_hex(&slope_str)?;
+
+        // The slope is drawn HERE, from the OS CSPRNG, and is deliberately not a parameter.
+        //
+        // A key-preserving refresh leaves the constant term at the group secret, so at
+        // min_signers = 2 this polynomial is a line and IS its slope. Two recipients minted on
+        // one slope hold two points on that line and interpolate the group secret outright. A
+        // caller-supplied slope makes that a one-line mistake (pass the same value twice, or
+        // derive it from a reused seed — see SECURITY_FINDINGS TH-6); drawing it internally
+        // makes it unreachable. Callers that want determinism do not get it: there is no safe
+        // deterministic slope for this operation.
+        let slope = random::mod_n_random(&mut OsRng);
 
         // s(t) = (λ · secret_share) + slope·t, evaluated at each recipient id.
         let lambda = threshold::lagrange::lagrange_coeff_at_zero(&kp.identifier, &id_set);
@@ -524,10 +532,10 @@ pub extern "C" fn threshold_refresh_share_to_id(
 }
 
 // ---------------------------------------------------------------------------
-// eVTXO key resharing
+// Key resharing (V -> V′)
 // ---------------------------------------------------------------------------
 
-/// eVTXO reshare round 1: deal a fresh NON-zero polynomial under an EXPLICIT
+/// Reshare round 1: deal a fresh NON-zero polynomial under an EXPLICIT
 /// identifier (the dealer's existing identity). Used by the signer (hardware /
 /// software). Round 2 then uses the regular `threshold_dkg_part2`.
 #[no_mangle]
@@ -574,7 +582,7 @@ pub extern "C" fn threshold_dkg_reshare_part1(
     }
 }
 
-/// eVTXO reshare finalizer for a DEALER (e.g. the author): combine this dealer's
+/// Reshare finalizer for a DEALER: combine this dealer's
 /// own dealing (`r2_secret` handle) with the peer dealers' round1 packages and the
 /// shares dealt to this dealer, plus the old share, into the new `V′` key package +
 /// PKP. Mirrors `dkg_reshare_part3` in the threshold crate. `min_signers` is taken
@@ -640,7 +648,7 @@ pub extern "C" fn threshold_dkg_reshare_part3(
     }
 }
 
-/// eVTXO reshare finalizer for a pure receiver (the wallet): combine the dealers'
+/// Reshare finalizer for a pure receiver (the wallet): combine the dealers'
 /// shares with the old share into a new 2-of-2 `V′` key package + PKP. Mirrors
 /// `dkg_reshare_part3_receive` in the threshold crate.
 #[no_mangle]

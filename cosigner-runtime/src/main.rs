@@ -3,7 +3,7 @@ use std::sync::Arc;
 use clap::Parser;
 
 use cosigner_runtime::{
-    config, contract, cosigner, esplora, fcm_client, onboarding, kv_store, rest_api, shared,
+    config, cosigner, esplora, fcm_client, onboarding, kv_store, rest_api, shared,
     telemetry, vtxo_stream, webauthn_server,
 };
 
@@ -115,18 +115,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         cfg.actor_idle_threshold_secs,
         session_authority,
     );
-
-    // Contracts are stored in the cosigner's own KV at eVTXO creation; the gate
-    // resolves them from there. Gating is a no-op if the engine fails to init.
-    let contract_registry: Box<dyn contract::ContractRegistry> =
-        Box::new(contract::KvRegistry::new(shared.persistence.clone()));
-    match contract::ContractHost::new(contract_registry) {
-        Ok(host) => {
-            tracing::info!("Contract engine ready");
-            shared.contract_host = Some(Arc::new(host));
-        }
-        Err(e) => tracing::warn!("Contract engine disabled: {e}"),
+    if cfg.service_endpoints.is_empty() {
+        tracing::info!("No SERVICE_ENDPOINTS configured; service enrolments will not be delivered");
+    } else {
+        tracing::info!(
+            "Service endpoints configured for {} service(s)",
+            cfg.service_endpoints.len()
+        );
     }
+    shared.service_endpoints = cfg.service_endpoints.clone();
 
     // WebAuthn ceremony server: the cosigner is its own Relying Party (register/assert + session
     // token mint). Disabled (None) if the RP config is invalid, rather than aborting startup.
@@ -153,7 +150,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let shared = Arc::new(shared);
 
-    // The cosigner runs natively in-process (no WASM guest); only the contract is sandboxed WASM.
     let registry = cosigner::CosignerRegistry::new(shared.clone())?;
 
     // Populate cross-user secondary indices from persistence so restore /
@@ -291,10 +287,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // Contract-creation coordinator: refreshes V onto the service pairing INSIDE the wallet's
-    // guest (Plan A — the host never reads V), so it needs the actor registry to dispatch.
-    let contract_mgr = contract::ContractManager::new(shared.clone(), registry.clone());
-
     // REST server.
     let rest_port = args.port.unwrap_or_else(|| {
         std::env::var("PORT")
@@ -305,7 +297,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app_state = rest_api::AppState {
         registry: registry.clone(),
         onboarding_manager: onboarding_mgr.clone(),
-        contract_manager: contract_mgr.clone(),
         server_info: std::sync::Arc::new(cosigner_runtime::wallet_proto::GetServerInfoResponse {
             bitcoin_network: cfg.bitcoin_network.clone(),
         }),

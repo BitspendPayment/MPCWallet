@@ -4,7 +4,6 @@
 pub mod auth;
 pub mod bitcoin;
 pub mod config;
-pub mod contract;
 pub mod cosigner;
 pub mod esplora;
 pub mod events;
@@ -12,6 +11,7 @@ pub mod fcm_client;
 pub mod onboarding;
 pub mod kv_store;
 pub mod rest_api;
+pub mod service_delivery;
 pub mod shared;
 pub mod telemetry;
 pub mod vtxo_stream;

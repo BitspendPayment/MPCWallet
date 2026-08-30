@@ -75,9 +75,6 @@ class AttestedWalletApi implements WalletApi {
   @override Future<DKGStep1Response> dKGStep1(DKGStep1Request r) => _inner.dKGStep1(r);
   @override Future<DKGStep2Response> dKGStep2(DKGStep2Request r) => _inner.dKGStep2(r);
   @override Future<DKGStep3Response> dKGStep3(DKGStep3Request r) => _inner.dKGStep3(r);
-  @override Future<ContractCreateResponse> contractCreate(ContractCreateRequest r) => _inner.contractCreate(r);
-  @override Future<EvtxoPendingSharesResponse> evtxoPendingShares(EvtxoPendingSharesRequest r) => _inner.evtxoPendingShares(r);
-  @override Future<EvtxoAckShareResponse> evtxoAckShare(EvtxoAckShareRequest r) => _inner.evtxoAckShare(r);
   @override Future<SignStep1Response> signStep1(SignStep1Request r, {String? routeGroupKeyHex}) => _inner.signStep1(r, routeGroupKeyHex: routeGroupKeyHex);
   @override Future<SignStep2Response> signStep2(SignStep2Request r, {String? routeGroupKeyHex}) => _inner.signStep2(r, routeGroupKeyHex: routeGroupKeyHex);
   @override Future<GetArkInfoResponse> getArkInfo(GetArkInfoRequest r) => _inner.getArkInfo(r);
@@ -91,6 +88,9 @@ class AttestedWalletApi implements WalletApi {
   @override Future<SettleDelegateResponse> settleDelegate(SettleDelegateRequest r) => _inner.settleDelegate(r);
   @override Future<SubmitArkSendResponse> submitArkSend(SubmitArkSendRequest r) => _inner.submitArkSend(r);
   // Request-to-pay — plain delegation; the attestation guarantees apply to the transport.
+  @override Future<ServiceEnrollResponse> serviceEnroll(ServiceEnrollRequest r) => _inner.serviceEnroll(r);
+  @override Future<ServiceListResponse> serviceList(ServiceListRequest r) => _inner.serviceList(r);
+  @override Future<ServiceRevokeResponse> serviceRevoke(ServiceRevokeRequest r) => _inner.serviceRevoke(r);
   @override Future<ContactAddResponse> contactAdd(ContactAddRequest r) => _inner.contactAdd(r);
   @override Future<ContactRemoveResponse> contactRemove(ContactRemoveRequest r) => _inner.contactRemove(r);
   @override Future<ContactListResponse> contactList(ContactListRequest r) => _inner.contactList(r);

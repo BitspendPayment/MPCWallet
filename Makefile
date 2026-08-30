@@ -15,10 +15,11 @@
 #    make release-testers-remove TESTERS="a@x.com"
 # ═══════════════════════════════════════════════════════════════════════════════
 
-.PHONY: e2e up down \
+.PHONY: service-sdk-build service-sdk-test rebalancer-build rebalancer-test rebalancer-run service-test \
+	e2e up down \
 	bob-up bob-down bob-send \
 	ffi-build ffi-test ffi-android ffi-android-arm32 ffi-android-x86_64 ffi-android-all \
-	contracts-build runtime-build \
+	runtime-build \
 	regtest-up regtest-down bitcoin-init mine-loop adb-reverse \
 	runtime-run runtime-stop \
 	arkd-up arkd-down arkd-init db-reset \
@@ -27,7 +28,7 @@
 	stress-test load-test \
 	signet-hardware-ark signet-down e2e-mutinynet e2e-mutinynet-ark \
 	e2e-test e2e-ark-test regtest regtest-ark regtest-down \
-	cli cli-build \
+	cli cli-build version \
 	release release-apk release-apk-fat release-testers-add release-testers-remove
 
 # ── Variables ─────────────────────────────────────────────────────────────────
@@ -48,17 +49,44 @@ SERVER            ?= 127.0.0.1:7074
 # (the com.vtxos.app client's mobilesdk_app_id).
 FIREBASE_APP_ID  ?= 1:575541915148:android:03d0cade16cd0393378829
 FIREBASE_PROJECT ?= vtxos-7afb3
-TESTERS_GROUP    ?= internal
-RELEASE_NOTES    ?= Internal build
+TESTERS_GROUP    ?= friends
 
-# Override the app version at build time without editing pubspec.yaml.
-#   make release VERSION=1.2.0 BUILD_NUMBER=5 RELEASE_NOTES="..."
-# VERSION sets --build-name (the x.y.z shown to testers); BUILD_NUMBER sets
-# --build-number (the integer Android versionCode, must increase each upload).
-# Leave either empty to fall back to the value in app/pubspec.yaml.
-VERSION      ?=
-BUILD_NUMBER ?=
-VERSION_FLAGS = $(if $(VERSION),--build-name=$(VERSION)) $(if $(BUILD_NUMBER),--build-number=$(BUILD_NUMBER))
+# ── Versioning ────────────────────────────────────────────────────────────────
+# VERSION sets --build-name (the x.y.z testers see); BUILD_NUMBER sets
+# --build-number (the integer Android versionCode).
+#
+#   make release                          # versioned automatically, see below
+#   make release VERSION=1.2.0            # pin the name, auto build number
+#   make release VERSION=1.2.0 BUILD_NUMBER=57
+#
+# The name comes from pubspec.yaml so there is ONE place to bump a release.
+#
+# The build number is the commit count, NOT pubspec's `+1`. versionCode must
+# strictly increase on every upload: Android refuses to install a lower-or-equal
+# one over an existing install, and App Distribution shows collisions as the
+# same release. pubspec pins it at 1 forever, so every build after the first
+# silently failed to install for anyone who already had the app. The commit
+# count is monotonic, unique per commit, and needs no bookkeeping.
+PUBSPEC_VERSION = $(shell sed -n 's/^version: *\([0-9][^+ ]*\).*/\1/p' app/pubspec.yaml)
+VERSION       ?= $(PUBSPEC_VERSION)
+BUILD_NUMBER  ?= $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+GIT_SHA        = $(shell git rev-parse --short HEAD 2>/dev/null)
+VERSION_FLAGS  = --build-name=$(VERSION) --build-number=$(BUILD_NUMBER)
+
+# Notes default to the version plus the commit being shipped, so a build is
+# always traceable back to a revision. Override for anything human-facing.
+RELEASE_NOTES ?= $(VERSION) ($(BUILD_NUMBER)) $(GIT_SHA) — $(shell git log -1 --pretty=%s 2>/dev/null)
+
+# What the next `make release` would ship. Cheap sanity check before uploading.
+version:
+	@echo "version name : $(VERSION)"
+	@echo "version code : $(BUILD_NUMBER)"
+	@echo "commit       : $(GIT_SHA)"
+	@echo "  (defaults: name from app/pubspec.yaml = $(PUBSPEC_VERSION); code from git commit count)"
+	@echo "notes        : $(RELEASE_NOTES)"
+	@echo "target       : $(FIREBASE_PROJECT) / group '$(TESTERS_GROUP)'"
+	@git diff --quiet HEAD 2>/dev/null \
+		|| echo "WARNING: working tree is dirty — this build includes uncommitted changes"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  PRIMARY COMMANDS
@@ -191,20 +219,6 @@ ffi-test:
 # Server & cosigner
 
 # WASI sysroot for cross-compiling the C deps (secp256k1-sys) of the wasm guest.
-# System clang targeting wasm32-wasip2 has no sysroot, so its stdint.h falls through
-# to /usr/include (glibc) and fails on bits/libc-header-start.h. wasi-sdk 24 ships an
-# LLVM-18 sysroot matching the system clang-18; point clang at it via --sysroot.
-contracts-build:
-	@echo "Building example WASM contracts (wasm32-wasip2 components)..."
-	cd contracts/examples/spending-limit && cargo build --release
-	@echo "Built: contracts/examples/spending-limit/target/wasm32-wasip2/release/spending_limit.wasm"
-	cd contracts/examples/oracle-gate && cargo build --release
-	@echo "Built: contracts/examples/oracle-gate/target/wasm32-wasip2/release/oracle_gate.wasm"
-	cd contracts/examples/oracle-gate-template && cargo build --release
-	@echo "Built: oracle-gate-template (Phase 2 template, imports oracle:gate/config)"
-	cd contracts/examples/config-provider && cargo build --release
-	@echo "Built: config-provider (Phase 2 provider stub, patchable config slot)"
-
 runtime-build:
 	@echo "Building server..."
 	cd cosigner-runtime && cargo build --release
@@ -287,6 +301,37 @@ proto:
 threshold-test:
 	@echo "Running threshold tests..."
 	cd crates/threshold && cargo test --features std
+
+# --- Services -------------------------------------------------------------
+# The service-share invariant spans three crates (threshold derives the polynomial id,
+# cosigner-runtime enforces uniqueness, service-sdk re-derives and refuses duplicates), so
+# `service-test` runs all of them together — a change that breaks the invariant usually only
+# shows up at one of the seams.
+service-sdk-build:
+	cargo build --manifest-path crates/service-sdk/Cargo.toml
+
+service-sdk-test:
+	@echo "Running service SDK tests..."
+	cargo test --manifest-path crates/service-sdk/Cargo.toml
+
+rebalancer-build:
+	cargo build --manifest-path services/rebalancer/Cargo.toml
+
+rebalancer-test:
+	@echo "Running rebalancer tests..."
+	cargo test --manifest-path services/rebalancer/Cargo.toml
+
+# Paper venue, mock price: places no real hedge. See services/rebalancer/src/funding.rs for
+# what a real deployment still needs underneath.
+rebalancer-run: rebalancer-build
+	ALLOW_INSECURE_COSIGNER=1 \
+	COSIGNER_URL=$${COSIGNER_URL:-http://127.0.0.1:7074} \
+	TARGET_USD_CENTS=$${TARGET_USD_CENTS:-10000} \
+	cargo run --manifest-path services/rebalancer/Cargo.toml --bin rebalancer
+
+service-test: threshold-test service-sdk-test rebalancer-test
+	@echo "Running cosigner-side invariant tests..."
+	cargo test --manifest-path cosigner-runtime/Cargo.toml --test service_poly_invariant_test
 
 flutter: ffi-android
 	cd app && flutter run
@@ -410,9 +455,9 @@ release-apk-fat: ffi-android-all
 
 # Build + ship to Firebase App Distribution. Overrides:
 #   make release RELEASE_NOTES="bug fix" TESTERS_GROUP=friends
-release: release-apk
+release: version release-apk
 	@command -v firebase >/dev/null || { echo "firebase CLI missing — run: npm i -g firebase-tools && firebase login"; exit 1; }
-	@echo "==> Distributing to Firebase group '$(TESTERS_GROUP)'..."
+	@echo "==> Distributing $(VERSION) ($(BUILD_NUMBER)) to Firebase group '$(TESTERS_GROUP)'..."
 	firebase appdistribution:distribute \
 		app/build/app/outputs/flutter-apk/app-release.apk \
 		--app $(FIREBASE_APP_ID) \

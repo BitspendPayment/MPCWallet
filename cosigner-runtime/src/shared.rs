@@ -5,7 +5,6 @@
 use std::sync::Arc;
 
 use crate::auth::session::SessionAuthority;
-use crate::contract::ContractHost;
 use crate::events::EventBus;
 use crate::fcm_client::FcmClient;
 use crate::kv_store::KvStore;
@@ -17,12 +16,9 @@ pub struct SharedServices {
     /// using its own Ed25519 keypair (`WEBAUTH_TOKEN_SECRET`). When disabled (no secret) auth falls
     /// back to Schnorr only.
     pub session_authority: Arc<SessionAuthority>,
-    /// Per-user event bus (Phase 3): publish-side for `contract_share` etc., subscribed by the SSE
+    /// Per-user event bus: publish-side for live user events, subscribed by the SSE
     /// event stream (`/u/{vk}/events`) so a backend user can react in real time.
     pub events: EventBus,
-    /// Off-chain contract engine for eVTXO programmability. `None` disables
-    /// contract gating (no contracts directory / engine init failed).
-    pub contract_host: Option<Arc<ContractHost>>,
     /// WebAuthn ceremony server (the cosigner is its own Relying Party). Runs register/assert and
     /// mints a session token on success. `None` when the RP config is invalid (feature disabled).
     pub webauthn: Option<Arc<WebauthnServer>>,
@@ -38,6 +34,10 @@ pub struct SharedServices {
     /// Per-user actor idle threshold (seconds). Read by the eviction sweep
     /// in the auto-settle tick task.
     pub actor_idle_threshold_secs: i64,
+    /// Where to push a freshly dealt service half, keyed by service identity hex. Populated
+    /// from `SERVICE_ENDPOINTS`; see `ServerConfig::service_endpoints` for why this is operator
+    /// config rather than a request field.
+    pub service_endpoints: std::collections::BTreeMap<String, String>,
 }
 
 impl SharedServices {
@@ -52,13 +52,13 @@ impl SharedServices {
         Self {
             persistence,
             session_authority,
-            contract_host: None,
             webauthn: None,
             events: EventBus::new(),
             asp_client: Arc::new(tokio::sync::Mutex::new(asp_client)),
             fcm,
             auto_settle_safety_margin_secs,
             actor_idle_threshold_secs,
+            service_endpoints: Default::default(),
         }
     }
 }

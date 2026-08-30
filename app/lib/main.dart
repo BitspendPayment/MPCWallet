@@ -7,7 +7,6 @@ import 'screens/onboarding/server_connect_screen.dart';
 import 'screens/onboarding/dkg_progress_screen.dart';
 import 'screens/onboarding/passkey_setup_screen.dart';
 import 'screens/onboarding/wallet_ready_screen.dart';
-import 'screens/services/services_screen.dart';
 import 'screens/spending/send_screen.dart';
 import 'screens/spending/review_screen.dart';
 import 'screens/spending/signing_screen.dart';
@@ -88,7 +87,7 @@ GoRouter _buildRouter(MpcService mpc) => GoRouter(
   redirect: (context, state) {
     final path = state.uri.path;
     final isArkRoute =
-        path == '/ark' || path.startsWith('/ark/') || path == '/services';
+        path == '/ark' || path.startsWith('/ark/');
     if (isArkRoute && mpc.offlineMode) return '/';
     return null;
   },
@@ -166,10 +165,6 @@ GoRoute(
     GoRoute(
       path: '/ark/board',
       builder: (context, state) => const ArkBoardScreen(),
-    ),
-    GoRoute(
-      path: '/services',
-      builder: (context, state) => const ServicesScreen(),
     ),
     GoRoute(
       path: '/settings',

@@ -1,13 +1,13 @@
 //! Per-user event bus (Phase 3).
 //!
-//! A cosigner-side pub/sub so a user can SUBSCRIBE to events about itself and react in real time —
-//! chiefly *"a contract share just landed in your inbox"*. One published event fans out to whatever
-//! delivery channels are attached: an SSE HTTP stream (for a BACKEND user that holds a connection
-//! open — e.g. a "service" running server-side) and, separately, an FCM push (for a mobile app).
+//! A cosigner-side pub/sub so a user can SUBSCRIBE to events about itself and react in real time.
+//! One published event fans out to whatever delivery channels are attached: an SSE HTTP stream (for
+//! a BACKEND user that holds a connection open — e.g. a service running server-side) and,
+//! separately, an FCM push (for a mobile app).
 //!
-//! Semantics: a LIVE, best-effort nudge — NOT a durable queue. The durable source of truth stays the
-//! inbox (`pending_contract_shares`). A subscriber that connects late, lags, or reconnects simply
-//! drains `evtxo/pending` to catch up, then listens.
+//! Semantics: a LIVE, best-effort nudge — NOT a durable queue. Every event has a durable record
+//! elsewhere (the sealed state); a subscriber that connects late, lags, or reconnects re-reads that
+//! record to catch up, then listens.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -18,11 +18,6 @@ use tokio::sync::broadcast;
 /// An event the cosigner emits about a particular user (keyed by the user's verifying key hex).
 #[derive(Debug, Clone)]
 pub enum CosignerEvent {
-    /// A contract share was relayed into this user's inbox (someone created a contract WITH it).
-    ContractShare {
-        spk_hex: String,
-        contract_id_hex: String,
-    },
     /// An allowlisted contact asked this user to pay. The durable record is the intent sealed in
     /// the user's sealed state; this is just the live nudge.
     PaymentRequest {
@@ -36,7 +31,6 @@ impl CosignerEvent {
     /// SSE event name (the `event:` line).
     pub fn kind(&self) -> &'static str {
         match self {
-            CosignerEvent::ContractShare { .. } => "contract_share",
             CosignerEvent::PaymentRequest { .. } => "payment_request",
         }
     }
@@ -44,15 +38,6 @@ impl CosignerEvent {
     /// SSE `data:` payload (JSON).
     pub fn data_json(&self) -> String {
         match self {
-            CosignerEvent::ContractShare {
-                spk_hex,
-                contract_id_hex,
-            } => json!({
-                "type": "contract_share",
-                "evtxo_script_pubkey": spk_hex,
-                "contract_id": contract_id_hex,
-            })
-            .to_string(),
             CosignerEvent::PaymentRequest {
                 id,
                 from_vk_hex,
@@ -79,8 +64,8 @@ impl EventBus {
     pub fn new() -> Self {
         Self {
             subs: Mutex::new(HashMap::new()),
-            // Small per-user buffer; a slow subscriber that overruns it gets `Lagged` and catches up
-            // via `evtxo/pending` rather than blocking the publisher.
+            // Small per-user buffer; a slow subscriber that overruns it gets `Lagged` and catches
+            // up from the durable record rather than blocking the publisher.
             capacity: 64,
         }
     }

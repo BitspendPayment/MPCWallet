@@ -1,5 +1,5 @@
-//! Shared FROST ceremony machinery for the DKG (`onboarding`) and contract-create
-//! (`contract`) flows. Holds the round state as REAL `threshold` structs (keyed by
+//! Shared FROST ceremony machinery for the DKG (`onboarding`) flow. Holds the round state as
+//! REAL `threshold` structs (keyed by
 //! `Identifier`, which is `Ord` but not `Hash`, so `BTreeMap`), converting to/from
 //! JSON only at the wire boundary (proto `map<string,string>` of id_hex → pkg_json).
 

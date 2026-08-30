@@ -52,7 +52,7 @@ const MAILBOX_CAPACITY: usize = 256;
 pub struct CosignerRegistry {
     shared: Arc<SharedServices>,
     /// Active actors keyed by user_id_hex. Each owns a native `CosignerActor` (keys + FROST
-    /// ceremony + per-user state) — the cosigner runs in-process; only the contract is WASM.
+    /// ceremony + per-user state) — the cosigner runs in-process.
     actors: DashMap<String, OwnedHandle>,
     /// Reverse index: vtxo_script_hex → user_id_hex. Used by the global VTXO
     /// stream to route notifications to the right actor without scanning
@@ -79,7 +79,7 @@ impl CosignerRegistry {
         // Actors are keyed by their GROUP KEY (cosigner_id). A request addressed by a
         // member's verifying share resolves to the group's actor via `policy_owner_idx`,
         // so every member of a group shares one actor (one for a normal wallet, many
-        // for a contract). `CosignerState.cosigner_id` is then this canonical id.
+        // for a pairing). `CosignerState.cosigner_id` is then this canonical id.
         let canonical = self
             .shared
             .persistence
@@ -300,24 +300,28 @@ pub async fn run_cosigner(
             break;
         }
 
-        // Intercept signing: every spend (script-path, key-path tweak, contract) routes
+        // Intercept signing: every spend (script-path, key-path tweak) routes
         // through the native-async actor where the keys live. Runs outside the
         // catch_unwind below because the actor path surfaces errors as replies.
         let cmd = match cmd {
-            CosignerCommand::ContractRefresh {
+            CosignerCommand::ServiceRefresh {
                 receiver_id_hex,
                 receiver_partial_point,
                 wallet_id_hex,
                 a_at_cosigner,
                 min_signers,
+                service_id,
+                policy,
                 reply,
             } => {
-                route_contract_refresh(
+                route_service_refresh(
                     receiver_id_hex,
                     receiver_partial_point,
                     wallet_id_hex,
                     a_at_cosigner,
                     min_signers,
+                    service_id,
+                    policy,
                     reply,
                     &state,
                     &shared,
@@ -326,6 +330,45 @@ pub async fn run_cosigner(
                     &mut actor_policy_installed,
                 )
                 .await;
+                continue;
+            }
+            CosignerCommand::ListServicePairings { reply } => {
+                if let Err(e) =
+                    ensure_actor(&state, &shared, &registry, &mut actor, &mut actor_policy_installed)
+                        .await
+                {
+                    let _ = reply.send(Err(e));
+                    continue;
+                }
+                let _ = reply.send(Ok(actor.as_ref().unwrap().list_service_pairings()));
+                continue;
+            }
+            CosignerCommand::RemoveServicePairing {
+                verifying_share_hex,
+                reply,
+            } => {
+                if let Err(e) =
+                    ensure_actor(&state, &shared, &registry, &mut actor, &mut actor_policy_installed)
+                        .await
+                {
+                    let _ = reply.send(Err(e));
+                    continue;
+                }
+                match actor.as_mut().unwrap().remove_service_pairing(&verifying_share_hex) {
+                    Ok(removed) => {
+                        // Seal before replying: a revocation the caller believes succeeded must
+                        // not come back after a restart.
+                        if removed {
+                            let gk = state.lock().cosigner_id.clone();
+                            persist_actor_snapshot(actor.as_mut().unwrap(), &shared, &gk).await;
+                        }
+                        let _ = reply.send(Ok(removed));
+                    }
+                    Err(e) => {
+                        let _ = reply.send(Err(Status::internal(e)));
+                        reseat_actor(&mut actor, &mut actor_policy_installed);
+                    }
+                }
                 continue;
             }
             CosignerCommand::SignStep1 { req, reply } => {
@@ -406,13 +449,12 @@ pub async fn run_cosigner(
                 continue;
             }
             // Seed freshly-computed policy material into the actor and seal it (onboarding /
-            // contract-create). After this the keys live in the actor's sealed snapshot.
+            // service enrolment). After this the keys live in the actor's sealed snapshot.
             CosignerCommand::SeedPolicy {
                 key_package_json,
                 public_key_package_json,
                 user_signing_identifier_hex,
                 server_dkg_secret_hex,
-                contract_pairing,
                 reply,
             } => {
                 route_seed_policy(
@@ -420,25 +462,6 @@ pub async fn run_cosigner(
                     public_key_package_json,
                     user_signing_identifier_hex,
                     server_dkg_secret_hex,
-                    contract_pairing,
-                    reply,
-                    &state,
-                    &shared,
-                    &registry,
-                    &mut actor,
-                    &mut actor_policy_installed,
-                )
-                .await;
-                continue;
-            }
-            CosignerCommand::AddContract {
-                spk_hex,
-                contract_policy_json,
-                reply,
-            } => {
-                route_add_contract(
-                    spk_hex,
-                    contract_policy_json,
                     reply,
                     &state,
                     &shared,
@@ -603,17 +626,19 @@ async fn restore_actor_snapshot(
     }
 }
 
-/// Route `ContractRefresh` (Plan A): ensure the wallet actor's actor is up + its policy
+/// Route `ServiceRefresh`: ensure the wallet's actor is up + its policy
 /// restored/installed, then refresh `V` onto the pairing INSIDE the actor. The host never reads
 /// `V`; it only relays the public PKP + the (transient, never-persisted) pairing key package.
 #[allow(clippy::too_many_arguments)]
-async fn route_contract_refresh(
+async fn route_service_refresh(
     receiver_id_hex: String,
     receiver_partial_point: Vec<u8>,
     wallet_id_hex: String,
     a_at_cosigner: Vec<u8>,
     min_signers: u32,
-    reply: oneshot::Sender<Result<crate::cosigner::command::ContractRefreshOutput, Status>>,
+    service_id: Vec<u8>,
+    policy: crate::cosigner::types::ServicePolicy,
+    reply: oneshot::Sender<Result<crate::cosigner::command::ServiceRefreshOutput, Status>>,
     state: &Arc<Mutex<CosignerState>>,
     shared: &Arc<SharedServices>,
     registry: &Arc<CosignerRegistry>,
@@ -624,31 +649,39 @@ async fn route_contract_refresh(
         let _ = reply.send(Err(e));
         return;
     }
-    let result = actor.as_mut().unwrap().contract_refresh(
+    let result = actor.as_mut().unwrap().service_refresh(
         &receiver_id_hex,
         &receiver_partial_point,
         &wallet_id_hex,
         &a_at_cosigner,
         min_signers as usize,
+        &service_id,
+        policy,
     );
     match result {
         Ok(refreshed) => {
-            let _ = reply.send(Ok(crate::cosigner::command::ContractRefreshOutput {
+            // Seal BEFORE replying. `service_refresh` just installed the cosigner's counter-share
+            // into the actor's pairing map; handing the service its half while that record is
+            // still only in memory would leave a service holding a share the cosigner forgets on
+            // the next restart — a silently dead pairing.
+            let group_key = state.lock().cosigner_id.clone();
+            persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
+            let _ = reply.send(Ok(crate::cosigner::command::ServiceRefreshOutput {
                 pairing_public_key_package_json: refreshed.pairing_public_key_package_json,
                 receiver_half: refreshed.receiver_half,
-                my_key_package_json: refreshed.my_key_package_json,
+                service_verifying_share_hex: refreshed.service_verifying_share_hex,
             }));
         }
         Err(msg) => {
-            let _ = reply.send(Err(Status::internal(format!("contract_refresh: {msg}"))));
+            let _ = reply.send(Err(Status::internal(format!("service_refresh: {msg}"))));
             reseat_actor(actor, actor_policy_installed);
         }
     }
 }
 
 /// Route `SignStep1`: spends go to the native-async actor where the keys live (cooperative Ark
-/// spends are always script-path; contract eVTXO spends route through their pairing actor). The
-/// contract gate is enforced inside the actor's sign step2.
+/// spends are always script-path). A `{service, cosigner}` pairing routes to its own actor, which
+/// enforces its sealed ceiling before producing a share.
 #[allow(clippy::too_many_arguments)]
 async fn route_sign_step1(
     req: SignStep1Request,
@@ -713,8 +746,6 @@ async fn route_sign_step1(
                 &public_key_package_json,
                 user_identifier_hex.as_deref(),
                 server_dkg_secret_hex,
-                None,
-                String::new(),
             );
             match result {
                 Ok(()) => *actor_policy_installed = true,
@@ -744,7 +775,6 @@ async fn route_sign_step1(
         full_transaction: req.full_transaction,
         timestamp_ms: req.timestamp_ms,
         script_path_spend: req.script_path_spend,
-        ark_tx: req.ark_tx,
     };
     match actor.as_mut().unwrap().sign_step1(wire) {
         Ok(out) => {
@@ -804,7 +834,7 @@ async fn route_sign_step2(
     }
 }
 
-/// Seed freshly-computed policy material (from onboarding / contract-create) into the
+/// Seed freshly-computed policy material (from onboarding / service enrolment) into the
 /// per-actor actor and seal it into the actor's snapshot. After this the keys live in the
 /// actor's sealed blob, so later cold spawns restore them without a host-side plaintext key.
 #[allow(clippy::too_many_arguments)]
@@ -814,7 +844,6 @@ async fn route_seed_policy(
     public_key_package_json: String,
     user_signing_identifier_hex: Option<String>,
     server_dkg_secret_hex: Option<String>,
-    contract_pairing: Option<crate::cosigner::types::ContractPairing>,
     reply: oneshot::Sender<Result<(), Status>>,
     state: &Arc<Mutex<CosignerState>>,
     shared: &Arc<SharedServices>,
@@ -824,7 +853,7 @@ async fn route_seed_policy(
 ) {
     let group_key = state.lock().cosigner_id.clone();
     // SeedPolicy is only ever called for a FRESH actor (onboarding wallet, or a new pairing actor),
-    // so there are no prior contracts. The secret key + `contract_pairing` install into the actor +
+    // The secret key + `service_pairing` install into the actor +
     // seal; the host keeps only this routing projection.
     {
         let mut s = state.lock();
@@ -837,8 +866,6 @@ async fn route_seed_policy(
                 key_package_json,
                 public_key_package_json,
             },
-            contracts: Default::default(),
-            contract_pairing,
         });
     }
     if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
@@ -849,56 +876,6 @@ async fn route_seed_policy(
     let _ = reply.send(Ok(()));
 }
 
-/// Add a gate `ContractPolicy` to the WALLET actor's sealed `contracts` projection + re-seal
-/// (Plan A: the actor is the single source — no host `policies` tree). Updates the host
-/// `policy_state.contracts` (so `detect_contract_spend` sees it) and pushes the full map to the
-/// actor via `SetContracts`, then snapshots.
-#[allow(clippy::too_many_arguments)]
-async fn route_add_contract(
-    spk_hex: String,
-    contract_policy_json: String,
-    reply: oneshot::Sender<Result<(), Status>>,
-    state: &Arc<Mutex<CosignerState>>,
-    shared: &Arc<SharedServices>,
-    registry: &Arc<CosignerRegistry>,
-    actor: &mut Option<CosignerActor>,
-    actor_policy_installed: &mut bool,
-) {
-    if let Err(e) = ensure_actor(state, shared, registry, actor, actor_policy_installed).await {
-        let _ = reply.send(Err(e));
-        return;
-    }
-    let group_key = state.lock().cosigner_id.clone();
-    let contract_policy: crate::cosigner::state::ContractPolicy =
-        match serde_json::from_str(&contract_policy_json) {
-            Ok(p) => p,
-            Err(e) => {
-                let _ = reply.send(Err(Status::invalid_argument(format!(
-                    "bad contract policy: {e}"
-                ))));
-                return;
-            }
-        };
-    let contracts_json = {
-        let mut st = state.lock();
-        match st.policy_state.as_mut() {
-            Some(ps) => {
-                ps.contracts.insert(spk_hex, contract_policy);
-                serde_json::to_string(&ps.contracts).unwrap_or_default()
-            }
-            None => {
-                let _ = reply.send(Err(Status::not_found("no policy state")));
-                return;
-            }
-        }
-    };
-    if let Err(e) = actor.as_mut().unwrap().set_contracts(contracts_json) {
-        let _ = reply.send(Err(Status::internal(format!("SetContracts: {e}"))));
-        return;
-    }
-    persist_actor_snapshot(actor.as_mut().unwrap(), shared, &group_key).await;
-    let _ = reply.send(Ok(()));
-}
 
 // ---------------------------------------------------------------------------
 // Request-to-pay. Each mutates the actor's SEALED state, so each re-persists the snapshot.
@@ -1164,12 +1141,10 @@ async fn ensure_actor(
                         p.normal_policy.public_key_package_json.clone(),
                         p.user_signing_identifier_hex.clone(),
                         p.server_dkg_secret_hex.clone(),
-                        p.contract_pairing.clone(),
-                        serde_json::to_string(&p.contracts).unwrap_or_default(),
                     )
                 })
             };
-            let Some((gk, kpj, pkpj, usih, secret, pairing, contracts_json)) = material else {
+            let Some((gk, kpj, pkpj, usih, secret)) = material else {
                 return Err(Status::not_found(format!("no policy for {group_key}")));
             };
             let result = actor.as_mut().unwrap().install_policy(
@@ -1178,8 +1153,6 @@ async fn ensure_actor(
                 &pkpj,
                 usih.as_deref(),
                 secret,
-                pairing,
-                contracts_json,
             );
             if let Err(e) = result {
                 reseat_actor(actor, actor_policy_installed);
@@ -1194,19 +1167,13 @@ async fn ensure_actor(
 
 /// Populate the host `policy_state` projection from the native actor (Plan A: the actor's seal is
 /// the single source of truth — there is no `policies` sled tree). The host keeps no secret key
-/// (`key_package_json` blank, `server_dkg_secret_hex` None); `contract_pairing` stays in the actor.
+/// (`key_package_json` blank, `server_dkg_secret_hex` None); `service_pairing` stays in the actor.
 async fn load_policy_state_from_actor(
     state: &Arc<Mutex<CosignerState>>,
     actor: &mut CosignerActor,
 ) -> Result<(), Status> {
     match actor.public_policy() {
         Ok(pp) => {
-            let contracts = if pp.contracts_json.is_empty() {
-                Default::default()
-            } else {
-                serde_json::from_str(&pp.contracts_json)
-                    .map_err(|e| Status::internal(format!("bad contracts json: {e}")))?
-            };
             let mut st = state.lock();
             st.policy_state = Some(crate::cosigner::state::PolicyState {
                 cosigner_id: pp.group_key,
@@ -1217,8 +1184,6 @@ async fn load_policy_state_from_actor(
                     key_package_json: String::new(),
                     public_key_package_json: pp.public_key_package_json,
                 },
-                contracts,
-                contract_pairing: None,
             });
             Ok(())
         }
@@ -1756,33 +1721,6 @@ pub async fn push_payment_request(
     }
 }
 
-/// Phase 3: notify a (mobile) receiver that a contract share is waiting in its inbox. Mirrors
-/// `push_boarding_deposit`; the app reacts by picking up + assembling the share.
-pub async fn push_contract_share(
-    fcm: &std::sync::Arc<crate::fcm_client::FcmClient>,
-    user_id_hex: &str,
-    tokens: &[DeviceToken],
-    spk_hex: &str,
-) {
-    if tokens.is_empty() {
-        return;
-    }
-    let mut data = std::collections::HashMap::new();
-    data.insert("type".to_string(), "contract_share".to_string());
-    data.insert("user_id".to_string(), user_id_hex.to_string());
-    data.insert("evtxo_script_pubkey".to_string(), spk_hex.to_string());
-    for token in tokens {
-        if let Err(e) = fcm
-            .send_notification(&token.fcm_token, "Contract waiting", "Tap to accept", &data)
-            .await
-        {
-            tracing::warn!(
-                "[{user_id_hex}] contract-share push to {} failed: {e}",
-                token.platform
-            );
-        }
-    }
-}
 
 /// User-visible "tap to board" notification for a detected boarding deposit.
 async fn push_boarding_deposit(

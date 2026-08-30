@@ -388,7 +388,6 @@ class SignStep1Request extends $pb.GeneratedMessage {
     $core.List<$core.int>? fullTransaction,
     $fixnum.Int64? timestampMs,
     $core.bool? scriptPathSpend,
-    $core.List<$core.int>? arkTx,
   }) {
     final $result = create();
     if (userId != null) {
@@ -415,9 +414,6 @@ class SignStep1Request extends $pb.GeneratedMessage {
     if (scriptPathSpend != null) {
       $result.scriptPathSpend = scriptPathSpend;
     }
-    if (arkTx != null) {
-      $result.arkTx = arkTx;
-    }
     return $result;
   }
   SignStep1Request._() : super();
@@ -433,7 +429,6 @@ class SignStep1Request extends $pb.GeneratedMessage {
     ..a<$core.List<$core.int>>(6, _omitFieldNames ? '' : 'fullTransaction', $pb.PbFieldType.OY)
     ..aInt64(7, _omitFieldNames ? '' : 'timestampMs')
     ..aOB(8, _omitFieldNames ? '' : 'scriptPathSpend')
-    ..a<$core.List<$core.int>>(10, _omitFieldNames ? '' : 'arkTx', $pb.PbFieldType.OY)
     ..hasRequiredFields = false
   ;
 
@@ -529,21 +524,6 @@ class SignStep1Request extends $pb.GeneratedMessage {
   $core.bool hasScriptPathSpend() => $_has(7);
   @$pb.TagNumber(8)
   void clearScriptPathSpend() => clearField(8);
-
-  /// share (user or service); routing is by the URL group_key.
-  /// Service-driven eVTXO spend THROUGH arkd (Tier 2): the second leg (the `ark_tx`
-  /// that spends the checkpoint output). `full_transaction` carries the checkpoint
-  /// PSBT (leg 1, spends the eVTXO). When set, a pairing actor's conditioning verifies
-  /// `message_to_sign` is the sighash of leg 1 OR leg 2, with leg 2 chained to leg 1's
-  /// checkpoint. Empty for an on-chain single-leg spend (the cosigner overrides the msg).
-  @$pb.TagNumber(10)
-  $core.List<$core.int> get arkTx => $_getN(8);
-  @$pb.TagNumber(10)
-  set arkTx($core.List<$core.int> v) { $_setBytes(8, v); }
-  @$pb.TagNumber(10)
-  $core.bool hasArkTx() => $_has(8);
-  @$pb.TagNumber(10)
-  void clearArkTx() => clearField(10);
 }
 
 class SignStep1Response_Commitment extends $pb.GeneratedMessage {
@@ -3231,34 +3211,19 @@ class RegisterDeviceTokenResponse extends $pb.GeneratedMessage {
 }
 
 /// ---------------------------------------------------------------------------
-/// Contract creation (PEER model). NO reshare and NO new key: the wallet's existing
-/// 2-of-2 key V is reused; the contract is enforced by the cosigner gate (WASM
-/// evaluate + verifying-share allowlist). A single key-preserving REFRESH of V onto a
-/// {receiver, cosigner} pairing lets the chosen RECEIVER (another user, identified by
-/// its verifying key) co-sign V independently. Both halves of the receiver's share are
-/// ECIES-encrypted to receiver_vk and held in the receiver's inbox: the wallet's
-/// a@receiver (ecies_a_at_receiver, in this request) and the cosigner's b@receiver
-/// (computed + encrypted by the cosigner). Only the POINT a@receiver·G reaches the
-/// cosigner, so it never learns the receiver's full share.
+/// Service enrolment
 /// ---------------------------------------------------------------------------
-class ContractCreateRequest extends $pb.GeneratedMessage {
-  factory ContractCreateRequest({
+class ServiceEnrollRequest extends $pb.GeneratedMessage {
+  factory ServiceEnrollRequest({
     $core.List<$core.int>? userId,
     $core.List<$core.int>? identifier,
-    $core.List<$core.int>? contractId,
-    $core.List<$core.int>? contractWasm,
-    $core.List<$core.int>? serverPk,
-    $core.int? exitDelay,
-    $core.List<$core.int>? ownerPk,
-    $core.List<$core.int>? receiverVk,
+    $core.List<$core.int>? serviceId,
     $core.List<$core.int>? aAtCosigner,
-    $core.List<$core.int>? aAtReceiverPoint,
+    $core.List<$core.int>? aAtServicePoint,
+    $core.Iterable<$core.String>? allowedDestinations,
+    $fixnum.Int64? maxSatsPerSignature,
     $core.List<$core.int>? signature,
     $fixnum.Int64? timestampMs,
-    $core.List<$core.int>? eciesAAtReceiver,
-    $core.String? templateId,
-    $core.String? stubId,
-    $core.List<$core.int>? configBlob,
   }) {
     final $result = create();
     if (userId != null) {
@@ -3267,29 +3232,20 @@ class ContractCreateRequest extends $pb.GeneratedMessage {
     if (identifier != null) {
       $result.identifier = identifier;
     }
-    if (contractId != null) {
-      $result.contractId = contractId;
-    }
-    if (contractWasm != null) {
-      $result.contractWasm = contractWasm;
-    }
-    if (serverPk != null) {
-      $result.serverPk = serverPk;
-    }
-    if (exitDelay != null) {
-      $result.exitDelay = exitDelay;
-    }
-    if (ownerPk != null) {
-      $result.ownerPk = ownerPk;
-    }
-    if (receiverVk != null) {
-      $result.receiverVk = receiverVk;
+    if (serviceId != null) {
+      $result.serviceId = serviceId;
     }
     if (aAtCosigner != null) {
       $result.aAtCosigner = aAtCosigner;
     }
-    if (aAtReceiverPoint != null) {
-      $result.aAtReceiverPoint = aAtReceiverPoint;
+    if (aAtServicePoint != null) {
+      $result.aAtServicePoint = aAtServicePoint;
+    }
+    if (allowedDestinations != null) {
+      $result.allowedDestinations.addAll(allowedDestinations);
+    }
+    if (maxSatsPerSignature != null) {
+      $result.maxSatsPerSignature = maxSatsPerSignature;
     }
     if (signature != null) {
       $result.signature = signature;
@@ -3297,41 +3253,22 @@ class ContractCreateRequest extends $pb.GeneratedMessage {
     if (timestampMs != null) {
       $result.timestampMs = timestampMs;
     }
-    if (eciesAAtReceiver != null) {
-      $result.eciesAAtReceiver = eciesAAtReceiver;
-    }
-    if (templateId != null) {
-      $result.templateId = templateId;
-    }
-    if (stubId != null) {
-      $result.stubId = stubId;
-    }
-    if (configBlob != null) {
-      $result.configBlob = configBlob;
-    }
     return $result;
   }
-  ContractCreateRequest._() : super();
-  factory ContractCreateRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory ContractCreateRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceEnrollRequest._() : super();
+  factory ServiceEnrollRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceEnrollRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ContractCreateRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceEnrollRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
     ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'identifier', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'contractId', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'contractWasm', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'serverPk', $pb.PbFieldType.OY)
-    ..a<$core.int>(6, _omitFieldNames ? '' : 'exitDelay', $pb.PbFieldType.OU3)
-    ..a<$core.List<$core.int>>(7, _omitFieldNames ? '' : 'ownerPk', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(8, _omitFieldNames ? '' : 'receiverVk', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(9, _omitFieldNames ? '' : 'aAtCosigner', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(10, _omitFieldNames ? '' : 'aAtReceiverPoint', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(11, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
-    ..aInt64(12, _omitFieldNames ? '' : 'timestampMs')
-    ..a<$core.List<$core.int>>(13, _omitFieldNames ? '' : 'eciesAAtReceiver', $pb.PbFieldType.OY)
-    ..aOS(14, _omitFieldNames ? '' : 'templateId')
-    ..aOS(15, _omitFieldNames ? '' : 'stubId')
-    ..a<$core.List<$core.int>>(16, _omitFieldNames ? '' : 'configBlob', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'serviceId', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'aAtCosigner', $pb.PbFieldType.OY)
+    ..a<$core.List<$core.int>>(5, _omitFieldNames ? '' : 'aAtServicePoint', $pb.PbFieldType.OY)
+    ..pPS(6, _omitFieldNames ? '' : 'allowedDestinations')
+    ..a<$fixnum.Int64>(7, _omitFieldNames ? '' : 'maxSatsPerSignature', $pb.PbFieldType.OU6, defaultOrMaker: $fixnum.Int64.ZERO)
+    ..a<$core.List<$core.int>>(8, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
+    ..aInt64(9, _omitFieldNames ? '' : 'timestampMs')
     ..hasRequiredFields = false
   ;
 
@@ -3339,22 +3276,22 @@ class ContractCreateRequest extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  ContractCreateRequest clone() => ContractCreateRequest()..mergeFromMessage(this);
+  ServiceEnrollRequest clone() => ServiceEnrollRequest()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  ContractCreateRequest copyWith(void Function(ContractCreateRequest) updates) => super.copyWith((message) => updates(message as ContractCreateRequest)) as ContractCreateRequest;
+  ServiceEnrollRequest copyWith(void Function(ServiceEnrollRequest) updates) => super.copyWith((message) => updates(message as ServiceEnrollRequest)) as ServiceEnrollRequest;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static ContractCreateRequest create() => ContractCreateRequest._();
-  ContractCreateRequest createEmptyInstance() => create();
-  static $pb.PbList<ContractCreateRequest> createRepeated() => $pb.PbList<ContractCreateRequest>();
+  static ServiceEnrollRequest create() => ServiceEnrollRequest._();
+  ServiceEnrollRequest createEmptyInstance() => create();
+  static $pb.PbList<ServiceEnrollRequest> createRepeated() => $pb.PbList<ServiceEnrollRequest>();
   @$core.pragma('dart2js:noInline')
-  static ContractCreateRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ContractCreateRequest>(create);
-  static ContractCreateRequest? _defaultInstance;
+  static ServiceEnrollRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceEnrollRequest>(create);
+  static ServiceEnrollRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.List<$core.int> get userId => $_getN(0);
@@ -3374,159 +3311,98 @@ class ContractCreateRequest extends $pb.GeneratedMessage {
   @$pb.TagNumber(2)
   void clearIdentifier() => clearField(2);
 
+  /// The service's identity: a 33-byte compressed secp256k1 key. Names the service, is the ECIES
+  /// target for its half, and derives its FROST identifier. It never signs — the service's signing
+  /// credential is the verifying share this call returns.
   @$pb.TagNumber(3)
-  $core.List<$core.int> get contractId => $_getN(2);
+  $core.List<$core.int> get serviceId => $_getN(2);
   @$pb.TagNumber(3)
-  set contractId($core.List<$core.int> v) { $_setBytes(2, v); }
+  set serviceId($core.List<$core.int> v) { $_setBytes(2, v); }
   @$pb.TagNumber(3)
-  $core.bool hasContractId() => $_has(2);
+  $core.bool hasServiceId() => $_has(2);
   @$pb.TagNumber(3)
-  void clearContractId() => clearField(3);
+  void clearServiceId() => clearField(3);
 
   @$pb.TagNumber(4)
-  $core.List<$core.int> get contractWasm => $_getN(3);
+  $core.List<$core.int> get aAtCosigner => $_getN(3);
   @$pb.TagNumber(4)
-  set contractWasm($core.List<$core.int> v) { $_setBytes(3, v); }
+  set aAtCosigner($core.List<$core.int> v) { $_setBytes(3, v); }
   @$pb.TagNumber(4)
-  $core.bool hasContractWasm() => $_has(3);
+  $core.bool hasAAtCosigner() => $_has(3);
   @$pb.TagNumber(4)
-  void clearContractWasm() => clearField(4);
+  void clearAAtCosigner() => clearField(4);
 
   @$pb.TagNumber(5)
-  $core.List<$core.int> get serverPk => $_getN(4);
+  $core.List<$core.int> get aAtServicePoint => $_getN(4);
   @$pb.TagNumber(5)
-  set serverPk($core.List<$core.int> v) { $_setBytes(4, v); }
+  set aAtServicePoint($core.List<$core.int> v) { $_setBytes(4, v); }
   @$pb.TagNumber(5)
-  $core.bool hasServerPk() => $_has(4);
+  $core.bool hasAAtServicePoint() => $_has(4);
   @$pb.TagNumber(5)
-  void clearServerPk() => clearField(5);
+  void clearAAtServicePoint() => clearField(5);
 
   @$pb.TagNumber(6)
-  $core.int get exitDelay => $_getIZ(5);
-  @$pb.TagNumber(6)
-  set exitDelay($core.int v) { $_setUnsignedInt32(5, v); }
-  @$pb.TagNumber(6)
-  $core.bool hasExitDelay() => $_has(5);
-  @$pb.TagNumber(6)
-  void clearExitDelay() => clearField(6);
+  $core.List<$core.String> get allowedDestinations => $_getList(5);
 
   @$pb.TagNumber(7)
-  $core.List<$core.int> get ownerPk => $_getN(6);
+  $fixnum.Int64 get maxSatsPerSignature => $_getI64(6);
   @$pb.TagNumber(7)
-  set ownerPk($core.List<$core.int> v) { $_setBytes(6, v); }
+  set maxSatsPerSignature($fixnum.Int64 v) { $_setInt64(6, v); }
   @$pb.TagNumber(7)
-  $core.bool hasOwnerPk() => $_has(6);
+  $core.bool hasMaxSatsPerSignature() => $_has(6);
   @$pb.TagNumber(7)
-  void clearOwnerPk() => clearField(7);
+  void clearMaxSatsPerSignature() => clearField(7);
 
   @$pb.TagNumber(8)
-  $core.List<$core.int> get receiverVk => $_getN(7);
+  $core.List<$core.int> get signature => $_getN(7);
   @$pb.TagNumber(8)
-  set receiverVk($core.List<$core.int> v) { $_setBytes(7, v); }
+  set signature($core.List<$core.int> v) { $_setBytes(7, v); }
   @$pb.TagNumber(8)
-  $core.bool hasReceiverVk() => $_has(7);
+  $core.bool hasSignature() => $_has(7);
   @$pb.TagNumber(8)
-  void clearReceiverVk() => clearField(8);
+  void clearSignature() => clearField(8);
 
   @$pb.TagNumber(9)
-  $core.List<$core.int> get aAtCosigner => $_getN(8);
+  $fixnum.Int64 get timestampMs => $_getI64(8);
   @$pb.TagNumber(9)
-  set aAtCosigner($core.List<$core.int> v) { $_setBytes(8, v); }
+  set timestampMs($fixnum.Int64 v) { $_setInt64(8, v); }
   @$pb.TagNumber(9)
-  $core.bool hasAAtCosigner() => $_has(8);
+  $core.bool hasTimestampMs() => $_has(8);
   @$pb.TagNumber(9)
-  void clearAAtCosigner() => clearField(9);
-
-  @$pb.TagNumber(10)
-  $core.List<$core.int> get aAtReceiverPoint => $_getN(9);
-  @$pb.TagNumber(10)
-  set aAtReceiverPoint($core.List<$core.int> v) { $_setBytes(9, v); }
-  @$pb.TagNumber(10)
-  $core.bool hasAAtReceiverPoint() => $_has(9);
-  @$pb.TagNumber(10)
-  void clearAAtReceiverPoint() => clearField(10);
-
-  @$pb.TagNumber(11)
-  $core.List<$core.int> get signature => $_getN(10);
-  @$pb.TagNumber(11)
-  set signature($core.List<$core.int> v) { $_setBytes(10, v); }
-  @$pb.TagNumber(11)
-  $core.bool hasSignature() => $_has(10);
-  @$pb.TagNumber(11)
-  void clearSignature() => clearField(11);
-
-  @$pb.TagNumber(12)
-  $fixnum.Int64 get timestampMs => $_getI64(11);
-  @$pb.TagNumber(12)
-  set timestampMs($fixnum.Int64 v) { $_setInt64(11, v); }
-  @$pb.TagNumber(12)
-  $core.bool hasTimestampMs() => $_has(11);
-  @$pb.TagNumber(12)
-  void clearTimestampMs() => clearField(12);
-
-  @$pb.TagNumber(13)
-  $core.List<$core.int> get eciesAAtReceiver => $_getN(12);
-  @$pb.TagNumber(13)
-  set eciesAAtReceiver($core.List<$core.int> v) { $_setBytes(12, v); }
-  @$pb.TagNumber(13)
-  $core.bool hasEciesAAtReceiver() => $_has(12);
-  @$pb.TagNumber(13)
-  void clearEciesAAtReceiver() => clearField(13);
-
-  /// Phase 2 (template + variable composition). When `template_id` is set, the cosigner composes a
-  /// CONTRACT from a published TEMPLATE + the author's typed config: it fetches the template + its
-  /// provider STUB (both by content id), patches `config_blob` (the encoded key-value config) into
-  /// the stub, composes them into one component, and the COMPOSED sha256 becomes the bound
-  /// contract_id (committing the variables). When empty, `contract_id`/`contract_wasm` above are used.
-  @$pb.TagNumber(14)
-  $core.String get templateId => $_getSZ(13);
-  @$pb.TagNumber(14)
-  set templateId($core.String v) { $_setString(13, v); }
-  @$pb.TagNumber(14)
-  $core.bool hasTemplateId() => $_has(13);
-  @$pb.TagNumber(14)
-  void clearTemplateId() => clearField(14);
-
-  @$pb.TagNumber(15)
-  $core.String get stubId => $_getSZ(14);
-  @$pb.TagNumber(15)
-  set stubId($core.String v) { $_setString(14, v); }
-  @$pb.TagNumber(15)
-  $core.bool hasStubId() => $_has(14);
-  @$pb.TagNumber(15)
-  void clearStubId() => clearField(15);
-
-  @$pb.TagNumber(16)
-  $core.List<$core.int> get configBlob => $_getN(15);
-  @$pb.TagNumber(16)
-  set configBlob($core.List<$core.int> v) { $_setBytes(15, v); }
-  @$pb.TagNumber(16)
-  $core.bool hasConfigBlob() => $_has(15);
-  @$pb.TagNumber(16)
-  void clearConfigBlob() => clearField(16);
+  void clearTimestampMs() => clearField(9);
 }
 
-class ContractCreateResponse extends $pb.GeneratedMessage {
-  factory ContractCreateResponse({
-    $core.List<$core.int>? contractScriptPubkey,
-    $core.List<$core.int>? contractId,
+class ServiceEnrollResponse extends $pb.GeneratedMessage {
+  factory ServiceEnrollResponse({
+    $core.String? pairingGroupKey,
+    $core.String? serviceVerifyingShare,
+    $core.String? pairingPublicKeyPackageJson,
+    $core.bool? cosignerHalfDelivered,
   }) {
     final $result = create();
-    if (contractScriptPubkey != null) {
-      $result.contractScriptPubkey = contractScriptPubkey;
+    if (pairingGroupKey != null) {
+      $result.pairingGroupKey = pairingGroupKey;
     }
-    if (contractId != null) {
-      $result.contractId = contractId;
+    if (serviceVerifyingShare != null) {
+      $result.serviceVerifyingShare = serviceVerifyingShare;
+    }
+    if (pairingPublicKeyPackageJson != null) {
+      $result.pairingPublicKeyPackageJson = pairingPublicKeyPackageJson;
+    }
+    if (cosignerHalfDelivered != null) {
+      $result.cosignerHalfDelivered = cosignerHalfDelivered;
     }
     return $result;
   }
-  ContractCreateResponse._() : super();
-  factory ContractCreateResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory ContractCreateResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceEnrollResponse._() : super();
+  factory ServiceEnrollResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceEnrollResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ContractCreateResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
-    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'contractScriptPubkey', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'contractId', $pb.PbFieldType.OY)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceEnrollResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'pairingGroupKey')
+    ..aOS(2, _omitFieldNames ? '' : 'serviceVerifyingShare')
+    ..aOS(3, _omitFieldNames ? '' : 'pairingPublicKeyPackageJson')
+    ..aOB(4, _omitFieldNames ? '' : 'cosignerHalfDelivered')
     ..hasRequiredFields = false
   ;
 
@@ -3534,50 +3410,68 @@ class ContractCreateResponse extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  ContractCreateResponse clone() => ContractCreateResponse()..mergeFromMessage(this);
+  ServiceEnrollResponse clone() => ServiceEnrollResponse()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  ContractCreateResponse copyWith(void Function(ContractCreateResponse) updates) => super.copyWith((message) => updates(message as ContractCreateResponse)) as ContractCreateResponse;
+  ServiceEnrollResponse copyWith(void Function(ServiceEnrollResponse) updates) => super.copyWith((message) => updates(message as ServiceEnrollResponse)) as ServiceEnrollResponse;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static ContractCreateResponse create() => ContractCreateResponse._();
-  ContractCreateResponse createEmptyInstance() => create();
-  static $pb.PbList<ContractCreateResponse> createRepeated() => $pb.PbList<ContractCreateResponse>();
+  static ServiceEnrollResponse create() => ServiceEnrollResponse._();
+  ServiceEnrollResponse createEmptyInstance() => create();
+  static $pb.PbList<ServiceEnrollResponse> createRepeated() => $pb.PbList<ServiceEnrollResponse>();
   @$core.pragma('dart2js:noInline')
-  static ContractCreateResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ContractCreateResponse>(create);
-  static ContractCreateResponse? _defaultInstance;
+  static ServiceEnrollResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceEnrollResponse>(create);
+  static ServiceEnrollResponse? _defaultInstance;
 
+  /// The wallet's own group key: the pairing shares `V`, so the service addresses the wallet's
+  /// actor and is told apart by its verifying share.
   @$pb.TagNumber(1)
-  $core.List<$core.int> get contractScriptPubkey => $_getN(0);
+  $core.String get pairingGroupKey => $_getSZ(0);
   @$pb.TagNumber(1)
-  set contractScriptPubkey($core.List<$core.int> v) { $_setBytes(0, v); }
+  set pairingGroupKey($core.String v) { $_setString(0, v); }
   @$pb.TagNumber(1)
-  $core.bool hasContractScriptPubkey() => $_has(0);
+  $core.bool hasPairingGroupKey() => $_has(0);
   @$pb.TagNumber(1)
-  void clearContractScriptPubkey() => clearField(1);
+  void clearPairingGroupKey() => clearField(1);
 
+  /// The service's verifying share — its `user_id` when signing, and the key its pairing is filed
+  /// under. The wallet needs it to address the half it must still push.
   @$pb.TagNumber(2)
-  $core.List<$core.int> get contractId => $_getN(1);
+  $core.String get serviceVerifyingShare => $_getSZ(1);
   @$pb.TagNumber(2)
-  set contractId($core.List<$core.int> v) { $_setBytes(1, v); }
+  set serviceVerifyingShare($core.String v) { $_setString(1, v); }
   @$pb.TagNumber(2)
-  $core.bool hasContractId() => $_has(1);
+  $core.bool hasServiceVerifyingShare() => $_has(1);
   @$pb.TagNumber(2)
-  void clearContractId() => clearField(2);
+  void clearServiceVerifyingShare() => clearField(2);
+
+  @$pb.TagNumber(3)
+  $core.String get pairingPublicKeyPackageJson => $_getSZ(2);
+  @$pb.TagNumber(3)
+  set pairingPublicKeyPackageJson($core.String v) { $_setString(2, v); }
+  @$pb.TagNumber(3)
+  $core.bool hasPairingPublicKeyPackageJson() => $_has(2);
+  @$pb.TagNumber(3)
+  void clearPairingPublicKeyPackageJson() => clearField(3);
+
+  /// Whether the cosigner reached the service with its own half. False means the pairing exists but
+  /// the service cannot assemble a share until that half is re-pushed.
+  @$pb.TagNumber(4)
+  $core.bool get cosignerHalfDelivered => $_getBF(3);
+  @$pb.TagNumber(4)
+  set cosignerHalfDelivered($core.bool v) { $_setBool(3, v); }
+  @$pb.TagNumber(4)
+  $core.bool hasCosignerHalfDelivered() => $_has(3);
+  @$pb.TagNumber(4)
+  void clearCosignerHalfDelivered() => clearField(4);
 }
 
-/// ---------------------------------------------------------------------------
-/// Inbox pickup (PEER model). The receiver fetches the contract-share halves held for
-/// it in its own inbox, decrypts BOTH ECIES halves with its signing secret, sums them
-/// into its share P = a@receiver + b@receiver, then acks to clear. No FCM/poll loop is
-/// required — the inbox is surfaced on the receiver's authenticated pull.
-/// ---------------------------------------------------------------------------
-class EvtxoPendingSharesRequest extends $pb.GeneratedMessage {
-  factory EvtxoPendingSharesRequest({
+class ServiceListRequest extends $pb.GeneratedMessage {
+  factory ServiceListRequest({
     $core.List<$core.int>? userId,
     $core.List<$core.int>? signature,
     $fixnum.Int64? timestampMs,
@@ -3594,11 +3488,11 @@ class EvtxoPendingSharesRequest extends $pb.GeneratedMessage {
     }
     return $result;
   }
-  EvtxoPendingSharesRequest._() : super();
-  factory EvtxoPendingSharesRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory EvtxoPendingSharesRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceListRequest._() : super();
+  factory ServiceListRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceListRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoPendingSharesRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceListRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
     ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
     ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
     ..aInt64(3, _omitFieldNames ? '' : 'timestampMs')
@@ -3609,22 +3503,22 @@ class EvtxoPendingSharesRequest extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  EvtxoPendingSharesRequest clone() => EvtxoPendingSharesRequest()..mergeFromMessage(this);
+  ServiceListRequest clone() => ServiceListRequest()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  EvtxoPendingSharesRequest copyWith(void Function(EvtxoPendingSharesRequest) updates) => super.copyWith((message) => updates(message as EvtxoPendingSharesRequest)) as EvtxoPendingSharesRequest;
+  ServiceListRequest copyWith(void Function(ServiceListRequest) updates) => super.copyWith((message) => updates(message as ServiceListRequest)) as ServiceListRequest;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static EvtxoPendingSharesRequest create() => EvtxoPendingSharesRequest._();
-  EvtxoPendingSharesRequest createEmptyInstance() => create();
-  static $pb.PbList<EvtxoPendingSharesRequest> createRepeated() => $pb.PbList<EvtxoPendingSharesRequest>();
+  static ServiceListRequest create() => ServiceListRequest._();
+  ServiceListRequest createEmptyInstance() => create();
+  static $pb.PbList<ServiceListRequest> createRepeated() => $pb.PbList<ServiceListRequest>();
   @$core.pragma('dart2js:noInline')
-  static EvtxoPendingSharesRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoPendingSharesRequest>(create);
-  static EvtxoPendingSharesRequest? _defaultInstance;
+  static ServiceListRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceListRequest>(create);
+  static ServiceListRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.List<$core.int> get userId => $_getN(0);
@@ -3654,22 +3548,22 @@ class EvtxoPendingSharesRequest extends $pb.GeneratedMessage {
   void clearTimestampMs() => clearField(3);
 }
 
-class EvtxoPendingSharesResponse extends $pb.GeneratedMessage {
-  factory EvtxoPendingSharesResponse({
-    $core.Iterable<PendingContractShare>? shares,
+class ServiceListResponse extends $pb.GeneratedMessage {
+  factory ServiceListResponse({
+    $core.Iterable<EnrolledService>? services,
   }) {
     final $result = create();
-    if (shares != null) {
-      $result.shares.addAll(shares);
+    if (services != null) {
+      $result.services.addAll(services);
     }
     return $result;
   }
-  EvtxoPendingSharesResponse._() : super();
-  factory EvtxoPendingSharesResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory EvtxoPendingSharesResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceListResponse._() : super();
+  factory ServiceListResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceListResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoPendingSharesResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
-    ..pc<PendingContractShare>(1, _omitFieldNames ? '' : 'shares', $pb.PbFieldType.PM, subBuilder: PendingContractShare.create)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceListResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..pc<EnrolledService>(1, _omitFieldNames ? '' : 'services', $pb.PbFieldType.PM, subBuilder: EnrolledService.create)
     ..hasRequiredFields = false
   ;
 
@@ -3677,78 +3571,48 @@ class EvtxoPendingSharesResponse extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  EvtxoPendingSharesResponse clone() => EvtxoPendingSharesResponse()..mergeFromMessage(this);
+  ServiceListResponse clone() => ServiceListResponse()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  EvtxoPendingSharesResponse copyWith(void Function(EvtxoPendingSharesResponse) updates) => super.copyWith((message) => updates(message as EvtxoPendingSharesResponse)) as EvtxoPendingSharesResponse;
+  ServiceListResponse copyWith(void Function(ServiceListResponse) updates) => super.copyWith((message) => updates(message as ServiceListResponse)) as ServiceListResponse;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static EvtxoPendingSharesResponse create() => EvtxoPendingSharesResponse._();
-  EvtxoPendingSharesResponse createEmptyInstance() => create();
-  static $pb.PbList<EvtxoPendingSharesResponse> createRepeated() => $pb.PbList<EvtxoPendingSharesResponse>();
+  static ServiceListResponse create() => ServiceListResponse._();
+  ServiceListResponse createEmptyInstance() => create();
+  static $pb.PbList<ServiceListResponse> createRepeated() => $pb.PbList<ServiceListResponse>();
   @$core.pragma('dart2js:noInline')
-  static EvtxoPendingSharesResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoPendingSharesResponse>(create);
-  static EvtxoPendingSharesResponse? _defaultInstance;
+  static ServiceListResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceListResponse>(create);
+  static ServiceListResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.List<PendingContractShare> get shares => $_getList(0);
+  $core.List<EnrolledService> get services => $_getList(0);
 }
 
-class PendingContractShare extends $pb.GeneratedMessage {
-  factory PendingContractShare({
-    $core.List<$core.int>? evtxoScriptPubkey,
-    $core.List<$core.int>? contractId,
-    $core.List<$core.int>? eciesHalfAuthor,
-    $core.List<$core.int>? eciesHalfCosigner,
-    $core.String? publicKeyPackageJson,
-    $core.int? exitDelay,
-    $core.List<$core.int>? serverPk,
-    $core.List<$core.int>? ownerPk,
+class EnrolledService extends $pb.GeneratedMessage {
+  factory EnrolledService({
+    $core.String? verifyingShare,
+    $core.String? serviceId,
   }) {
     final $result = create();
-    if (evtxoScriptPubkey != null) {
-      $result.evtxoScriptPubkey = evtxoScriptPubkey;
+    if (verifyingShare != null) {
+      $result.verifyingShare = verifyingShare;
     }
-    if (contractId != null) {
-      $result.contractId = contractId;
-    }
-    if (eciesHalfAuthor != null) {
-      $result.eciesHalfAuthor = eciesHalfAuthor;
-    }
-    if (eciesHalfCosigner != null) {
-      $result.eciesHalfCosigner = eciesHalfCosigner;
-    }
-    if (publicKeyPackageJson != null) {
-      $result.publicKeyPackageJson = publicKeyPackageJson;
-    }
-    if (exitDelay != null) {
-      $result.exitDelay = exitDelay;
-    }
-    if (serverPk != null) {
-      $result.serverPk = serverPk;
-    }
-    if (ownerPk != null) {
-      $result.ownerPk = ownerPk;
+    if (serviceId != null) {
+      $result.serviceId = serviceId;
     }
     return $result;
   }
-  PendingContractShare._() : super();
-  factory PendingContractShare.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory PendingContractShare.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  EnrolledService._() : super();
+  factory EnrolledService.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory EnrolledService.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'PendingContractShare', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
-    ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'contractId', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'eciesHalfAuthor', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(4, _omitFieldNames ? '' : 'eciesHalfCosigner', $pb.PbFieldType.OY)
-    ..aOS(5, _omitFieldNames ? '' : 'publicKeyPackageJson')
-    ..a<$core.int>(6, _omitFieldNames ? '' : 'exitDelay', $pb.PbFieldType.OU3)
-    ..a<$core.List<$core.int>>(7, _omitFieldNames ? '' : 'serverPk', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(8, _omitFieldNames ? '' : 'ownerPk', $pb.PbFieldType.OY)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EnrolledService', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOS(1, _omitFieldNames ? '' : 'verifyingShare')
+    ..aOS(2, _omitFieldNames ? '' : 'serviceId')
     ..hasRequiredFields = false
   ;
 
@@ -3756,100 +3620,46 @@ class PendingContractShare extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  PendingContractShare clone() => PendingContractShare()..mergeFromMessage(this);
+  EnrolledService clone() => EnrolledService()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  PendingContractShare copyWith(void Function(PendingContractShare) updates) => super.copyWith((message) => updates(message as PendingContractShare)) as PendingContractShare;
+  EnrolledService copyWith(void Function(EnrolledService) updates) => super.copyWith((message) => updates(message as EnrolledService)) as EnrolledService;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static PendingContractShare create() => PendingContractShare._();
-  PendingContractShare createEmptyInstance() => create();
-  static $pb.PbList<PendingContractShare> createRepeated() => $pb.PbList<PendingContractShare>();
+  static EnrolledService create() => EnrolledService._();
+  EnrolledService createEmptyInstance() => create();
+  static $pb.PbList<EnrolledService> createRepeated() => $pb.PbList<EnrolledService>();
   @$core.pragma('dart2js:noInline')
-  static PendingContractShare getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<PendingContractShare>(create);
-  static PendingContractShare? _defaultInstance;
+  static EnrolledService getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EnrolledService>(create);
+  static EnrolledService? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.List<$core.int> get evtxoScriptPubkey => $_getN(0);
+  $core.String get verifyingShare => $_getSZ(0);
   @$pb.TagNumber(1)
-  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(0, v); }
+  set verifyingShare($core.String v) { $_setString(0, v); }
   @$pb.TagNumber(1)
-  $core.bool hasEvtxoScriptPubkey() => $_has(0);
+  $core.bool hasVerifyingShare() => $_has(0);
   @$pb.TagNumber(1)
-  void clearEvtxoScriptPubkey() => clearField(1);
+  void clearVerifyingShare() => clearField(1);
 
   @$pb.TagNumber(2)
-  $core.List<$core.int> get contractId => $_getN(1);
+  $core.String get serviceId => $_getSZ(1);
   @$pb.TagNumber(2)
-  set contractId($core.List<$core.int> v) { $_setBytes(1, v); }
+  set serviceId($core.String v) { $_setString(1, v); }
   @$pb.TagNumber(2)
-  $core.bool hasContractId() => $_has(1);
+  $core.bool hasServiceId() => $_has(1);
   @$pb.TagNumber(2)
-  void clearContractId() => clearField(2);
-
-  @$pb.TagNumber(3)
-  $core.List<$core.int> get eciesHalfAuthor => $_getN(2);
-  @$pb.TagNumber(3)
-  set eciesHalfAuthor($core.List<$core.int> v) { $_setBytes(2, v); }
-  @$pb.TagNumber(3)
-  $core.bool hasEciesHalfAuthor() => $_has(2);
-  @$pb.TagNumber(3)
-  void clearEciesHalfAuthor() => clearField(3);
-
-  @$pb.TagNumber(4)
-  $core.List<$core.int> get eciesHalfCosigner => $_getN(3);
-  @$pb.TagNumber(4)
-  set eciesHalfCosigner($core.List<$core.int> v) { $_setBytes(3, v); }
-  @$pb.TagNumber(4)
-  $core.bool hasEciesHalfCosigner() => $_has(3);
-  @$pb.TagNumber(4)
-  void clearEciesHalfCosigner() => clearField(4);
-
-  @$pb.TagNumber(5)
-  $core.String get publicKeyPackageJson => $_getSZ(4);
-  @$pb.TagNumber(5)
-  set publicKeyPackageJson($core.String v) { $_setString(4, v); }
-  @$pb.TagNumber(5)
-  $core.bool hasPublicKeyPackageJson() => $_has(4);
-  @$pb.TagNumber(5)
-  void clearPublicKeyPackageJson() => clearField(5);
-
-  @$pb.TagNumber(6)
-  $core.int get exitDelay => $_getIZ(5);
-  @$pb.TagNumber(6)
-  set exitDelay($core.int v) { $_setUnsignedInt32(5, v); }
-  @$pb.TagNumber(6)
-  $core.bool hasExitDelay() => $_has(5);
-  @$pb.TagNumber(6)
-  void clearExitDelay() => clearField(6);
-
-  @$pb.TagNumber(7)
-  $core.List<$core.int> get serverPk => $_getN(6);
-  @$pb.TagNumber(7)
-  set serverPk($core.List<$core.int> v) { $_setBytes(6, v); }
-  @$pb.TagNumber(7)
-  $core.bool hasServerPk() => $_has(6);
-  @$pb.TagNumber(7)
-  void clearServerPk() => clearField(7);
-
-  @$pb.TagNumber(8)
-  $core.List<$core.int> get ownerPk => $_getN(7);
-  @$pb.TagNumber(8)
-  set ownerPk($core.List<$core.int> v) { $_setBytes(7, v); }
-  @$pb.TagNumber(8)
-  $core.bool hasOwnerPk() => $_has(7);
-  @$pb.TagNumber(8)
-  void clearOwnerPk() => clearField(8);
+  void clearServiceId() => clearField(2);
 }
 
-class EvtxoAckShareRequest extends $pb.GeneratedMessage {
-  factory EvtxoAckShareRequest({
+class ServiceRevokeRequest extends $pb.GeneratedMessage {
+  factory ServiceRevokeRequest({
     $core.List<$core.int>? userId,
-    $core.List<$core.int>? evtxoScriptPubkey,
+    $core.String? verifyingShare,
     $core.List<$core.int>? signature,
     $fixnum.Int64? timestampMs,
   }) {
@@ -3857,8 +3667,8 @@ class EvtxoAckShareRequest extends $pb.GeneratedMessage {
     if (userId != null) {
       $result.userId = userId;
     }
-    if (evtxoScriptPubkey != null) {
-      $result.evtxoScriptPubkey = evtxoScriptPubkey;
+    if (verifyingShare != null) {
+      $result.verifyingShare = verifyingShare;
     }
     if (signature != null) {
       $result.signature = signature;
@@ -3868,13 +3678,13 @@ class EvtxoAckShareRequest extends $pb.GeneratedMessage {
     }
     return $result;
   }
-  EvtxoAckShareRequest._() : super();
-  factory EvtxoAckShareRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory EvtxoAckShareRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceRevokeRequest._() : super();
+  factory ServiceRevokeRequest.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceRevokeRequest.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoAckShareRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceRevokeRequest', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
     ..a<$core.List<$core.int>>(1, _omitFieldNames ? '' : 'userId', $pb.PbFieldType.OY)
-    ..a<$core.List<$core.int>>(2, _omitFieldNames ? '' : 'evtxoScriptPubkey', $pb.PbFieldType.OY)
+    ..aOS(2, _omitFieldNames ? '' : 'verifyingShare')
     ..a<$core.List<$core.int>>(3, _omitFieldNames ? '' : 'signature', $pb.PbFieldType.OY)
     ..aInt64(4, _omitFieldNames ? '' : 'timestampMs')
     ..hasRequiredFields = false
@@ -3884,22 +3694,22 @@ class EvtxoAckShareRequest extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  EvtxoAckShareRequest clone() => EvtxoAckShareRequest()..mergeFromMessage(this);
+  ServiceRevokeRequest clone() => ServiceRevokeRequest()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  EvtxoAckShareRequest copyWith(void Function(EvtxoAckShareRequest) updates) => super.copyWith((message) => updates(message as EvtxoAckShareRequest)) as EvtxoAckShareRequest;
+  ServiceRevokeRequest copyWith(void Function(ServiceRevokeRequest) updates) => super.copyWith((message) => updates(message as ServiceRevokeRequest)) as ServiceRevokeRequest;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static EvtxoAckShareRequest create() => EvtxoAckShareRequest._();
-  EvtxoAckShareRequest createEmptyInstance() => create();
-  static $pb.PbList<EvtxoAckShareRequest> createRepeated() => $pb.PbList<EvtxoAckShareRequest>();
+  static ServiceRevokeRequest create() => ServiceRevokeRequest._();
+  ServiceRevokeRequest createEmptyInstance() => create();
+  static $pb.PbList<ServiceRevokeRequest> createRepeated() => $pb.PbList<ServiceRevokeRequest>();
   @$core.pragma('dart2js:noInline')
-  static EvtxoAckShareRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoAckShareRequest>(create);
-  static EvtxoAckShareRequest? _defaultInstance;
+  static ServiceRevokeRequest getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceRevokeRequest>(create);
+  static ServiceRevokeRequest? _defaultInstance;
 
   @$pb.TagNumber(1)
   $core.List<$core.int> get userId => $_getN(0);
@@ -3911,13 +3721,13 @@ class EvtxoAckShareRequest extends $pb.GeneratedMessage {
   void clearUserId() => clearField(1);
 
   @$pb.TagNumber(2)
-  $core.List<$core.int> get evtxoScriptPubkey => $_getN(1);
+  $core.String get verifyingShare => $_getSZ(1);
   @$pb.TagNumber(2)
-  set evtxoScriptPubkey($core.List<$core.int> v) { $_setBytes(1, v); }
+  set verifyingShare($core.String v) { $_setString(1, v); }
   @$pb.TagNumber(2)
-  $core.bool hasEvtxoScriptPubkey() => $_has(1);
+  $core.bool hasVerifyingShare() => $_has(1);
   @$pb.TagNumber(2)
-  void clearEvtxoScriptPubkey() => clearField(2);
+  void clearVerifyingShare() => clearField(2);
 
   @$pb.TagNumber(3)
   $core.List<$core.int> get signature => $_getN(2);
@@ -3938,22 +3748,22 @@ class EvtxoAckShareRequest extends $pb.GeneratedMessage {
   void clearTimestampMs() => clearField(4);
 }
 
-class EvtxoAckShareResponse extends $pb.GeneratedMessage {
-  factory EvtxoAckShareResponse({
-    $core.bool? ok,
+class ServiceRevokeResponse extends $pb.GeneratedMessage {
+  factory ServiceRevokeResponse({
+    $core.bool? revoked,
   }) {
     final $result = create();
-    if (ok != null) {
-      $result.ok = ok;
+    if (revoked != null) {
+      $result.revoked = revoked;
     }
     return $result;
   }
-  EvtxoAckShareResponse._() : super();
-  factory EvtxoAckShareResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
-  factory EvtxoAckShareResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
+  ServiceRevokeResponse._() : super();
+  factory ServiceRevokeResponse.fromBuffer($core.List<$core.int> i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromBuffer(i, r);
+  factory ServiceRevokeResponse.fromJson($core.String i, [$pb.ExtensionRegistry r = $pb.ExtensionRegistry.EMPTY]) => create()..mergeFromJson(i, r);
 
-  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'EvtxoAckShareResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
-    ..aOB(1, _omitFieldNames ? '' : 'ok')
+  static final $pb.BuilderInfo _i = $pb.BuilderInfo(_omitMessageNames ? '' : 'ServiceRevokeResponse', package: const $pb.PackageName(_omitMessageNames ? '' : 'mpc_wallet'), createEmptyInstance: create)
+    ..aOB(1, _omitFieldNames ? '' : 'revoked')
     ..hasRequiredFields = false
   ;
 
@@ -3961,31 +3771,31 @@ class EvtxoAckShareResponse extends $pb.GeneratedMessage {
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.deepCopy] instead. '
   'Will be removed in next major version')
-  EvtxoAckShareResponse clone() => EvtxoAckShareResponse()..mergeFromMessage(this);
+  ServiceRevokeResponse clone() => ServiceRevokeResponse()..mergeFromMessage(this);
   @$core.Deprecated(
   'Using this can add significant overhead to your binary. '
   'Use [GeneratedMessageGenericExtensions.rebuild] instead. '
   'Will be removed in next major version')
-  EvtxoAckShareResponse copyWith(void Function(EvtxoAckShareResponse) updates) => super.copyWith((message) => updates(message as EvtxoAckShareResponse)) as EvtxoAckShareResponse;
+  ServiceRevokeResponse copyWith(void Function(ServiceRevokeResponse) updates) => super.copyWith((message) => updates(message as ServiceRevokeResponse)) as ServiceRevokeResponse;
 
   $pb.BuilderInfo get info_ => _i;
 
   @$core.pragma('dart2js:noInline')
-  static EvtxoAckShareResponse create() => EvtxoAckShareResponse._();
-  EvtxoAckShareResponse createEmptyInstance() => create();
-  static $pb.PbList<EvtxoAckShareResponse> createRepeated() => $pb.PbList<EvtxoAckShareResponse>();
+  static ServiceRevokeResponse create() => ServiceRevokeResponse._();
+  ServiceRevokeResponse createEmptyInstance() => create();
+  static $pb.PbList<ServiceRevokeResponse> createRepeated() => $pb.PbList<ServiceRevokeResponse>();
   @$core.pragma('dart2js:noInline')
-  static EvtxoAckShareResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<EvtxoAckShareResponse>(create);
-  static EvtxoAckShareResponse? _defaultInstance;
+  static ServiceRevokeResponse getDefault() => _defaultInstance ??= $pb.GeneratedMessage.$_defaultFor<ServiceRevokeResponse>(create);
+  static ServiceRevokeResponse? _defaultInstance;
 
   @$pb.TagNumber(1)
-  $core.bool get ok => $_getBF(0);
+  $core.bool get revoked => $_getBF(0);
   @$pb.TagNumber(1)
-  set ok($core.bool v) { $_setBool(0, v); }
+  set revoked($core.bool v) { $_setBool(0, v); }
   @$pb.TagNumber(1)
-  $core.bool hasOk() => $_has(0);
+  $core.bool hasRevoked() => $_has(0);
   @$pb.TagNumber(1)
-  void clearOk() => clearField(1);
+  void clearRevoked() => clearField(1);
 }
 
 /// A party this wallet has authorized to send it payment requests. One-way: the owner decides who

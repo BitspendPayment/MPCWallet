@@ -1,0 +1,19 @@
+[package]
+name = "rebalancer"
+version = "0.1.0"
+edition = "2021"
+description = "Keeps a dollar-denominated VTXO balance by hedging with an inverse perpetual."
+
+[[bin]]
+name = "rebalancer"
+path = "src/main.rs"
+
+[dependencies]
+service-sdk = { path = "../../crates/service-sdk" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net"] }
+axum = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

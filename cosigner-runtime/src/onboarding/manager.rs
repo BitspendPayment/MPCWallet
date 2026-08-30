@@ -171,7 +171,6 @@ impl OnboardingManager {
                     public_key_package_json: pkp,
                     user_signing_identifier_hex: usid,
                     server_dkg_secret_hex: secret,
-                    contract_pairing: None, // a normal wallet actor has no pairing conditioning
                     reply,
                 }
             })

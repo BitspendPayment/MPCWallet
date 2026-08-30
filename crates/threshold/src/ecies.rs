@@ -6,7 +6,7 @@
 //!
 //! Wire blob (97 bytes): `ephemeral_pubkey(33) || ciphertext(32) || tag(32)`.
 //!
-//! Used by the multi-user eVTXO onboarding: the author and the cosigner each encrypt
+//! Used by service enrolment: the wallet and the cosigner each encrypt
 //! their refresh half to the participant's verifying share, so neither learns the
 //! participant's combined share `P_i` (only the participant decrypts both and sums).
 
